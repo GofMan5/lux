@@ -8,8 +8,8 @@ the license of LUX TUI itself.
 
 ## `github.com/rivo/uniseg` v0.4.7
 
-License: MIT  
-Copyright (c) 2019 Oliver Kuederle  
+License: MIT
+Copyright (c) 2019 Oliver Kuederle
 Source: <https://github.com/rivo/uniseg>
 
 ```text
@@ -34,14 +34,14 @@ SOFTWARE.
 
 ## `golang.org/x/term` v0.34.0
 
-License: BSD-3-Clause  
-Copyright 2009 The Go Authors  
+License: BSD-3-Clause
+Copyright 2009 The Go Authors
 Source: <https://pkg.go.dev/golang.org/x/term>
 
 ## `golang.org/x/sys` v0.35.0
 
-License: BSD-3-Clause  
-Copyright 2009 The Go Authors  
+License: BSD-3-Clause
+Copyright 2009 The Go Authors
 Source: <https://pkg.go.dev/golang.org/x/sys>
 
 The Go Authors' BSD-3-Clause license for both modules is:
