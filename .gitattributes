@@ -3,6 +3,8 @@
 *.md text eol=lf
 *.yml text eol=lf
 *.yaml text eol=lf
+*.patch text eol=lf
+*.ps1 text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf
 LICENSE-* text eol=lf
