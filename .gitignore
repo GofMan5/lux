@@ -1,0 +1,18 @@
+# Go outputs
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage*.txt
+coverage*.html
+
+# Local tooling
+/.tmp/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+*.log

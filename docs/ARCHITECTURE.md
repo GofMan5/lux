@@ -1,0 +1,188 @@
+# Architecture
+
+Status snapshot: **2026-08-09**. This document distinguishes code present in
+the repository from intended boundaries; roadmap items are explicitly labeled.
+
+## Design constraints
+
+1. Preserve correctness at terminal-cell boundaries, especially extended
+   grapheme clusters and two-column glyphs.
+2. Keep the hot path deterministic, bounded, and testable without a real TTY.
+3. Depend inward: application behavior must not import a concrete terminal.
+4. Add abstractions only when at least one complete user-facing slice needs
+   them.
+5. Prefer elapsed-time motion and frame coalescing over replaying late work.
+
+## Hexagonal core
+
+The repository follows a small ports-and-adapters shape:
+
+```text
+                         outside
+          keyboard / mouse / resize / time
+                           │
+                    input adapter
+                           │ event.Event
+                           ▼
+  ┌──────────────── application/use case ────────────────┐
+  │ state transition → responsive layout → draw canvas  │
+  └─────────────────────────┬────────────────────────────┘
+                            │ render.Buffer
+                            ▼
+                     presentation port
+                            │
+                  VT / plain-output adapter
+                            │
+                         terminal
+```
+
+The public `lux.Run` runtime drives the use case. `lux.Model` receives events
+and returns optional asynchronous `lux.Command` work; `View(*lux.Frame)` draws
+immediately. `lux.Backend` is the transport port. Domain-facing packages do not
+perform terminal I/O:
+
+- `event` is the input vocabulary;
+- `layout` maps available cells to rectangles;
+- `motion` maps monotonic elapsed time to values;
+- `render` owns cell state and drawing rules;
+- `scene3d` projects CPU-rasterized triangle scenes into a `render.Canvas`;
+- `capability` describes a backend's feature snapshot.
+
+`internal/terminal` is the default outbound/inbound adapter. It owns raw mode,
+escape parsing, resize observation, capability-derived encoding, output, and
+restoration. Keeping it internal makes `lux.Backend`, rather than VT details,
+the substitution boundary.
+
+## Vertical slices
+
+Hexagonal architecture controls dependency direction; vertical slices control
+delivery. A feature is complete only when it traverses the real path and leaves
+one focused check behind.
+
+Example slice: **resize**
+
+```text
+SIGWINCH or Windows poll
+  → event.Resize
+  → classify available area
+  → recompute flex rectangles
+  → resize buffers safely
+  → redraw
+  → emit one coherent terminal update
+```
+
+Example slice: **animated progress**
+
+```text
+frame time
+  → motion.Tween/Spring sampled at now
+  → state-derived geometry
+  → canvas cells
+  → buffer diff
+  → terminal bytes or plain snapshot
+```
+
+Slices should live close to their behavior rather than in horizontal
+`controllers/services/repositories` scaffolding. Introduce a port when a slice
+needs substitution for production and tests, not as speculation.
+
+## Implemented boundaries
+
+### Cell model and canvas
+
+`render.Cell` stores one grapheme in its leading cell and marks a wide
+grapheme's trailing cell as a continuation. Canvas operations clip atomically:
+they do not leave half a wide glyph. Buffers support cloning, resizing,
+comparison, changed-cell extraction, and front/back lifecycle.
+
+### Responsive layout
+
+`layout.Classify` combines width and height into `Tiny`, `Compact`, `Medium`, or
+`Wide`. `layout.Flex` distributes a caller-owned destination across horizontal
+or vertical constraints with basis, minimum, maximum, grow, shrink, and gap.
+No stylesheet parser or retained widget tree exists today.
+
+The intended adaptive sequence is:
+
+1. preserve required content and focus;
+2. remove optional decoration;
+3. shorten labels;
+4. stack columns into rows;
+5. scroll or clip as the final fallback.
+
+Each future widget must define its minimum useful size and fallback behavior.
+
+### Motion
+
+Tweens and springs are sampled from `time.Time`. If rendering pauses, the next
+sample reflects elapsed time; it does not enqueue every missed animation step.
+There is no global animation scheduler or timeline yet.
+
+### CPU 3D scene
+
+`scene3d` currently provides vectors, matrices, camera/light defaults, indexed
+triangles, cube geometry, near-plane clipping, back-face culling, a z-buffer,
+half-block output, ANSI 16 quantization, and a monochrome ramp. Its reusable
+renderer targets a `render.Canvas`, so it participates in the ordinary cell
+diff path and has no GPU or native dependency.
+
+### Terminal adapter
+
+The current adapter provides:
+
+- POSIX raw mode and `SIGWINCH` observation;
+- Windows VT enablement and terminal-size polling;
+- streaming UTF-8, legacy-key, SGR-mouse, focus, and bracketed-paste parsing;
+- bounded escape and paste buffers;
+- alternate-screen lifecycle and terminal restoration;
+- changed-run ANSI encoding and RGB → 256 → 16 → monochrome downgrade;
+- opt-in synchronized output through `LUX_TUI_SYNC_OUTPUT`;
+- newline-delimited plain snapshots for redirected output or `TERM=dumb`.
+
+Capability detection is deliberately conservative but currently environment
+based. Active, bounded feature negotiation is roadmap work.
+
+### Application runtime
+
+`lux.Run` owns backend open/close, initial resize, serialized model updates and
+views, commands, frames, size limits, and cancellation. Three reusable surfaces
+bound the presentation path: one can be drawn, one queued, and one in flight.
+When output falls behind, the queued surface is replaced by the latest state.
+
+Animation is explicit. `Frame.RequestFrame`, `RequestFrameAfter`, and
+`RequestFrameAt` coalesce to the earliest deadline; without a request or event,
+the timer is stopped. Presentation cost lowers the target cadence through
+60→30→20→10 FPS steps (bounded by `WithMaxFPS`) and recovers with hysteresis.
+`Frame` also exposes elapsed `Delta`, capabilities, presentation metrics, and
+the `WithReducedMotion` preference.
+
+## Dependency rule
+
+Allowed direction:
+
+```text
+application/example → lux runtime → event/layout/motion/render/capability ← adapter
+```
+
+Disallowed direction:
+
+- `render` importing terminal or event-loop code;
+- domain packages reading environment variables or file descriptors;
+- widgets emitting raw escape sequences;
+- application state depending on a concrete terminal brand.
+
+## Roadmap, in dependency order
+
+1. Harden the existing responsive CPU-3D showcase as the reference application
+   slice.
+2. Strengthen writer-failure/full-repaint recovery and test-terminal
+   conformance.
+3. Add minimal focusable widgets by composition.
+4. Capability provenance, modern keyboard protocols, and multiplexer-aware
+   negotiation.
+5. Optional Kitty/Sixel/iTerm graphics adapters and richer subcell modes.
+6. Extend the existing CPU 3D package only from measured needs; add GPU
+   integration only after profiles prove it useful.
+
+This order is intentional. A broad widget catalog before measured runtime and
+showcase behavior would create APIs without a proven flow.
