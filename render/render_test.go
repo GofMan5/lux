@@ -67,6 +67,15 @@ func TestCanvasClippingAndSubview(t *testing.T) {
 	}
 }
 
+func TestCanvasGlobalRectHonorsSubviewAndClip(t *testing.T) {
+	canvas := NewCanvas(NewBuffer(20, 10)).Subview(Rect{X: 4, Y: 2, W: 10, H: 6}).Clip(Rect{X: 2, Y: 1, W: 5, H: 3})
+	got := canvas.GlobalRect(Rect{X: 0, Y: 0, W: 10, H: 6})
+	want := Rect{X: 6, Y: 3, W: 5, H: 3}
+	if got != want {
+		t.Fatalf("global rect = %#v, want %#v", got, want)
+	}
+}
+
 func TestBufferResizeCloneDiffAndReset(t *testing.T) {
 	style := Style{Background: IndexedColor(42), Attrs: AttrItalic}
 	buffer := NewBuffer(4, 2)

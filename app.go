@@ -49,6 +49,7 @@ type Frame struct {
 	ReducedMotion bool
 
 	nextFrame time.Time
+	presented []func()
 }
 
 // Size returns the drawable viewport in cells.
@@ -79,6 +80,16 @@ func (f *Frame) RequestFrameAt(deadline time.Time) {
 	if f.nextFrame.IsZero() || deadline.Before(f.nextFrame) {
 		f.nextFrame = deadline
 	}
+}
+
+// OnPresented runs callback after this exact frame is successfully written.
+// Dropped and failed frames never run it. Callbacks must be brief and safe to
+// execute on the presentation goroutine.
+func (f *Frame) OnPresented(callback func()) {
+	if f == nil || callback == nil {
+		return
+	}
+	f.presented = append(f.presented, callback)
 }
 
 // Option configures Run.
@@ -199,8 +210,9 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 }
 
 type surface struct {
-	buffer *render.Buffer
-	canvas *render.Canvas
+	buffer    *render.Buffer
+	canvas    *render.Canvas
+	presented []func()
 }
 
 func newSurface(width, height int) *surface {
@@ -245,6 +257,12 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			}
 			started := time.Now()
 			err := settings.backend.Present(ctx, next.buffer)
+			if err == nil {
+				for _, callback := range next.presented {
+					callback()
+				}
+			}
+			next.presented = next.presented[:0]
 			select {
 			case presented <- presentResult{surface: next, duration: time.Since(started), err: err}:
 			case <-ctx.Done():
@@ -353,12 +371,14 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			}
 			current.resize(width, height)
 			current.buffer.Reset()
+			current.presented = current.presented[:0]
 			delta := time.Duration(0)
 			if !lastFrame.IsZero() {
 				delta = now.Sub(lastFrame)
 			}
 			frame := Frame{Canvas: current.canvas, Now: now, Delta: delta, Capabilities: features, Metrics: metrics, ReducedMotion: settings.reducedMotion}
 			model.View(&frame)
+			current.presented = append(current.presented[:0], frame.presented...)
 			requested, lastFrame, dirty = frame.nextFrame, now, false
 			if !features.Interactive {
 				requested = time.Time{}

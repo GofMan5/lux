@@ -24,6 +24,13 @@ The opportunity for LUX TUI is not “more widgets.” It is a cohesive Go-nativ
 path from events through responsive layout and elapsed-time motion into a
 Unicode-correct, capability-aware renderer, with measurable behavior under lag.
 
+The implemented interaction follow-up deliberately keeps one linear,
+presentation-bound immediate-mode registry rather than cloning a DOM. Stable
+IDs, final paint order, focus, pointer capture, modal routing, and grapheme-safe
+editing cover the first complete controls. Parent bubbling, shortcut layers,
+virtualized providers, clipboard/undo, and modern keyboard negotiation remain
+separate evidence-driven slices; see [INTERACTION.md](INTERACTION.md).
+
 ## Verified popularity and licenses
 
 | Project | Language | Stars | License |

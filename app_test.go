@@ -188,6 +188,26 @@ func TestOfferLatestKeepsNewest(t *testing.T) {
 	}
 }
 
+func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
+	frame := &Frame{}
+	called := 0
+	frame.OnPresented(func() { called++ })
+	surface := newSurface(1, 1)
+	surface.presented = append(surface.presented, frame.presented...)
+	for _, callback := range surface.presented {
+		callback()
+	}
+	if called != 1 {
+		t.Fatalf("hook calls = %d", called)
+	}
+	dropped := newSurface(1, 1)
+	dropped.presented = append(dropped.presented, func() { called++ })
+	dropped.presented = dropped.presented[:0]
+	if called != 1 {
+		t.Fatal("dropped frame hook ran")
+	}
+}
+
 type blockingBackend struct {
 	*fakeBackend
 	started chan struct{}

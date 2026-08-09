@@ -105,6 +105,8 @@ queues more output than the terminal can display.
    terminals and impaired transports.
 4. Add stronger writer-failure/full-repaint tests.
 5. Build equivalent competitor adapters and publish raw results.
+6. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
+   32 B/1 KiB/64 KiB before adding a spatial index or boundary cache.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

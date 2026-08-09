@@ -46,6 +46,7 @@ perform terminal I/O:
 - `motion` maps monotonic elapsed time to values;
 - `render` owns cell state and drawing rules;
 - `scene3d` projects CPU-rasterized triangle scenes into a `render.Canvas`;
+- `ui` owns presentation-bound focus, hit routing, and composed controls;
 - `capability` describes a backend's feature snapshot.
 
 `internal/terminal` is the default outbound/inbound adapter. It owns raw mode,
@@ -112,6 +113,24 @@ The intended adaptive sequence is:
 
 Each future widget must define its minimum useful size and fallback behavior.
 
+### Native interaction
+
+`ui.Context` is app-owned and immediate-mode: `Begin` starts a registry,
+controls paint and register clipped terminal-space regions in final paint
+order, and `End` attaches the immutable snapshot through `Frame.OnPresented`.
+Only a successfully written frame commits its regions. Resize invalidates
+coordinates immediately, and generation checks reject stale callbacks.
+
+The context centralizes reverse-order hit testing, left-button capture,
+Tab/BackTab traversal, Enter/Space activation, scroll routing, and one modal
+focus scope with restoration. Disabled top regions occlude controls below.
+There is deliberately no retained DOM, event bus, callback tree, CSS parser,
+or spatial index; composite widgets can justify parent routing later.
+
+Built-in vertical slices are Button, selectable List, Modal, and a single-line
+TextInput. Text offsets are UTF-8 bytes at UAX #29 extended-grapheme boundaries,
+using the same width policy as `render`.
+
 ### Motion
 
 Tweens and springs are sampled from `time.Time`. If rendering pauses, the next
@@ -177,7 +196,7 @@ Disallowed direction:
    slice.
 2. Strengthen writer-failure/full-repaint recovery and test-terminal
    conformance.
-3. Add minimal focusable widgets by composition.
+3. Add shortcut scopes, virtualized viewports, clipboard and bounded undo.
 4. Capability provenance, modern keyboard protocols, and multiplexer-aware
    negotiation.
 5. Optional Kitty/Sixel/iTerm graphics adapters and richer subcell modes.

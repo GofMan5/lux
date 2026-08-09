@@ -64,6 +64,18 @@ func (c *Canvas) Bounds() Rect {
 	return Bounds(width, height)
 }
 
+// GlobalRect converts a local rectangle to terminal-buffer coordinates and
+// clips it to both the canvas bounds and its active clip. Interactive controls
+// use it to publish hit regions that exactly match what can be drawn.
+func (c *Canvas) GlobalRect(rect Rect) Rect {
+	if c == nil || c.buffer == nil {
+		return Rect{}
+	}
+	local := rect.Intersect(c.Bounds())
+	absolute := Rect{X: c.originX + local.X, Y: c.originY + local.Y, W: local.W, H: local.H}
+	return absolute.Intersect(c.clip).Intersect(c.buffer.Bounds())
+}
+
 // Subview returns a canvas whose origin is rect's clipped top-left corner.
 func (c *Canvas) Subview(rect Rect) *Canvas {
 	if c == nil {

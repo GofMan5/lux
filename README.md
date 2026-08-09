@@ -4,10 +4,9 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-> **Pre-release:** the public runtime, renderer, responsive layout, motion
-> primitives, events, terminal adapter, and CPU 3D rasterizer exist. The widget
-> set and API stability are still being assembled, so no stable release is
-> promised yet.
+> **Pre-release:** the public runtime, renderer, responsive layout, immediate-
+> mode interaction context, core controls, motion, terminal adapter, and CPU 3D
+> rasterizer exist. API stability is not promised yet.
 
 LUX TUI treats the terminal as a constrained rendering target, not a stream of
 decorated strings. The current core stores complete extended grapheme clusters,
@@ -40,6 +39,7 @@ comparative claims require reproducible results.
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
 | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
+| [`ui`](./ui) | presentation-bound hit testing, focus/modal routing, buttons, Unicode text input, selectable scrolling lists, and modal panels |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
 | `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, color downgrade, and plain-output fallback |
@@ -115,16 +115,32 @@ go run ./examples/showcase
 The module currently declares Go 1.23. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before extending the core.
 
+## Native interaction
+
+`ui.Context` is LUX TUI's own immediate-mode interaction layer. Applications
+route an event through `Context.Handle` in `Update`, then call `Begin`, draw and
+register controls, and `End` in `View`. Hit geometry becomes active only after
+that exact frame is successfully presented; dropped frames cannot receive a
+click. Buttons always have Enter/Space equivalents, Tab traverses focus, modal
+scopes trap and restore focus, and lists support arrows/pages/wheel/click.
+
+`ui.TextInput` edits extended grapheme clusters rather than runes. Its byte
+offsets remain grapheme boundaries across typing, bounded paste, selection,
+navigation, deletion, wide-cell mouse placement, and horizontal scrolling.
+It is intentionally single-line; password hardening, undo, multiline editing,
+RTL visual reordering, and IME preedit are not claimed.
+
 ## Direction
 
-The next useful slice is a small focusable widget set built through the public
-runtime, not around it. Graphics protocols and richer animation composition
-follow only after that path is measurable.
+Next slices are shortcut scopes, virtualized viewports, explicit clipboard and
+bounded undo ports, and modern keyboard capability negotiation. Graphics
+protocols follow only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Compatibility](docs/COMPATIBILITY.md)
+- [Interaction model](docs/INTERACTION.md)
 - [Research snapshot](docs/RESEARCH.md)
 - [Performance contract](docs/PERFORMANCE.md)
 - [Contributing](CONTRIBUTING.md)

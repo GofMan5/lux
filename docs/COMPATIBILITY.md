@@ -18,6 +18,19 @@ behavior; **planned validation** = plausible path without current evidence.
 | SSH/mosh | planned validation | custom backends and latest-frame pacing exist; terminal-chain capability provenance and impaired-link validation remain |
 | CI, redirected stdout, `TERM=dumb` | implemented | monochrome newline-delimited full snapshots; no cursor addressing/input |
 
+Interactive controls require an interactive terminal profile. Every pointer
+action in the built-in controls has a keyboard equivalent because mouse support
+is environment-derived rather than actively probed. Generic VT transports
+provide committed UTF-8 text, not a portable IME preedit/candidate lifecycle.
+PowerShell and cmd remain shells; their host terminal determines behavior.
+
+TextInput is EGC-correct under the currently bundled uniseg Unicode 15.0 data.
+Terminal/font width, RTL visual editing, locale-tailored words, IME preedit,
+password hardening, undo, and multiline are outside the current claim. Paste is
+bracketed/bounded by the adapter and then sanitized/bounded again by the field.
+LUX TUI does not read/write OSC 52 automatically; clipboard mutation requires
+a future explicit application port and confirmation policy.
+
 `cmd.exe`, PowerShell, and shells running under SSH are command interpreters,
 not terminal emulators. Compatibility decisions must be based on the actual TTY
 and capabilities, never the shell name alone.
