@@ -249,7 +249,7 @@ func TestRunPlainBackendRendersOnceAndReturns(t *testing.T) {
 		settings := defaultConfig()
 		settings.backend = backend
 		ctx, cancel := context.WithCancelCause(context.Background())
-		done <- run(ctx, cancel, model, settings, features)
+		done <- run(ctx, cancel, model, settings, features, backend.Close)
 	}()
 	select {
 	case err := <-done:
@@ -286,12 +286,17 @@ func TestRunRestoresAfterModelPanic(t *testing.T) {
 
 type closeErrorBackend struct {
 	*fakeBackend
-	err error
+	err  error
+	once sync.Once
 }
 
 func (b *closeErrorBackend) Close() error {
-	_ = b.fakeBackend.Close()
-	return b.err
+	var result error
+	b.once.Do(func() {
+		_ = b.fakeBackend.Close()
+		result = b.err
+	})
+	return result
 }
 
 func TestRunReturnsFirstCloseError(t *testing.T) {

@@ -179,13 +179,21 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 	if err != nil {
 		return err
 	}
-	defer func() { result = errors.Join(result, settings.backend.Close()) }()
+	closed := false
+	closeBackend := func() error {
+		if closed {
+			return nil
+		}
+		closed = true
+		return settings.backend.Close()
+	}
+	defer func() { result = errors.Join(result, closeBackend()) }()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result = fmt.Errorf("lux: model panic: %v\n%s", recovered, debug.Stack())
 		}
 	}()
-	return run(runCtx, cancel, model, settings, features)
+	return run(runCtx, cancel, model, settings, features, closeBackend)
 }
 
 type surface struct {
@@ -212,7 +220,7 @@ type presentResult struct {
 	err      error
 }
 
-func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, settings config, features capability.Set) error {
+func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, settings config, features capability.Set, closeBackend func() error) (result error) {
 	defer cancel(nil)
 
 	width, height, err := settings.backend.Size()
@@ -247,7 +255,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 	}()
 	defer func() {
 		cancel(nil)
-		_ = settings.backend.Close()
+		result = errors.Join(result, closeBackend())
 		<-writerDone
 	}()
 

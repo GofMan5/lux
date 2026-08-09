@@ -103,7 +103,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	b.synchronized = syncOutputConfigured()
 	b.features = detectCapabilities(b.synchronized)
 	b.opened = true
-	if err := writeAll(b.output, []byte(enterTerminal)); err != nil {
+	if err := writeAll(b.writer, []byte(enterTerminal)); err != nil {
 		_ = writeAll(b.writer, []byte(leaveTerminal))
 		_ = b.writer.Close()
 		b.writer = nil
@@ -239,7 +239,7 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, output, writer, input, state, restoreVT := b.plain, b.output, b.writer, b.input, b.state, b.restoreVT
+	plain, writer, input, state, restoreVT := b.plain, b.writer, b.input, b.state, b.restoreVT
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
@@ -251,15 +251,15 @@ func (b *Backend) Close() error {
 		cancel()
 		cancelRead(input)
 	}
+	var result error
 	if writer != nil {
-		_ = writer.Close()
+		if !plain {
+			result = errors.Join(result, writeAll(writer, []byte(leaveTerminal)))
+		}
+		result = errors.Join(result, writer.Close())
 	}
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
-	var result error
-	if !plain && output != nil {
-		result = writeAll(output, []byte(leaveTerminal))
-	}
 	if state != nil && input != nil {
 		result = errors.Join(result, term.Restore(int(input.Fd()), state))
 	}
