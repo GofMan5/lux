@@ -1,7 +1,7 @@
 LUX TUI verification record
-UTC: 2026-08-09T03:39:35.8993130Z
+UTC: 2026-08-09T05:58:39.1056479Z
 Baseline: 3f33aae4eb2086a33c2a036711afb4b4ccf7af87
-Modified: 1bf4a632e9d185b5e8e4d48ff6d96fa6b380a2ba
+Modified: e6a92030520cd0d70e0a64a79bdb98e8835012ee
 
 Baseline command:
   git switch --detach 3f33aae; go test ./...
@@ -31,10 +31,16 @@ Modified commands and literal results:
   exit status: 0
 
   GOOS=linux GOARCH=amd64 go build ./examples/showcase
+  SHA256: 87E7CEC1416F10C29613B3AB37D1BDE48E2DC9DD8EB95BC7321B90D0AB0ECC2E
   exit status: 0
 
   GOOS=windows GOARCH=amd64 go build ./examples/showcase
+  SHA256: 9E55291058303B7C1A0BD64753237F75D5639BA96EEB8C6F9AAD071A43937662
   exit status: 0
+
+Focused lifecycle stress:
+  50x normal and 25x race: panic plus first-only Close error, saturated pipe, blocked custom Present
+  PASS; independent review confirmed no remaining lifecycle blocker
 
 Benchmarks (Windows amd64, Intel i5-10400F, Go 1.25.5):
   Canvas 120x40: 778718 ns/op, 0 allocs/op

@@ -760,10 +760,10 @@ index 0000000..28d10cd
 +```
 diff --git a/app.go b/app.go
 new file mode 100644
-index 0000000..d4719b4
+index 0000000..5c3bc85
 --- /dev/null
 +++ b/app.go
-@@ -0,0 +1,538 @@
+@@ -0,0 +1,540 @@
 +// Package lux is a responsive, animated, terminal-independent TUI runtime.
 +package lux
 +
@@ -946,18 +946,20 @@ index 0000000..d4719b4
 +		return err
 +	}
 +	closed := false
++	var closeErr error
 +	closeBackend := func() error {
 +		if closed {
-+			return nil
++			return closeErr
 +		}
 +		closed = true
-+		return settings.backend.Close()
++		closeErr = settings.backend.Close()
++		return closeErr
 +	}
-+	defer func() { result = errors.Join(result, closeBackend()) }()
 +	defer func() {
 +		if recovered := recover(); recovered != nil {
 +			result = fmt.Errorf("lux: model panic: %v\n%s", recovered, debug.Stack())
 +		}
++		result = errors.Join(result, closeBackend())
 +	}()
 +	return run(runCtx, cancel, model, settings, features, closeBackend)
 +}
@@ -1304,10 +1306,10 @@ index 0000000..d4719b4
 +}
 diff --git a/app_test.go b/app_test.go
 new file mode 100644
-index 0000000..7b873d3
+index 0000000..a1ca001
 --- /dev/null
 +++ b/app_test.go
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,318 @@
 +package lux
 +
 +import (
@@ -1591,6 +1593,15 @@ index 0000000..7b873d3
 +	defer backend.mu.Unlock()
 +	if !backend.closed {
 +		t.Fatal("backend was not closed after model panic")
++	}
++}
++
++func TestRunJoinsPanicAndFirstCloseError(t *testing.T) {
++	restoreErr := errors.New("restore failed")
++	backend := &closeErrorBackend{fakeBackend: newFakeBackend(10, 3), err: restoreErr}
++	err := Run(context.Background(), panicModel{}, WithBackend(backend))
++	if err == nil || !strings.Contains(err.Error(), "model panic: boom") || !errors.Is(err, restoreErr) {
++		t.Fatalf("combined error = %v", err)
 +	}
 +}
 +
