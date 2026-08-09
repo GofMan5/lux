@@ -250,6 +250,9 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 		defer func() {
 			if recovered := recover(); recovered != nil {
 				err := fmt.Errorf("lux: presentation callback panic: %v\n%s", recovered, debug.Stack())
+				if current := context.Cause(ctx); current != nil {
+					err = errors.Join(current, err)
+				}
 				cancel(err)
 				select {
 				case presented <- presentResult{err: err}:
