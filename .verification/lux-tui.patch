@@ -760,10 +760,10 @@ index 0000000..28d10cd
 +```
 diff --git a/app.go b/app.go
 new file mode 100644
-index 0000000..3df7038
+index 0000000..d4719b4
 --- /dev/null
 +++ b/app.go
-@@ -0,0 +1,530 @@
+@@ -0,0 +1,538 @@
 +// Package lux is a responsive, animated, terminal-independent TUI runtime.
 +package lux
 +
@@ -945,13 +945,21 @@ index 0000000..3df7038
 +	if err != nil {
 +		return err
 +	}
-+	defer func() { result = errors.Join(result, settings.backend.Close()) }()
++	closed := false
++	closeBackend := func() error {
++		if closed {
++			return nil
++		}
++		closed = true
++		return settings.backend.Close()
++	}
++	defer func() { result = errors.Join(result, closeBackend()) }()
 +	defer func() {
 +		if recovered := recover(); recovered != nil {
 +			result = fmt.Errorf("lux: model panic: %v\n%s", recovered, debug.Stack())
 +		}
 +	}()
-+	return run(runCtx, cancel, model, settings, features)
++	return run(runCtx, cancel, model, settings, features, closeBackend)
 +}
 +
 +type surface struct {
@@ -978,7 +986,7 @@ index 0000000..3df7038
 +	err      error
 +}
 +
-+func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, settings config, features capability.Set) error {
++func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, settings config, features capability.Set, closeBackend func() error) (result error) {
 +	defer cancel(nil)
 +
 +	width, height, err := settings.backend.Size()
@@ -1013,7 +1021,7 @@ index 0000000..3df7038
 +	}()
 +	defer func() {
 +		cancel(nil)
-+		_ = settings.backend.Close()
++		result = errors.Join(result, closeBackend())
 +		<-writerDone
 +	}()
 +
@@ -1296,10 +1304,10 @@ index 0000000..3df7038
 +}
 diff --git a/app_test.go b/app_test.go
 new file mode 100644
-index 0000000..f34d7a7
+index 0000000..7b873d3
 --- /dev/null
 +++ b/app_test.go
-@@ -0,0 +1,285 @@
+@@ -0,0 +1,309 @@
 +package lux
 +
 +import (
@@ -1551,7 +1559,7 @@ index 0000000..f34d7a7
 +		settings := defaultConfig()
 +		settings.backend = backend
 +		ctx, cancel := context.WithCancelCause(context.Background())
-+		done <- run(ctx, cancel, model, settings, features)
++		done <- run(ctx, cancel, model, settings, features, backend.Close)
 +	}()
 +	select {
 +	case err := <-done:
@@ -1585,6 +1593,30 @@ index 0000000..f34d7a7
 +		t.Fatal("backend was not closed after model panic")
 +	}
 +}
++
++type closeErrorBackend struct {
++	*fakeBackend
++	err  error
++	once sync.Once
++}
++
++func (b *closeErrorBackend) Close() error {
++	var result error
++	b.once.Do(func() {
++		_ = b.fakeBackend.Close()
++		result = b.err
++	})
++	return result
++}
++
++func TestRunReturnsFirstCloseError(t *testing.T) {
++	restoreErr := errors.New("restore failed")
++	backend := &closeErrorBackend{fakeBackend: newFakeBackend(10, 3), err: restoreErr}
++	model := &testModel{quitOn: event.Resize}
++	if err := Run(context.Background(), model, WithBackend(backend)); !errors.Is(err, restoreErr) {
++		t.Fatalf("close error = %v", err)
++	}
++}
 diff --git a/backend.go b/backend.go
 new file mode 100644
 index 0000000..ef491e3
@@ -1613,7 +1645,7 @@ index 0000000..ef491e3
 +}
 diff --git a/capability/capability.go b/capability/capability.go
 new file mode 100644
-index 0000000..59dc5a6
+index 0000000..9282576
 --- /dev/null
 +++ b/capability/capability.go
 @@ -0,0 +1,43 @@
@@ -1659,7 +1691,7 @@ index 0000000..59dc5a6
 +}
 +
 +// Portable returns conservative features suitable for redirected output.
-+func Portable() Set { return Set{Terminal: "dumb", Unicode: true, Color: Monochrome} }
++func Portable() Set { return Set{Terminal: "dumb", Color: Monochrome} }
 diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
 new file mode 100644
 index 0000000..f9d138a
@@ -2461,10 +2493,10 @@ index 0000000..3eb08d8
 +}
 diff --git a/examples/showcase/main.go b/examples/showcase/main.go
 new file mode 100644
-index 0000000..e5be297
+index 0000000..55a2562
 --- /dev/null
 +++ b/examples/showcase/main.go
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,176 @@
 +// Command showcase demonstrates responsive layout, absolute-time motion, and
 +// the portable CPU 3D renderer in one small application.
 +package main
@@ -2537,13 +2569,13 @@ index 0000000..e5be297
 +		canvas.Text(0, 0, "LUX TUI - enlarge terminal", render.Style{Foreground: violet, Attrs: render.AttrBold})
 +		return
 +	case layout.Compact:
-+		app.drawHeader(canvas, area)
++		app.drawHeader(canvas, area, frame.Capabilities.Unicode)
 +		viewport := render.Rect{X: 1, Y: 3, W: max(area.W-2, 1), H: max(area.H-5, 1)}
 +		app.drawScene(frame, viewport)
 +	default:
 +		header, body := area.SplitTop(3)
 +		body.H = max(body.H-2, 0)
-+		app.drawHeader(canvas, header)
++		app.drawHeader(canvas, header, frame.Capabilities.Unicode)
 +		panels := layout.Flex(app.panels[:], body.Inset(1, 0), layout.Horizontal, 2,
 +			layout.Constraint{Basis: 29, Min: 23, Max: 38, Grow: 1, Shrink: 1},
 +			layout.Constraint{Basis: 70, Min: 28, Grow: 3, Shrink: 2},
@@ -2558,13 +2590,20 @@ index 0000000..e5be297
 +	}
 +}
 +
-+func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect) {
++func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect, unicode bool) {
 +	style := render.Style{Foreground: violet, Attrs: render.AttrBold}
-+	canvas.Text(2, area.Y, "LUX", style)
-+	canvas.Text(6, area.Y, "TUI", render.Style{Foreground: ink, Attrs: render.AttrBold})
-+	canvas.Text(2, area.Y+1, "terminal graphics, without the weight", render.Style{Foreground: muted})
++	name, tagline := "LUX", "terminal graphics, without the weight"
++	if !unicode {
++		name, tagline = "LUX TUI", "fast terminal graphics"
++	}
++	canvas.Text(2, area.Y, name, style)
++	if name == "LUX" {
++		canvas.Text(6, area.Y, "TUI", render.Style{Foreground: ink, Attrs: render.AttrBold})
++	}
++	canvas.Text(2, area.Y+1, tagline, render.Style{Foreground: muted})
 +	if area.W > 55 {
-+		canvas.Text(area.W-22, area.Y, "● LIVE / CELL ENGINE", render.Style{Foreground: cyan, Attrs: render.AttrBold})
++		status := "* LIVE / CELL ENGINE"
++		canvas.Text(area.W-22, area.Y, status, render.Style{Foreground: cyan, Attrs: render.AttrBold})
 +	}
 +}
 +
@@ -2663,10 +2702,10 @@ index 0000000..f914991
 +golang.org/x/term v0.34.0/go.mod h1:5jC53AEywhIVebHgPVeg0mj8OD3VO9OzclacVrqpaAw=
 diff --git a/internal/terminal/backend.go b/internal/terminal/backend.go
 new file mode 100644
-index 0000000..b925dea
+index 0000000..0bb0876
 --- /dev/null
 +++ b/internal/terminal/backend.go
-@@ -0,0 +1,399 @@
+@@ -0,0 +1,419 @@
 +// Package terminal implements the default VT terminal backend.
 +package terminal
 +
@@ -2696,6 +2735,7 @@ index 0000000..b925dea
 +type Backend struct {
 +	input  *os.File
 +	output *os.File
++	writer *os.File
 +
 +	mu           sync.Mutex
 +	writeMu      sync.Mutex
@@ -2735,6 +2775,11 @@ index 0000000..b925dea
 +	}
 +	b.plain = b.output == nil || os.Getenv("TERM") == "dumb" || !isTerminal(b.output)
 +	if b.plain {
++		writer, err := duplicateFile(b.output, "lux-tui-output")
++		if err != nil && b.output != nil {
++			return capability.Set{}, err
++		}
++		b.writer = writer
 +		b.features = capability.Portable()
 +		b.events = make(chan event.Event, 64)
 +		b.opened = true
@@ -2755,11 +2800,21 @@ index 0000000..b925dea
 +		return capability.Set{}, err
 +	}
 +	b.restoreVT = restoreVT
++	writer, err := duplicateFile(b.output, "lux-tui-output")
++	if err != nil {
++		_ = term.Restore(int(b.input.Fd()), b.state)
++		_ = b.restoreVT()
++		b.state, b.restoreVT = nil, nil
++		return capability.Set{}, err
++	}
++	b.writer = writer
 +	b.synchronized = syncOutputConfigured()
 +	b.features = detectCapabilities(b.synchronized)
 +	b.opened = true
-+	if err := writeAll(b.output, []byte(enterTerminal)); err != nil {
-+		_ = writeAll(b.output, []byte(leaveTerminal))
++	if err := writeAll(b.writer, []byte(enterTerminal)); err != nil {
++		_ = writeAll(b.writer, []byte(leaveTerminal))
++		_ = b.writer.Close()
++		b.writer = nil
 +		_ = term.Restore(int(b.input.Fd()), b.state)
 +		if b.restoreVT != nil {
 +			_ = b.restoreVT()
@@ -2841,11 +2896,11 @@ index 0000000..b925dea
 +		b.mu.Unlock()
 +		return errors.New("terminal: backend is not open")
 +	}
-+	if b.output == nil {
++	if b.writer == nil {
 +		b.mu.Unlock()
 +		return errors.New("terminal: nil output")
 +	}
-+	output, plain, synchronized, features, previous := b.output, b.plain, b.synchronized, b.features, b.previous
++	output, plain, synchronized, features, previous := b.writer, b.plain, b.synchronized, b.features, b.previous
 +	b.mu.Unlock()
 +	var data []byte
 +	if plain {
@@ -2892,7 +2947,8 @@ index 0000000..b925dea
 +	cancel, done := b.cancel, b.readDone
 +	b.cancel, b.readDone = nil, nil
 +	b.resize.stop()
-+	plain, output, input, state, restoreVT := b.plain, b.output, b.input, b.state, b.restoreVT
++	plain, writer, input, state, restoreVT := b.plain, b.writer, b.input, b.state, b.restoreVT
++	b.writer = nil
 +	b.state = nil
 +	b.restoreVT = nil
 +	b.previous = nil
@@ -2903,12 +2959,15 @@ index 0000000..b925dea
 +		cancel()
 +		cancelRead(input)
 +	}
++	var result error
++	if writer != nil {
++		if !plain {
++			result = errors.Join(result, writeAll(writer, []byte(leaveTerminal)))
++		}
++		result = errors.Join(result, writer.Close())
++	}
 +	b.writeMu.Lock()
 +	defer b.writeMu.Unlock()
-+	var result error
-+	if !plain && output != nil {
-+		result = writeAll(output, []byte(leaveTerminal))
-+	}
 +	if state != nil && input != nil {
 +		result = errors.Join(result, term.Restore(int(input.Fd()), state))
 +	}
@@ -3735,10 +3794,10 @@ index 0000000..9847d30
 +}
 diff --git a/internal/terminal/platform_unix.go b/internal/terminal/platform_unix.go
 new file mode 100644
-index 0000000..37babd7
+index 0000000..f4532dc
 --- /dev/null
 +++ b/internal/terminal/platform_unix.go
-@@ -0,0 +1,80 @@
+@@ -0,0 +1,91 @@
 +//go:build !windows
 +
 +package terminal
@@ -3757,6 +3816,17 @@ index 0000000..37babd7
 +)
 +
 +func enableVT(*os.File) (func() error, error) { return nil, nil }
++
++func duplicateFile(file *os.File, name string) (*os.File, error) {
++	if file == nil {
++		return nil, nil
++	}
++	fd, err := unix.Dup(int(file.Fd()))
++	if err != nil {
++		return nil, err
++	}
++	return os.NewFile(uintptr(fd), name), nil
++}
 +
 +func terminalSize(file *os.File) (int, int, error) { return term.GetSize(int(file.Fd())) }
 +
@@ -3821,10 +3891,10 @@ index 0000000..37babd7
 +}
 diff --git a/internal/terminal/platform_windows.go b/internal/terminal/platform_windows.go
 new file mode 100644
-index 0000000..4a6ea6c
+index 0000000..9a47354
 --- /dev/null
 +++ b/internal/terminal/platform_windows.go
-@@ -0,0 +1,98 @@
+@@ -0,0 +1,113 @@
 +//go:build windows
 +
 +package terminal
@@ -3852,6 +3922,21 @@ index 0000000..4a6ea6c
 +		return nil, err
 +	}
 +	return func() error { return windows.SetConsoleMode(handle, mode) }, nil
++}
++
++func duplicateFile(file *os.File, name string) (*os.File, error) {
++	if file == nil {
++		return nil, nil
++	}
++	process, err := windows.GetCurrentProcess()
++	if err != nil {
++		return nil, err
++	}
++	var duplicate windows.Handle
++	if err := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
++		return nil, err
++	}
++	return os.NewFile(uintptr(duplicate), name), nil
 +}
 +
 +func terminalSize(file *os.File) (int, int, error) { return term.GetSize(int(file.Fd())) }
@@ -4179,10 +4264,10 @@ index 0000000..3229865
 +}
 diff --git a/layout/layout.go b/layout/layout.go
 new file mode 100644
-index 0000000..ecdf297
+index 0000000..6fdca2b
 --- /dev/null
 +++ b/layout/layout.go
-@@ -0,0 +1,149 @@
+@@ -0,0 +1,150 @@
 +// Package layout provides small, content-driven responsive layout primitives.
 +package layout
 +
@@ -4247,7 +4332,8 @@ index 0000000..ecdf297
 +	}
 +	available = max(available, 0)
 +	if len(items) > 1 {
-+		gap = min(gap, available/(len(items)-1))
++		// Reserve a cell per child before spending scarce space on decoration.
++		gap = min(gap, max(available-len(items), 0)/(len(items)-1))
 +	}
 +	available = max(available-gap*(len(items)-1), 0)
 +	used := 0
@@ -6321,4 +6407,51 @@ index 0000000..f8aa3a1
 +func close(left, right float64) bool {
 +	difference := left - right
 +	return difference > -1e-9 && difference < 1e-9
++}
+diff --git a/terminal_pipe_windows_test.go b/terminal_pipe_windows_test.go
+new file mode 100644
+index 0000000..076a4d3
+--- /dev/null
++++ b/terminal_pipe_windows_test.go
+@@ -0,0 +1,41 @@
++//go:build windows
++
++package lux
++
++import (
++	"context"
++	"os"
++	"testing"
++	"time"
++
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++type fullFrameModel struct{}
++
++func (fullFrameModel) Update(event.Event) Command { return nil }
++func (fullFrameModel) View(frame *Frame) {
++	frame.Canvas.Fill(frame.Canvas.Bounds(), "X", render.Style{})
++}
++
++func TestDefaultBackendCancellationInterruptsFullPipe(t *testing.T) {
++	reader, writer, err := os.Pipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() { _ = reader.Close() }()
++	defer func() { _ = writer.Close() }()
++	ctx, cancel := context.WithCancel(context.Background())
++	done := make(chan error, 1)
++	go func() {
++		done <- Run(ctx, fullFrameModel{}, WithIO(nil, writer), WithFallbackSize(500, 200))
++	}()
++	time.Sleep(100 * time.Millisecond)
++	cancel()
++	select {
++	case <-done:
++	case <-time.After(time.Second):
++		t.Fatal("Run remained blocked on a saturated output pipe")
++	}
 +}
