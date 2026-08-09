@@ -176,7 +176,7 @@ func TestPlainBackendLifecycleAndFullWrites(t *testing.T) {
 	}
 	frame := render.NewBuffer(2, 1)
 	render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
-	if err := backend.Present(frame); err != nil {
+	if err := backend.Present(context.Background(), frame); err != nil {
 		t.Fatal(err)
 	}
 	if err := backend.Close(); err != nil {
@@ -202,10 +202,10 @@ func TestPlainBackendLifecycleAndFullWrites(t *testing.T) {
 
 func TestBackendErrors(t *testing.T) {
 	backend := New(nil, nil)
-	if err := backend.Present(render.NewBuffer(1, 1)); err == nil {
+	if err := backend.Present(context.Background(), render.NewBuffer(1, 1)); err == nil {
 		t.Fatal("Present before Open succeeded")
 	}
-	if err := backend.Present(nil); err == nil {
+	if err := backend.Present(context.Background(), nil); err == nil {
 		t.Fatal("nil Present succeeded")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

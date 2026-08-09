@@ -173,12 +173,19 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 	if settings.backend == nil {
 		settings.backend = terminal.New(settings.input, settings.output)
 	}
-	features, err := settings.backend.Open(ctx)
+	runCtx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	features, err := settings.backend.Open(runCtx)
 	if err != nil {
 		return err
 	}
 	defer func() { result = errors.Join(result, settings.backend.Close()) }()
-	return run(ctx, model, settings, features)
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			result = fmt.Errorf("lux: model panic: %v\n%s", recovered, debug.Stack())
+		}
+	}()
+	return run(runCtx, cancel, model, settings, features)
 }
 
 type surface struct {
@@ -205,8 +212,7 @@ type presentResult struct {
 	err      error
 }
 
-func run(parent context.Context, model Model, settings config, features capability.Set) error {
-	ctx, cancel := context.WithCancelCause(parent)
+func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, settings config, features capability.Set) error {
 	defer cancel(nil)
 
 	width, height, err := settings.backend.Size()
@@ -217,7 +223,9 @@ func run(parent context.Context, model Model, settings config, features capabili
 
 	present := make(chan *surface, 1)
 	presented := make(chan presentResult, 3)
+	writerDone := make(chan struct{})
 	go func() {
+		defer close(writerDone)
 		for {
 			var next *surface
 			select {
@@ -226,7 +234,7 @@ func run(parent context.Context, model Model, settings config, features capabili
 			case next = <-present:
 			}
 			started := time.Now()
-			err := settings.backend.Present(next.buffer)
+			err := settings.backend.Present(ctx, next.buffer)
 			select {
 			case presented <- presentResult{surface: next, duration: time.Since(started), err: err}:
 			case <-ctx.Done():
@@ -239,9 +247,8 @@ func run(parent context.Context, model Model, settings config, features capabili
 	}()
 	defer func() {
 		cancel(nil)
-		// Backend.Close runs after this function returns. It is responsible for
-		// interrupting an in-flight Present; a custom adapter must make Close safe
-		// concurrently with Present just like the default adapter.
+		_ = settings.backend.Close()
+		<-writerDone
 	}()
 
 	events := make(chan event.Event, 256)

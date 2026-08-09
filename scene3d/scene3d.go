@@ -362,6 +362,15 @@ func (renderer *Renderer) Render(canvas *render.Canvas, scene Scene) {
 }
 
 func normalizedCamera(camera Camera) Camera {
+	if !finiteVec(camera.Position) {
+		camera.Position = Vec3{Z: 3}
+	}
+	if !finiteVec(camera.Target) {
+		camera.Target = Vec3{}
+	}
+	if !finiteVec(camera.Up) {
+		camera.Up = Vec3{Y: 1}
+	}
 	if camera == (Camera{}) {
 		camera.Position = Vec3{Z: 3}
 	}
@@ -371,7 +380,7 @@ func normalizedCamera(camera Camera) Camera {
 	if camera.Up.Normalize() == (Vec3{}) {
 		camera.Up = Vec3{Y: 1}
 	}
-	if camera.FOVY <= 0 || camera.FOVY >= math.Pi {
+	if !finite(camera.FOVY) || camera.FOVY <= 0 || camera.FOVY >= math.Pi {
 		camera.FOVY = Degrees(60)
 	}
 	if camera.Near <= 0 || !finite(camera.Near) {

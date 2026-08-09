@@ -23,3 +23,15 @@ func TestClassifyHonorsHeight(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+func TestFlexNeverEscapesTinyArea(t *testing.T) {
+	items := []Constraint{{Basis: 10, Min: 8, Shrink: 1}, {Basis: 10, Min: 8, Shrink: 1}}
+	for _, width := range []int{0, 1, 3} {
+		areas := Flex(make([]render.Rect, 2), render.Rect{W: width, H: 1}, Horizontal, 10, items...)
+		for _, area := range areas {
+			if area.X < 0 || area.W < 0 || area.Right() > width {
+				t.Fatalf("width %d escaped: %#v", width, areas)
+			}
+		}
+	}
+}

@@ -60,6 +60,10 @@ func Flex(into []render.Rect, area render.Rect, axis Axis, gap int, items ...Con
 	if axis == Vertical {
 		available = area.H
 	}
+	available = max(available, 0)
+	if len(items) > 1 {
+		gap = min(gap, available/(len(items)-1))
+	}
 	available = max(available-gap*(len(items)-1), 0)
 	used := 0
 	for index, item := range items {
@@ -75,6 +79,16 @@ func Flex(into []render.Rect, area render.Rect, axis Axis, gap int, items ...Con
 		distribute(into, items, delta, true)
 	} else if delta < 0 {
 		distribute(into, items, -delta, false)
+		used = 0
+		for index := range into {
+			used += into[index].W
+		}
+		// At tiny sizes minimums become preferences: containment beats overflow.
+		for index := len(into) - 1; used > available && index >= 0; index-- {
+			cut := min(into[index].W, used-available)
+			into[index].W -= cut
+			used -= cut
+		}
 	}
 	position := 0
 	for index := range into {

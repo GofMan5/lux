@@ -3,6 +3,7 @@ package lux
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -44,9 +45,13 @@ func (b *fakeBackend) NextEvent(ctx context.Context) (event.Event, error) {
 	}
 }
 
-func (b *fakeBackend) Present(frame *render.Buffer) error {
+func (b *fakeBackend) Present(ctx context.Context, frame *render.Buffer) error {
 	if b.delay > 0 {
-		time.Sleep(b.delay)
+		select {
+		case <-time.After(b.delay):
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	if b.presentErr != nil {
 		return b.presentErr
@@ -194,10 +199,14 @@ func newBlockingBackend() *blockingBackend {
 	return &blockingBackend{fakeBackend: newFakeBackend(10, 3), started: make(chan struct{}), closed: make(chan struct{})}
 }
 
-func (b *blockingBackend) Present(*render.Buffer) error {
+func (b *blockingBackend) Present(ctx context.Context, _ *render.Buffer) error {
 	b.once.Do(func() { close(b.started) })
-	<-b.closed
-	return context.Canceled
+	select {
+	case <-b.closed:
+		return context.Canceled
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (b *blockingBackend) Close() error {
@@ -239,7 +248,8 @@ func TestRunPlainBackendRendersOnceAndReturns(t *testing.T) {
 		features := capability.Portable()
 		settings := defaultConfig()
 		settings.backend = backend
-		done <- run(context.Background(), model, settings, features)
+		ctx, cancel := context.WithCancelCause(context.Background())
+		done <- run(ctx, cancel, model, settings, features)
 	}()
 	select {
 	case err := <-done:
@@ -253,5 +263,23 @@ func TestRunPlainBackendRendersOnceAndReturns(t *testing.T) {
 	defer model.mu.Unlock()
 	if model.frames != 1 {
 		t.Fatalf("plain frames = %d, want 1", model.frames)
+	}
+}
+
+type panicModel struct{}
+
+func (panicModel) Update(event.Event) Command { return nil }
+func (panicModel) View(*Frame)                { panic("boom") }
+
+func TestRunRestoresAfterModelPanic(t *testing.T) {
+	backend := newFakeBackend(10, 3)
+	err := Run(context.Background(), panicModel{}, WithBackend(backend))
+	if err == nil || !strings.Contains(err.Error(), "model panic: boom") {
+		t.Fatalf("panic error = %v", err)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if !backend.closed {
+		t.Fatal("backend was not closed after model panic")
 	}
 }

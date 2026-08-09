@@ -1,6 +1,7 @@
 package scene3d
 
 import (
+	"math"
 	"testing"
 
 	"github.com/lux-tui/lux/render"
@@ -61,6 +62,26 @@ func TestResizeAndTinyViewsReuseBuffers(t *testing.T) {
 				t.Fatalf("buffers at %dx%d = %d/%d, want %d", size[0], size[1], len(renderer.depth), len(renderer.pixels), want)
 			}
 		}
+	}
+}
+
+func TestNonFiniteCameraFallsBack(t *testing.T) {
+	canvas := render.NewCanvas(render.NewBuffer(40, 16))
+	renderer := NewRenderer()
+	scene := Scene{
+		Objects: []Object{{Mesh: Cube(1)}},
+		Camera:  Camera{Position: V3(math.NaN(), 0, 3), FOVY: math.NaN()},
+	}
+	renderer.Render(canvas, scene)
+	hit := false
+	for index := 0; index < canvas.Buffer().Len(); index++ {
+		if canvas.Buffer().CellAt(index).Grapheme != " " {
+			hit = true
+			break
+		}
+	}
+	if !hit {
+		t.Fatal("non-finite camera did not fall back to a visible default")
 	}
 }
 

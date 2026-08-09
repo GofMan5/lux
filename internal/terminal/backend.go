@@ -158,9 +158,12 @@ func (b *Backend) NextEvent(ctx context.Context) (event.Event, error) {
 
 // Present renders a frame. Interactive terminals receive changed row runs;
 // portable output receives a complete text snapshot per call.
-func (b *Backend) Present(frame *render.Buffer) error {
+func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	if frame == nil {
 		return errors.New("terminal: nil frame")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()
@@ -184,11 +187,13 @@ func (b *Backend) Present(frame *render.Buffer) error {
 	if len(data) == 0 {
 		return nil
 	}
-	if err := writeAll(output, data); err != nil {
+	if err := writeAllContext(ctx, output, data); err != nil {
 		return err
 	}
 	b.mu.Lock()
-	b.previous = frame.Clone()
+	if b.opened {
+		b.previous = frame.Clone()
+	}
 	b.mu.Unlock()
 	return nil
 }
@@ -229,6 +234,8 @@ func (b *Backend) Close() error {
 		cancel()
 		cancelRead(input)
 	}
+	b.writeMu.Lock()
+	defer b.writeMu.Unlock()
 	var result error
 	if !plain && output != nil {
 		result = writeAll(output, []byte(leaveTerminal))
@@ -327,6 +334,23 @@ func isTerminal(file *os.File) bool { return file != nil && term.IsTerminal(int(
 
 func writeAll(writer io.Writer, data []byte) error {
 	for len(data) > 0 {
+		count, err := writer.Write(data)
+		if err != nil {
+			return err
+		}
+		if count <= 0 {
+			return io.ErrShortWrite
+		}
+		data = data[count:]
+	}
+	return nil
+}
+
+func writeAllContext(ctx context.Context, writer io.Writer, data []byte) error {
+	for len(data) > 0 {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		count, err := writer.Write(data)
 		if err != nil {
 			return err
