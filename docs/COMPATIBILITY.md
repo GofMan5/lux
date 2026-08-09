@@ -70,8 +70,8 @@ report a viewport. `WithIO` changes the default adapter's files;
   for an optional reply.
 - Parse partial input incrementally with bounded memory and configurable escape
   disambiguation.
-- Restore all enabled modes after normal exit, error, panic, signal, suspend,
-  and resume.
+- Keep the implemented normal/error/panic restoration checks green; add
+  explicit signal and suspend/resume handling before v1.
 - Treat the effective chain separately: outer emulator → multiplexer →
   transport → application.
 - Gate OSC, clipboard, notifications, and graphics passthrough by positive
