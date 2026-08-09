@@ -108,5 +108,13 @@ queues more output than the terminal can display.
 6. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
    32 B/1 KiB/64 KiB before adding a spatial index or boundary cache.
 
+Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
+show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
+with 0 alloc/op. Ctrl-word movement is 0 alloc/op but linear in text length:
+roughly 11 us at 32 B, 0.42 ms at 1 KiB, and 34 ms at 64 KiB. The current
+single-line editor is therefore tuned for ordinary form fields, not documents;
+a cached boundary table belongs in a future document editor rather than this
+small control.
+
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

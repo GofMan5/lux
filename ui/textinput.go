@@ -510,25 +510,6 @@ func nextBoundary(value string, position int) int {
 	return len(value)
 }
 
-type textSpan struct{ start, end int }
-
-func wordSpans(value string) []textSpan {
-	spans := make([]textSpan, 0, 8)
-	start := 0
-	graphemes := uniseg.NewGraphemes(value)
-	for graphemes.Next() {
-		_, end := graphemes.Positions()
-		if !graphemes.IsWordBoundary() {
-			continue
-		}
-		if wordLike(value[start:end]) {
-			spans = append(spans, textSpan{start, end})
-		}
-		start = end
-	}
-	return spans
-}
-
 func wordLike(value string) bool {
 	for _, r := range value {
 		if r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) {
@@ -540,22 +521,40 @@ func wordLike(value string) bool {
 
 func previousWord(value string, position int) int {
 	position = floorBoundary(value, position)
-	target := 0
-	for _, span := range wordSpans(value) {
-		if span.start >= position {
+	start, target := 0, 0
+	graphemes := uniseg.NewGraphemes(value)
+	for graphemes.Next() {
+		_, end := graphemes.Positions()
+		if !graphemes.IsWordBoundary() {
+			continue
+		}
+		if wordLike(value[start:end]) {
+			if start >= position {
+				break
+			}
+			target = start
+		}
+		start = end
+		if start >= position {
 			break
 		}
-		target = span.start
 	}
 	return target
 }
 
 func nextWord(value string, position int) int {
 	position = floorBoundary(value, position)
-	for _, span := range wordSpans(value) {
-		if span.start > position {
-			return span.start
+	start := 0
+	graphemes := uniseg.NewGraphemes(value)
+	for graphemes.Next() {
+		_, end := graphemes.Positions()
+		if !graphemes.IsWordBoundary() {
+			continue
 		}
+		if start > position && wordLike(value[start:end]) {
+			return start
+		}
+		start = end
 	}
 	return len(value)
 }
