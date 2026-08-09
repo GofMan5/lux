@@ -58,6 +58,8 @@ type Action struct {
 type region struct {
 	id            ID
 	bounds        render.Rect
+	originX       int
+	originY       int
 	flags         Flags
 	modal         ID
 	contentHeight int
@@ -148,13 +150,19 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
 	if !c.begun {
 		return
 	}
+	for _, existing := range c.building {
+		if existing.id == id {
+			panic("ui: duplicate control ID " + string(id))
+		}
+	}
 	contentHeight := options.ContentHeight
 	if contentHeight < 0 {
 		contentHeight = -1
 	} else {
 		contentHeight = min(contentHeight, absolute.H)
 	}
-	next := region{id: id, bounds: absolute, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
+	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
+	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
 	c.building = append(c.building, next)
 	if c.viewFocus == "" && focusable(next, c.currentModal) {
 		c.viewFocus = id
@@ -343,7 +351,7 @@ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
 		if !found {
 			return Action{}, c.committed.modal.id != ""
 		}
-		if target.contentHeight >= 0 && mouse.Y-target.bounds.Y >= target.contentHeight {
+		if target.contentHeight >= 0 && mouse.Y-target.originY >= target.contentHeight {
 			return Action{}, true
 		}
 		if mouse.Button != event.MouseLeft {
@@ -372,7 +380,8 @@ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
 	if mouse.Action == event.MouseRelease {
 		captured, left := c.captured, c.captureLeft
 		c.captured, c.pressed, c.captureLeft = "", "", false
-		if left && found && target.id == captured && target.flags&Activatable != 0 {
+		insideContent := target.contentHeight < 0 || mouse.Y-target.originY < target.contentHeight
+		if left && found && target.id == captured && target.flags&Activatable != 0 && insideContent {
 			return actionFor(target, Activate, next), true
 		}
 		return Action{}, captured != "" || c.committed.modal.id != ""
@@ -546,8 +555,8 @@ func scrollKey(code event.KeyCode) bool {
 func actionFor(target region, kind ActionKind, next event.Event) Action {
 	action := Action{Target: target.id, Kind: kind, Event: next, Bounds: target.bounds}
 	if next.Kind == event.Mouse {
-		action.X = next.Mouse.X - target.bounds.X
-		action.Y = next.Mouse.Y - target.bounds.Y
+		action.X = next.Mouse.X - target.originX
+		action.Y = next.Mouse.Y - target.originY
 	}
 	return action
 }

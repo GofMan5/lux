@@ -76,6 +76,14 @@ func TestCanvasGlobalRectHonorsSubviewAndClip(t *testing.T) {
 	}
 }
 
+func TestCanvasGlobalPointPreservesClippedOrigin(t *testing.T) {
+	canvas := NewCanvas(NewBuffer(20, 10)).Subview(Rect{X: 4, Y: 2, W: 10, H: 6}).Clip(Rect{X: 2, Y: 1, W: 5, H: 3})
+	x, y := canvas.GlobalPoint(0, 0)
+	if x != 4 || y != 2 {
+		t.Fatalf("global point = %d,%d", x, y)
+	}
+}
+
 func TestBufferResizeCloneDiffAndReset(t *testing.T) {
 	style := Style{Background: IndexedColor(42), Attrs: AttrItalic}
 	buffer := NewBuffer(4, 2)

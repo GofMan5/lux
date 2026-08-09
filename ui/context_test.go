@@ -27,6 +27,10 @@ func presented(c *Context, regions []region, active modal) {
 		if next.regions[index].contentHeight == 0 {
 			next.regions[index].contentHeight = -1
 		}
+		if next.regions[index].originX == 0 && next.regions[index].originY == 0 {
+			next.regions[index].originX = next.regions[index].bounds.X
+			next.regions[index].originY = next.regions[index].bounds.Y
+		}
 	}
 	next.focus = firstFocus(next)
 	c.commit(generation, sequence, next)
@@ -128,6 +132,54 @@ func TestEmptyScrollableHasNoPressableRows(t *testing.T) {
 	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 0, Action: event.MousePress, Button: event.MouseLeft}}
 	if action, handled := ctx.Handle(press); !handled || action.Kind != None {
 		t.Fatalf("empty list = %#v handled=%v", action, handled)
+	}
+}
+
+func TestDuplicateIDPanicsDuringBuild(t *testing.T) {
+	buffer := render.NewBuffer(10, 2)
+	canvas := render.NewCanvas(buffer)
+	frame := &lux.Frame{Canvas: canvas}
+	var ctx Context
+	ctx.Begin(frame)
+	ctx.Region("same", canvas, render.Rect{W: 2, H: 1}, Focusable)
+	defer func() {
+		if recover() == nil {
+			t.Fatal("duplicate ID did not panic")
+		}
+	}()
+	ctx.Region("same", canvas, render.Rect{X: 3, W: 2, H: 1}, Focusable)
+}
+
+func TestReleaseInBlankTailDoesNotActivate(t *testing.T) {
+	var ctx Context
+	ctx.generation, ctx.sizeKnown = 1, true
+	ctx.commit(1, 1, snapshot{regions: []region{{id: "list", bounds: render.Rect{W: 10, H: 5}, flags: Focusable | Scrollable | Activatable, contentHeight: 2}}, focus: "list"})
+	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 1, Action: event.MousePress, Button: event.MouseLeft}}
+	if _, handled := ctx.Handle(press); !handled {
+		t.Fatal("press was not captured")
+	}
+	release := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 4, Action: event.MouseRelease}}
+	if action, handled := ctx.Handle(release); !handled || action.Kind == Activate {
+		t.Fatalf("blank release = %#v handled=%v", action, handled)
+	}
+}
+
+func TestClippedRegionKeepsLogicalCoordinates(t *testing.T) {
+	buffer := render.NewBuffer(10, 6)
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 2, Y: 2, W: 8, H: 4})
+	frame := &lux.Frame{Canvas: canvas}
+	var ctx Context
+	ctx.Begin(frame)
+	ctx.RegionWithOptions("list", canvas, render.Rect{W: 10, H: 5}, Focusable|Scrollable|Activatable, RegionOptions{ContentHeight: 5})
+	ctx.mu.Lock()
+	item := ctx.building[0]
+	ctx.mu.Unlock()
+	if item.bounds != (render.Rect{X: 2, Y: 2, W: 8, H: 3}) || item.originX != 0 || item.originY != 0 {
+		t.Fatalf("region = %#v", item)
+	}
+	action := actionFor(item, Scroll, event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 2, Y: 2, Action: event.MousePress, Button: event.MouseLeft}})
+	if action.X != 2 || action.Y != 2 {
+		t.Fatalf("local coordinates = %d,%d", action.X, action.Y)
 	}
 }
 

@@ -76,6 +76,16 @@ func (c *Canvas) GlobalRect(rect Rect) Rect {
 	return absolute.Intersect(c.clip).Intersect(c.buffer.Bounds())
 }
 
+// GlobalPoint converts a local cell coordinate to terminal-buffer space.
+// Unlike GlobalRect it preserves the original origin even when drawing is
+// clipped, which lets controls report coordinates in their logical content.
+func (c *Canvas) GlobalPoint(x, y int) (int, int) {
+	if c == nil {
+		return x, y
+	}
+	return c.originX + x, c.originY + y
+}
+
 // Subview returns a canvas whose origin is rect's clipped top-left corner.
 func (c *Canvas) Subview(rect Rect) *Canvas {
 	if c == nil {
