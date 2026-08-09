@@ -1,0 +1,42 @@
+LUX TUI interactive extension verification
+UTC: 2026-08-09T16:13:18.8778103Z
+Baseline: b2caec1751f6f23157260f39d24db7ee6a5eb5dd
+Modified: 9a668b8721188c1d3c25eb278c9227d605744047
+
+Implemented roles:
+  ui/context.go - presentation-bound focus, hit testing, capture, modal routing
+  ui/controls.go - Button, List, Modal
+  ui/textinput.go - EGC-safe single-line editor
+  examples/showcase - interactive reference application
+
+Commands and literal results:
+  go test -count=1 ./...
+  PASS: all packages; exit 0
+
+  go test -race -shuffle=on -count=10 ./...
+  PASS: all packages; exit 0
+
+  go vet ./...
+  output: <empty>; exit 0
+
+  go test ./ui -run '^$' -fuzz FuzzTextInputInvariants -fuzztime 15s
+  PASS: 345602 executions, 152 new interesting; exit 0
+
+  GOOS=linux/windows amd64 and GOOS=darwin arm64 showcase + ui test builds
+  PASS; exit 0
+
+Artifact hashes:
+  Linux showcase: 28FC89D7891E55963C450998AA21B4282270CCAE72DD85DB634637964746BC78
+  Windows showcase: 4AB93C7DB54361E4B22F4C18DAB1BDD29F4F6F7085B5AA530CDFE304918EA874
+  Darwin showcase: 4647BD0A6E2B4ED479817E27F7BC81C295A17FE3A9261858FB33E66598818671
+
+Benchmarks (Windows amd64 i5-10400F Go 1.25.5):
+  Hit 10/100/1000 regions: 75.59/70.23/72.66 ns/op, 0 alloc/op
+  TextInput Ctrl-word 32B/1KiB/64KiB: 10.3us/345.7us/21.6ms, 0 alloc/op
+
+Independent review:
+  callback panic/retention, duplicate IDs, blank-tail release, clipped origins fixed
+  full current-tree review: no release blockers
+
+Rollback:
+  powershell -NoProfile -ExecutionPolicy Bypass -File .verification/rollback-interactive.ps1

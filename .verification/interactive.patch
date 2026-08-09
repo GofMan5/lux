@@ -1,0 +1,2980 @@
+diff --git a/README.md b/README.md
+index 6992dc7..a349d91 100644
+--- a/README.md
++++ b/README.md
+@@ -4,10 +4,9 @@
+ 
+ [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+ 
+-> **Pre-release:** the public runtime, renderer, responsive layout, motion
+-> primitives, events, terminal adapter, and CPU 3D rasterizer exist. The widget
+-> set and API stability are still being assembled, so no stable release is
+-> promised yet.
++> **Pre-release:** the public runtime, renderer, responsive layout, immediate-
++> mode interaction context, core controls, motion, terminal adapter, and CPU 3D
++> rasterizer exist. API stability is not promised yet.
+ 
+ LUX TUI treats the terminal as a constrained rendering target, not a stream of
+ decorated strings. The current core stores complete extended grapheme clusters,
+@@ -40,6 +39,7 @@ comparative claims require reproducible results.
+ | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
+ | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
+ | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
++| [`ui`](./ui) | presentation-bound hit testing, focus/modal routing, buttons, Unicode text input, selectable scrolling lists, and modal panels |
+ | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
+ | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
+ | `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, color downgrade, and plain-output fallback |
+@@ -115,16 +115,32 @@ go run ./examples/showcase
+ The module currently declares Go 1.23. See
+ [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before extending the core.
+ 
++## Native interaction
++
++`ui.Context` is LUX TUI's own immediate-mode interaction layer. Applications
++route an event through `Context.Handle` in `Update`, then call `Begin`, draw and
++register controls, and `End` in `View`. Hit geometry becomes active only after
++that exact frame is successfully presented; dropped frames cannot receive a
++click. Buttons always have Enter/Space equivalents, Tab traverses focus, modal
++scopes trap and restore focus, and lists support arrows/pages/wheel/click.
++
++`ui.TextInput` edits extended grapheme clusters rather than runes. Its byte
++offsets remain grapheme boundaries across typing, bounded paste, selection,
++navigation, deletion, wide-cell mouse placement, and horizontal scrolling.
++It is intentionally single-line; password hardening, undo, multiline editing,
++RTL visual reordering, and IME preedit are not claimed.
++
+ ## Direction
+ 
+-The next useful slice is a small focusable widget set built through the public
+-runtime, not around it. Graphics protocols and richer animation composition
+-follow only after that path is measurable.
++Next slices are shortcut scopes, virtualized viewports, explicit clipboard and
++bounded undo ports, and modern keyboard capability negotiation. Graphics
++protocols follow only after these paths are measurable.
+ The existing CPU `scene3d` package proves the cell-rendering path; it is not a
+ GPU engine.
+ 
+ - [Architecture](docs/ARCHITECTURE.md)
+ - [Compatibility](docs/COMPATIBILITY.md)
++- [Interaction model](docs/INTERACTION.md)
+ - [Research snapshot](docs/RESEARCH.md)
+ - [Performance contract](docs/PERFORMANCE.md)
+ - [Contributing](CONTRIBUTING.md)
+diff --git a/app.go b/app.go
+index 5c3bc85..a3410b7 100644
+--- a/app.go
++++ b/app.go
+@@ -49,6 +49,7 @@ type Frame struct {
+ 	ReducedMotion bool
+ 
+ 	nextFrame time.Time
++	presented []func()
+ }
+ 
+ // Size returns the drawable viewport in cells.
+@@ -81,6 +82,16 @@ func (f *Frame) RequestFrameAt(deadline time.Time) {
+ 	}
+ }
+ 
++// OnPresented runs callback after this exact frame is successfully written.
++// Dropped and failed frames never run it. Callbacks must be brief and safe to
++// execute on the presentation goroutine.
++func (f *Frame) OnPresented(callback func()) {
++	if f == nil || callback == nil {
++		return
++	}
++	f.presented = append(f.presented, callback)
++}
++
+ // Option configures Run.
+ type Option func(*config) error
+ 
+@@ -199,8 +210,9 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
+ }
+ 
+ type surface struct {
+-	buffer *render.Buffer
+-	canvas *render.Canvas
++	buffer    *render.Buffer
++	canvas    *render.Canvas
++	presented []func()
+ }
+ 
+ func newSurface(width, height int) *surface {
+@@ -235,7 +247,20 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
+ 	presented := make(chan presentResult, 3)
+ 	writerDone := make(chan struct{})
+ 	go func() {
+-		defer close(writerDone)
++		defer func() {
++			if recovered := recover(); recovered != nil {
++				err := fmt.Errorf("lux: presentation callback panic: %v\n%s", recovered, debug.Stack())
++				if current := context.Cause(ctx); current != nil {
++					err = errors.Join(current, err)
++				}
++				cancel(err)
++				select {
++				case presented <- presentResult{err: err}:
++				default:
++				}
++			}
++			close(writerDone)
++		}()
+ 		for {
+ 			var next *surface
+ 			select {
+@@ -245,6 +270,13 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
+ 			}
+ 			started := time.Now()
+ 			err := settings.backend.Present(ctx, next.buffer)
++			if err == nil {
++				for _, callback := range next.presented {
++					callback()
++				}
++			}
++			clear(next.presented)
++			next.presented = next.presented[:0]
+ 			select {
+ 			case presented <- presentResult{surface: next, duration: time.Since(started), err: err}:
+ 			case <-ctx.Done():
+@@ -353,12 +385,15 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
+ 			}
+ 			current.resize(width, height)
+ 			current.buffer.Reset()
++			clear(current.presented)
++			current.presented = current.presented[:0]
+ 			delta := time.Duration(0)
+ 			if !lastFrame.IsZero() {
+ 				delta = now.Sub(lastFrame)
+ 			}
+ 			frame := Frame{Canvas: current.canvas, Now: now, Delta: delta, Capabilities: features, Metrics: metrics, ReducedMotion: settings.reducedMotion}
+ 			model.View(&frame)
++			current.presented = append(current.presented[:0], frame.presented...)
+ 			requested, lastFrame, dirty = frame.nextFrame, now, false
+ 			if !features.Interactive {
+ 				requested = time.Time{}
+@@ -379,6 +414,8 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
+ 			}
+ 			if recycled != nil {
+ 				dropped++
++				clear(recycled.presented)
++				recycled.presented = recycled.presented[:0]
+ 				current = recycled
+ 				continue
+ 			}
+diff --git a/app_test.go b/app_test.go
+index a1ca001..27b49eb 100644
+--- a/app_test.go
++++ b/app_test.go
+@@ -188,6 +188,60 @@ func TestOfferLatestKeepsNewest(t *testing.T) {
+ 	}
+ }
+ 
++func TestDroppedSurfaceCallbacksAreReleased(t *testing.T) {
++	queue := make(chan *surface, 1)
++	stale := newSurface(1, 1)
++	stale.presented = append(stale.presented, func() {})
++	queue <- stale
++	latest := newSurface(1, 1)
++	recycled := offerLatest(queue, latest)
++	clear(recycled.presented)
++	recycled.presented = recycled.presented[:0]
++	if len(recycled.presented) != 0 || cap(recycled.presented) > 0 && recycled.presented[:cap(recycled.presented)][0] != nil {
++		t.Fatal("dropped callback remained reachable")
++	}
++}
++
++func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
++	frame := &Frame{}
++	called := 0
++	frame.OnPresented(func() { called++ })
++	surface := newSurface(1, 1)
++	surface.presented = append(surface.presented, frame.presented...)
++	for _, callback := range surface.presented {
++		callback()
++	}
++	if called != 1 {
++		t.Fatalf("hook calls = %d", called)
++	}
++	dropped := newSurface(1, 1)
++	dropped.presented = append(dropped.presented, func() { called++ })
++	dropped.presented = dropped.presented[:0]
++	if called != 1 {
++		t.Fatal("dropped frame hook ran")
++	}
++}
++
++type callbackPanicModel struct{}
++
++func (callbackPanicModel) Update(event.Event) Command { return nil }
++func (callbackPanicModel) View(frame *Frame) {
++	frame.OnPresented(func() { panic("callback boom") })
++}
++
++func TestPresentationCallbackPanicReturnsErrorAndRestores(t *testing.T) {
++	backend := newFakeBackend(10, 3)
++	err := Run(context.Background(), callbackPanicModel{}, WithBackend(backend))
++	if err == nil || !strings.Contains(err.Error(), "presentation callback panic: callback boom") {
++		t.Fatalf("error = %v", err)
++	}
++	backend.mu.Lock()
++	defer backend.mu.Unlock()
++	if !backend.closed {
++		t.Fatal("backend was not restored")
++	}
++}
++
+ type blockingBackend struct {
+ 	*fakeBackend
+ 	started chan struct{}
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index f9d138a..429dfde 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -46,6 +46,7 @@ perform terminal I/O:
+ - `motion` maps monotonic elapsed time to values;
+ - `render` owns cell state and drawing rules;
+ - `scene3d` projects CPU-rasterized triangle scenes into a `render.Canvas`;
++- `ui` owns presentation-bound focus, hit routing, and composed controls;
+ - `capability` describes a backend's feature snapshot.
+ 
+ `internal/terminal` is the default outbound/inbound adapter. It owns raw mode,
+@@ -112,6 +113,24 @@ The intended adaptive sequence is:
+ 
+ Each future widget must define its minimum useful size and fallback behavior.
+ 
++### Native interaction
++
++`ui.Context` is app-owned and immediate-mode: `Begin` starts a registry,
++controls paint and register clipped terminal-space regions in final paint
++order, and `End` attaches the immutable snapshot through `Frame.OnPresented`.
++Only a successfully written frame commits its regions. Resize invalidates
++coordinates immediately, and generation checks reject stale callbacks.
++
++The context centralizes reverse-order hit testing, left-button capture,
++Tab/BackTab traversal, Enter/Space activation, scroll routing, and one modal
++focus scope with restoration. Disabled top regions occlude controls below.
++There is deliberately no retained DOM, event bus, callback tree, CSS parser,
++or spatial index; composite widgets can justify parent routing later.
++
++Built-in vertical slices are Button, selectable List, Modal, and a single-line
++TextInput. Text offsets are UTF-8 bytes at UAX #29 extended-grapheme boundaries,
++using the same width policy as `render`.
++
+ ### Motion
+ 
+ Tweens and springs are sampled from `time.Time`. If rendering pauses, the next
+@@ -177,7 +196,7 @@ Disallowed direction:
+    slice.
+ 2. Strengthen writer-failure/full-repaint recovery and test-terminal
+    conformance.
+-3. Add minimal focusable widgets by composition.
++3. Add shortcut scopes, virtualized viewports, clipboard and bounded undo.
+ 4. Capability provenance, modern keyboard protocols, and multiplexer-aware
+    negotiation.
+ 5. Optional Kitty/Sixel/iTerm graphics adapters and richer subcell modes.
+diff --git a/docs/COMPATIBILITY.md b/docs/COMPATIBILITY.md
+index 2414c77..33d2e5b 100644
+--- a/docs/COMPATIBILITY.md
++++ b/docs/COMPATIBILITY.md
+@@ -18,6 +18,19 @@ behavior; **planned validation** = plausible path without current evidence.
+ | SSH/mosh | planned validation | custom backends and latest-frame pacing exist; terminal-chain capability provenance and impaired-link validation remain |
+ | CI, redirected stdout, `TERM=dumb` | implemented | monochrome newline-delimited full snapshots; no cursor addressing/input |
+ 
++Interactive controls require an interactive terminal profile. Every pointer
++action in the built-in controls has a keyboard equivalent because mouse support
++is environment-derived rather than actively probed. Generic VT transports
++provide committed UTF-8 text, not a portable IME preedit/candidate lifecycle.
++PowerShell and cmd remain shells; their host terminal determines behavior.
++
++TextInput is EGC-correct under the currently bundled uniseg Unicode 15.0 data.
++Terminal/font width, RTL visual editing, locale-tailored words, IME preedit,
++password hardening, undo, and multiline are outside the current claim. Paste is
++bracketed/bounded by the adapter and then sanitized/bounded again by the field.
++LUX TUI does not read/write OSC 52 automatically; clipboard mutation requires
++a future explicit application port and confirmation policy.
++
+ `cmd.exe`, PowerShell, and shells running under SSH are command interpreters,
+ not terminal emulators. Compatibility decisions must be based on the actual TTY
+ and capabilities, never the shell name alone.
+diff --git a/docs/INTERACTION.md b/docs/INTERACTION.md
+new file mode 100644
+index 0000000..ac79f6b
+--- /dev/null
++++ b/docs/INTERACTION.md
+@@ -0,0 +1,86 @@
++# Interaction model
++
++Snapshot: **2026-08-09**. LUX TUI implements its own immediate-mode interaction
++layer; it does not wrap Bubble Tea, tcell, tview, Ratatui, Textual, Ink,
++OpenTUI, or another widget framework.
++
++## Lifecycle
++
++```go
++func (app *app) Update(next event.Event) lux.Command {
++    action, handled := app.UI.Handle(next)
++    if handled {
++        switch action.Target {
++        case "name": app.Name.Apply(action)
++        case "items": app.Items.Apply(action, len(app.Values), action.Bounds.H)
++        }
++        return nil
++    }
++    return nil
++}
++
++func (app *app) View(frame *lux.Frame) {
++    app.UI.Begin(frame)
++    defer app.UI.End(frame)
++    app.UI.Input("name", frame.Canvas, render.Rect{W: 24, H: 1}, &app.Name, ui.InputStyle{})
++}
++```
++
++Controls register stable IDs and clipped terminal-space rectangles in final
++paint order. `End` attaches a snapshot through `Frame.OnPresented`. The router
++commits it only after that exact buffer is written, so a moved control in a
++dropped or stale frame cannot steal input.
++
++## Implemented semantics
++
++- one focus owner; Tab/BackTab traversal in registration order;
++- topmost hit wins; disabled top regions block click-through;
++- left pointer capture from press to release, canceled on focus loss, resize,
++  removal, or release; activation requires release inside the captured target;
++- Enter/Space button activation with Ctrl/Alt/Super rejection;
++- arrows, Home/End, PageUp/PageDown, wheel, and click list selection;
++- one modal scope with exclusive routing, Escape/outside dismissal, and focus
++  restoration;
++- grapheme-safe single-line editing, selection, mouse placement, bounded
++  paste, horizontal viewport, placeholder, painted caret, read-only/disabled;
++- resize generations invalidate coordinates before a new frame is presented.
++
++The registry is a linear slice. That is the correct cost for normal terminal
++control counts; add a spatial index only after a profile demonstrates a problem.
++
++## Security and platform limits
++
++Paste is untrusted input. The backend caps bracketed paste at 1 MiB; TextInput
++repairs invalid UTF-8, converts CR/LF/tab to spaces, drops other controls, and
++applies its own whole-grapheme `MaxBytes` cap. It does not emit OSC clipboard
++commands. Password editing is omitted because immutable Go strings cannot offer
++reliable erasure and cursor/word operations can leak structure.
++
++Legacy VT exposes committed text but not a portable compositionstart/update/end
++or candidate rectangle. IME preedit remains emulator-owned. Bidirectional text
++is stored and edited logically; visual UAX #9 cursor behavior is not claimed.
++
++## Deferred by evidence
++
++1. shortcut resolver layers (focused control, modal scope, application);
++2. virtualized viewport/provider API and clipped child hit regions;
++3. explicit clipboard port, bounded undo/redo, drag selection;
++4. Kitty associated-text/keyboard negotiation and restoration;
++5. nested parent capture/bubble and a semantic accessibility bridge.
++
++## Sources
++
++Accessed 2026-08-09:
++
++- Unicode grapheme and word boundaries: <https://www.unicode.org/reports/tr29/>
++- Unicode database version: <https://www.unicode.org/Public/UCD/latest/ReadMe.txt>
++- uniseg v0.4.7: <https://pkg.go.dev/github.com/rivo/uniseg>
++- xterm mouse, focus, bracketed paste: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html>
++- Kitty keyboard associated text: <https://sw.kovidgoyal.net/kitty/keyboard-protocol/>
++- Windows VT input: <https://learn.microsoft.com/en-us/windows/console/console-virtual-terminal-sequences>
++- Windows key records: <https://learn.microsoft.com/en-us/windows/console/key-event-record-str>
++- Windows IME model: <https://learn.microsoft.com/en-us/windows/apps/design/input/input-method-editors>
++- WezTerm IME constraints: <https://wezterm.org/config/lua/config/use_ime.html>
++- WAI focus and keyboard principles (semantic reference, not a VT claim):
++  <https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/>
++- OSC 52 clipboard security context: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html>
+diff --git a/docs/PERFORMANCE.md b/docs/PERFORMANCE.md
+index 6b6a718..f37f05e 100644
+--- a/docs/PERFORMANCE.md
++++ b/docs/PERFORMANCE.md
+@@ -105,6 +105,16 @@ queues more output than the terminal can display.
+    terminals and impaired transports.
+ 4. Add stronger writer-failure/full-repaint tests.
+ 5. Build equivalent competitor adapters and publish raw results.
++6. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
++   32 B/1 KiB/64 KiB before adding a spatial index or boundary cache.
++
++Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
++show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
++with 0 alloc/op. Ctrl-word movement is 0 alloc/op but linear in text length:
++roughly 11 us at 32 B, 0.42 ms at 1 KiB, and 34 ms at 64 KiB. The current
++single-line editor is therefore tuned for ordinary form fields, not documents;
++a cached boundary table belongs in a future document editor rather than this
++small control.
+ 
+ Until those steps are complete, describe LUX TUI as performance-oriented, not
+ as the fastest TUI framework.
+diff --git a/docs/RESEARCH.md b/docs/RESEARCH.md
+index 55feba2..70429b9 100644
+--- a/docs/RESEARCH.md
++++ b/docs/RESEARCH.md
+@@ -24,6 +24,13 @@ The opportunity for LUX TUI is not “more widgets.” It is a cohesive Go-nativ
+ path from events through responsive layout and elapsed-time motion into a
+ Unicode-correct, capability-aware renderer, with measurable behavior under lag.
+ 
++The implemented interaction follow-up deliberately keeps one linear,
++presentation-bound immediate-mode registry rather than cloning a DOM. Stable
++IDs, final paint order, focus, pointer capture, modal routing, and grapheme-safe
++editing cover the first complete controls. Parent bubbling, shortcut layers,
++virtualized providers, clipboard/undo, and modern keyboard negotiation remain
++separate evidence-driven slices; see [INTERACTION.md](INTERACTION.md).
++
+ ## Verified popularity and licenses
+ 
+ | Project | Language | Stars | License |
+diff --git a/examples/showcase/main.go b/examples/showcase/main.go
+index 55a2562..a21f39f 100644
+--- a/examples/showcase/main.go
++++ b/examples/showcase/main.go
+@@ -15,6 +15,7 @@ import (
+ 	"github.com/lux-tui/lux/layout"
+ 	"github.com/lux-tui/lux/render"
+ 	"github.com/lux-tui/lux/scene3d"
++	"github.com/lux-tui/lux/ui"
+ )
+ 
+ var (
+@@ -33,11 +34,55 @@ type showcase struct {
+ 	renderer      scene3d.Renderer
+ 	mesh          scene3d.Mesh
+ 	panels        [2]render.Rect
++	ui            ui.Context
++	name          ui.TextInput
++	scenes        ui.ListState
++	showHelp      bool
++	observe       chan showcaseState
+ }
+ 
+-func newShowcase() *showcase { return &showcase{mesh: scene3d.Cube(1.45)} }
++type showcaseState struct {
++	name     string
++	showHelp bool
++}
++
++func newShowcase() *showcase {
++	app := &showcase{mesh: scene3d.Cube(1.45)}
++	app.name.SetValue("LUX explorer")
++	return app
++}
+ 
+ func (app *showcase) Update(next event.Event) lux.Command {
++	if next.Kind == event.Key {
++		if next.Key.Code == event.KeyF1 {
++			app.showHelp = true
++			return nil
++		}
++		if next.Key.Code == event.KeyRune && next.Key.Mod&event.ModCtrl != 0 && (next.Key.Rune == 'q' || next.Key.Rune == 'Q') {
++			return lux.Quit()
++		}
++	}
++	if action, handled := app.ui.Handle(next); handled {
++		switch action.Target {
++		case "pause":
++			if action.Kind == ui.Activate {
++				app.paused = !app.paused
++			}
++		case "name":
++			app.name.Apply(action)
++		case "scenes":
++			_, _ = app.scenes.Apply(action, len(sceneNames), max(action.Bounds.H, 1))
++		case "help":
++			if action.Kind == ui.Activate {
++				app.showHelp = true
++			}
++		case "help-modal", "close-help":
++			if action.Kind == ui.Dismiss || action.Kind == ui.Activate {
++				app.showHelp = false
++			}
++		}
++		return nil
++	}
+ 	switch next.Kind {
+ 	case event.Resize:
+ 		app.width, app.height = next.Width, next.Height
+@@ -53,8 +98,6 @@ func (app *showcase) Update(next event.Event) lux.Command {
+ 		switch {
+ 		case next.Key.Code == event.KeyEscape, next.Key.Rune == 'q':
+ 			return lux.Quit()
+-		case next.Key.Rune == ' ':
+-			app.paused = !app.paused
+ 		}
+ 	}
+ 	return nil
+@@ -64,6 +107,8 @@ func (app *showcase) View(frame *lux.Frame) {
+ 	canvas := frame.Canvas
+ 	area := canvas.Bounds()
+ 	canvas.Clear(render.Style{Background: background})
++	app.ui.Begin(frame)
++	defer app.ui.End(frame)
+ 
+ 	switch layout.Classify(area) {
+ 	case layout.Tiny:
+@@ -71,7 +116,9 @@ func (app *showcase) View(frame *lux.Frame) {
+ 		return
+ 	case layout.Compact:
+ 		app.drawHeader(canvas, area, frame.Capabilities.Unicode)
+-		viewport := render.Rect{X: 1, Y: 3, W: max(area.W-2, 1), H: max(area.H-5, 1)}
++		toolbar := render.Rect{X: 1, Y: 3, W: max(area.W-2, 1), H: 3}
++		app.drawToolbar(canvas, toolbar)
++		viewport := render.Rect{X: 1, Y: 6, W: max(area.W-2, 1), H: max(area.H-8, 1)}
+ 		app.drawScene(frame, viewport)
+ 	default:
+ 		header, body := area.SplitTop(3)
+@@ -81,14 +128,105 @@ func (app *showcase) View(frame *lux.Frame) {
+ 			layout.Constraint{Basis: 29, Min: 23, Max: 38, Grow: 1, Shrink: 1},
+ 			layout.Constraint{Basis: 70, Min: 28, Grow: 3, Shrink: 2},
+ 		)
+-		app.drawInfo(canvas, panels[0], frame)
++		app.drawControls(canvas, panels[0], frame)
+ 		app.drawScene(frame, panels[1])
+ 	}
+-	footer := " [space] pause   [q/esc] quit   resize freely "
++	if app.showHelp {
++		app.drawHelp(canvas, area)
++	}
++	footer := " [tab] focus  [enter] activate  [F1] help  [ctrl+q] quit "
+ 	canvas.Text(max((area.W-render.TextWidth(footer))/2, 0), max(area.H-1, 0), footer, render.Style{Foreground: muted})
+ 	if frame.Capabilities.Interactive && !app.paused && !frame.ReducedMotion {
+ 		frame.RequestFrame()
+ 	}
++	if app.observe != nil {
++		select {
++		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp}:
++		default:
++		}
++	}
++}
++
++var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matrix", "Calm orbit"}
++
++func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
++	buttonWidth := min(14, max(area.W/3, 6))
++	app.ui.Button("pause", canvas, render.Rect{X: area.X, Y: area.Y, W: buttonWidth, H: min(area.H, 3)}, pauseLabel(app.paused), buttonStyle())
++	if area.W > buttonWidth+8 {
++		app.ui.Button("help", canvas, render.Rect{X: area.Right() - 8, Y: area.Y, W: 8, H: min(area.H, 3)}, "Help", buttonStyle())
++	}
++}
++
++func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame *lux.Frame) {
++	canvas.Fill(area, " ", render.Style{Background: panel})
++	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
++	inner := area.Inset(2, 1)
++	if inner.Empty() {
++		return
++	}
++	canvas.Text(inner.X, inner.Y, "INTERACTION LAB", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
++	y := inner.Y + 2
++	if y < inner.Bottom() {
++		canvas.Text(inner.X, y, "Project name", render.Style{Foreground: muted, Background: panel})
++		y++
++		app.ui.Input("name", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: 1}, &app.name, inputStyle())
++		y += 2
++	}
++	listHeight := max(inner.Bottom()-y-4, 0)
++	if listHeight > 0 {
++		canvas.Text(inner.X, y, "Scene", render.Style{Foreground: muted, Background: panel})
++		y++
++		app.ui.List("scenes", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: listHeight}, &app.scenes, sceneNames, listStyle())
++		y += listHeight + 1
++	}
++	if y+2 < inner.Bottom() {
++		app.ui.Button("pause", canvas, render.Rect{X: inner.X, Y: y, W: min(inner.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
++		if inner.W >= 24 {
++			app.ui.Button("help", canvas, render.Rect{X: inner.Right() - 8, Y: y, W: 8, H: 3}, "Help", buttonStyle())
++		}
++	}
++	_ = frame
++}
++
++func (app *showcase) drawHelp(canvas *render.Canvas, area render.Rect) {
++	width, height := min(max(area.W-8, 24), 58), min(max(area.H-6, 10), 18)
++	rect := render.Rect{X: max((area.W-width)/2, 0), Y: max((area.H-height)/2, 0), W: width, H: height}
++	inner := app.ui.Modal("help-modal", canvas, rect, "Interactive controls", ui.ModalStyle{Panel: render.Style{Background: panel}, Border: render.Style{Foreground: violet, Background: panel}, Title: render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold}})
++	if inner != nil {
++		lines := []string{"Tab / Shift+Tab  move focus", "Enter / Space     activate", "Arrows / wheel    select scene", "Type / paste       edit project name", "Esc / outside      close this dialog", "Ctrl+Q             quit application"}
++		for index, line := range lines {
++			if index >= inner.Bounds().H-4 {
++				break
++			}
++			inner.Text(1, 1+index, line, render.Style{Foreground: ink, Background: panel})
++		}
++		app.ui.Button("close-help", inner, render.Rect{X: max(inner.Bounds().W-12, 0), Y: max(inner.Bounds().H-3, 0), W: min(10, inner.Bounds().W), H: min(3, inner.Bounds().H)}, "Close", buttonStyle())
++	}
++	app.ui.EndModal()
++}
++
++func pauseLabel(paused bool) string {
++	if paused {
++		return "Resume"
++	}
++	return "Pause"
++}
++
++func buttonStyle() ui.ButtonStyle {
++	return ui.ButtonStyle{
++		Normal:  render.Style{Foreground: ink, Background: panel},
++		Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
++		Hovered: render.Style{Foreground: cyan, Background: panel},
++		Pressed: render.Style{Foreground: background, Background: violet, Attrs: render.AttrBold},
++	}
++}
++
++func inputStyle() ui.InputStyle {
++	return ui.InputStyle{Normal: render.Style{Foreground: ink, Background: background}, Placeholder: render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim}, Selection: render.Style{Foreground: background, Background: cyan}, Cursor: render.Style{Foreground: background, Background: violet}}
++}
++
++func listStyle() ui.ListStyle {
++	return ui.ListStyle{Normal: render.Style{Foreground: muted, Background: panel}, Selected: render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold}, Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold}, Hovered: render.Style{Foreground: cyan, Background: panel}, Marker: "> "}
+ }
+ 
+ func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect, unicode bool) {
+@@ -142,7 +280,8 @@ func (app *showcase) drawScene(frame *lux.Frame, area render.Rect) {
+ 	if inner.Empty() {
+ 		return
+ 	}
+-	object := scene3d.Object{Mesh: app.mesh, Transform: scene3d.RotateY(float64(app.angle)).Mul(scene3d.RotateX(float64(app.angle) * .63))}
++	speed := .65 + float64(app.scenes.Selected)*.14
++	object := scene3d.Object{Mesh: app.mesh, Transform: scene3d.RotateY(float64(app.angle) * speed).Mul(scene3d.RotateX(float64(app.angle) * (.45 + float64(app.scenes.Selected)*.08)))}
+ 	scene := scene3d.Scene{
+ 		Objects: []scene3d.Object{object},
+ 		Camera:  scene3d.Camera{Position: scene3d.V3(0, 0, 4.1), Target: scene3d.V3(0, 0, 0), Up: scene3d.V3(0, 1, 0), FOVY: math.Pi / 3, Near: .1, Far: 100},
+diff --git a/examples/showcase/main_test.go b/examples/showcase/main_test.go
+new file mode 100644
+index 0000000..563721e
+--- /dev/null
++++ b/examples/showcase/main_test.go
+@@ -0,0 +1,127 @@
++package main
++
++import (
++	"context"
++	"sync"
++	"testing"
++	"time"
++
++	"github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/capability"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++	"github.com/lux-tui/lux/ui"
++)
++
++func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
++	app := newShowcase()
++	app.name.Apply(ui.Action{Kind: ui.Input, Event: event.RuneKey('!', 0)})
++	if app.name.Value != "LUX explorer!" {
++		t.Fatalf("name = %q", app.name.Value)
++	}
++	changed, _ := app.scenes.Apply(ui.Action{Kind: ui.Scroll, Event: event.KeyPress(event.KeyDown, 0)}, len(sceneNames), 3)
++	if !changed || app.scenes.Selected != 1 {
++		t.Fatalf("scene = %#v", app.scenes)
++	}
++	if command := app.Update(event.KeyPress(event.KeyF1, 0)); command != nil || !app.showHelp {
++		t.Fatal("F1 did not open help")
++	}
++	if command := app.Update(event.RuneKey('Q', event.ModCtrl)); command == nil {
++		t.Fatal("Ctrl+Q did not request quit")
++	}
++}
++
++type interactiveBackend struct {
++	events chan event.Event
++	frames chan *render.Buffer
++	once   sync.Once
++}
++
++func (b *interactiveBackend) Open(context.Context) (capability.Set, error) {
++	return capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}, nil
++}
++func (b *interactiveBackend) NextEvent(ctx context.Context) (event.Event, error) {
++	select {
++	case next := <-b.events:
++		return next, nil
++	case <-ctx.Done():
++		return event.Event{}, ctx.Err()
++	}
++}
++func (b *interactiveBackend) Present(_ context.Context, frame *render.Buffer) error {
++	select {
++	case b.frames <- frame.Clone():
++	default:
++	}
++	return nil
++}
++func (*interactiveBackend) Size() (int, int, error) { return 120, 36, nil }
++func (*interactiveBackend) Close() error            { return nil }
++
++func TestShowcaseEndToEndInputAndModal(t *testing.T) {
++	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
++	app := newShowcase()
++	app.observe = make(chan showcaseState, 32)
++	done := make(chan error, 1)
++	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
++	waitFrame(t, backend.frames)
++	waitState(t, app.observe)
++	// Focus starts on TextInput; committed Unicode text must reach the editor.
++	backend.events <- event.RuneKey('界', 0)
++	state := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.name != "LUX explorer" })
++	if state.name != "LUX explorer界" {
++		t.Fatalf("name = %q", state.name)
++	}
++	backend.events <- event.KeyPress(event.KeyF1, 0)
++	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.showHelp })
++	waitFrame(t, backend.frames)
++	// Wait until the modal hit/focus snapshot, not merely its pixels, is live.
++	time.Sleep(10 * time.Millisecond)
++	backend.events <- event.KeyPress(event.KeyEscape, 0)
++	waitStateWhere(t, app.observe, func(state showcaseState) bool { return !state.showHelp })
++	backend.events <- event.RuneKey('q', event.ModCtrl)
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(2 * time.Second):
++		t.Fatal("showcase did not quit")
++	}
++}
++
++func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
++	t.Helper()
++	select {
++	case state := <-states:
++		return state
++	case <-time.After(2 * time.Second):
++		t.Fatal("state timeout")
++		return showcaseState{}
++	}
++}
++
++func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showcaseState) bool) showcaseState {
++	t.Helper()
++	deadline := time.After(2 * time.Second)
++	for {
++		select {
++		case state := <-states:
++			if match(state) {
++				return state
++			}
++		case <-deadline:
++			t.Fatal("matching state timeout")
++			return showcaseState{}
++		}
++	}
++}
++
++func waitFrame(t *testing.T, frames <-chan *render.Buffer) {
++	t.Helper()
++	select {
++	case <-frames:
++	case <-time.After(2 * time.Second):
++		t.Fatal("frame timeout")
++	}
++}
+diff --git a/render/canvas.go b/render/canvas.go
+index 9774659..2590706 100644
+--- a/render/canvas.go
++++ b/render/canvas.go
+@@ -64,6 +64,28 @@ func (c *Canvas) Bounds() Rect {
+ 	return Bounds(width, height)
+ }
+ 
++// GlobalRect converts a local rectangle to terminal-buffer coordinates and
++// clips it to both the canvas bounds and its active clip. Interactive controls
++// use it to publish hit regions that exactly match what can be drawn.
++func (c *Canvas) GlobalRect(rect Rect) Rect {
++	if c == nil || c.buffer == nil {
++		return Rect{}
++	}
++	local := rect.Intersect(c.Bounds())
++	absolute := Rect{X: c.originX + local.X, Y: c.originY + local.Y, W: local.W, H: local.H}
++	return absolute.Intersect(c.clip).Intersect(c.buffer.Bounds())
++}
++
++// GlobalPoint converts a local cell coordinate to terminal-buffer space.
++// Unlike GlobalRect it preserves the original origin even when drawing is
++// clipped, which lets controls report coordinates in their logical content.
++func (c *Canvas) GlobalPoint(x, y int) (int, int) {
++	if c == nil {
++		return x, y
++	}
++	return c.originX + x, c.originY + y
++}
++
+ // Subview returns a canvas whose origin is rect's clipped top-left corner.
+ func (c *Canvas) Subview(rect Rect) *Canvas {
+ 	if c == nil {
+diff --git a/render/render_test.go b/render/render_test.go
+index 5645e58..3f9fd91 100644
+--- a/render/render_test.go
++++ b/render/render_test.go
+@@ -67,6 +67,23 @@ func TestCanvasClippingAndSubview(t *testing.T) {
+ 	}
+ }
+ 
++func TestCanvasGlobalRectHonorsSubviewAndClip(t *testing.T) {
++	canvas := NewCanvas(NewBuffer(20, 10)).Subview(Rect{X: 4, Y: 2, W: 10, H: 6}).Clip(Rect{X: 2, Y: 1, W: 5, H: 3})
++	got := canvas.GlobalRect(Rect{X: 0, Y: 0, W: 10, H: 6})
++	want := Rect{X: 6, Y: 3, W: 5, H: 3}
++	if got != want {
++		t.Fatalf("global rect = %#v, want %#v", got, want)
++	}
++}
++
++func TestCanvasGlobalPointPreservesClippedOrigin(t *testing.T) {
++	canvas := NewCanvas(NewBuffer(20, 10)).Subview(Rect{X: 4, Y: 2, W: 10, H: 6}).Clip(Rect{X: 2, Y: 1, W: 5, H: 3})
++	x, y := canvas.GlobalPoint(0, 0)
++	if x != 4 || y != 2 {
++		t.Fatalf("global point = %d,%d", x, y)
++	}
++}
++
+ func TestBufferResizeCloneDiffAndReset(t *testing.T) {
+ 	style := Style{Background: IndexedColor(42), Attrs: AttrItalic}
+ 	buffer := NewBuffer(4, 2)
+diff --git a/ui/context.go b/ui/context.go
+new file mode 100644
+index 0000000..7e27a09
+--- /dev/null
++++ b/ui/context.go
+@@ -0,0 +1,562 @@
++// Package ui provides immediate-mode interaction state for LUX applications.
++package ui
++
++import (
++	"sync"
++
++	lux "github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++// ID is a stable control identity. IDs must be unique within a frame.
++type ID string
++
++// Flags describe the interaction supported by a region.
++type Flags uint8
++
++const (
++	Focusable Flags = 1 << iota
++	Activatable
++	Editable
++	Scrollable
++	Disabled
++)
++
++// RegionOptions customizes event-local coordinates without changing visual
++// hit bounds. ContentHeight is useful for lists whose blank tail still accepts
++// wheel scrolling but must not select a nonexistent row.
++type RegionOptions struct {
++	// ContentHeight limits press/click rows while preserving wheel routing.
++	// Zero means no pressable content; Region uses -1 for the full bounds.
++	ContentHeight int
++}
++
++// ActionKind describes a routed interaction.
++type ActionKind uint8
++
++const (
++	None ActionKind = iota
++	Focus
++	Activate
++	Input
++	Scroll
++	Dismiss
++)
++
++// Action is one interaction routed to a stable target. X and Y are relative
++// to the target region for pointer actions.
++type Action struct {
++	Target ID
++	Kind   ActionKind
++	Event  event.Event
++	Bounds render.Rect
++	X      int
++	Y      int
++}
++
++type region struct {
++	id            ID
++	bounds        render.Rect
++	originX       int
++	originY       int
++	flags         Flags
++	modal         ID
++	contentHeight int
++}
++
++type modal struct {
++	id     ID
++	bounds render.Rect
++}
++
++type snapshot struct {
++	regions []region
++	modal   modal
++	focus   ID
++}
++
++// Context owns focus and pointer routing. Its zero value is ready to use.
++// Register regions in paint order between Begin and End; the last matching
++// region receives pointer input. Context must not be copied after first use.
++type Context struct {
++	mu sync.Mutex
++
++	generation  uint64
++	sequence    uint64
++	committedAt uint64
++	width       int
++	height      int
++	sizeKnown   bool
++	committed   snapshot
++
++	building      []region
++	buildingModal modal
++	currentModal  ID
++	buildingGen   uint64
++	viewFocus     ID
++	begun         bool
++
++	focused      ID
++	hovered      ID
++	pressed      ID
++	captured     ID
++	captureLeft  bool
++	restoreFocus ID
++
++	pointerKnown bool
++	pointerX     int
++	pointerY     int
++}
++
++// Begin starts registration for frame. A viewport change immediately
++// invalidates old hit geometry; focus identity is retained when possible.
++func (c *Context) Begin(frame *lux.Frame) {
++	if frame == nil {
++		return
++	}
++	width, height := frame.Size()
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	c.resizeLocked(width, height)
++	c.building = c.building[:0]
++	c.buildingModal = modal{}
++	c.currentModal = ""
++	c.buildingGen = c.generation
++	c.viewFocus = c.focused
++	if c.committed.modal.id != "" {
++		// Paint the base with the focus it will regain if the modal is omitted.
++		c.viewFocus = c.restoreFocus
++	}
++	c.begun = true
++}
++
++// Region registers a clipped terminal-space hit region in paint order.
++func (c *Context) Region(id ID, canvas *render.Canvas, bounds render.Rect, flags Flags) {
++	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{ContentHeight: -1})
++}
++
++// RegionWithOptions registers a clipped region with optional content limits.
++func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.Rect, flags Flags, options RegionOptions) {
++	if id == "" || canvas == nil {
++		return
++	}
++	absolute := canvas.GlobalRect(bounds)
++	if absolute.Empty() {
++		return
++	}
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !c.begun {
++		return
++	}
++	for _, existing := range c.building {
++		if existing.id == id {
++			panic("ui: duplicate control ID " + string(id))
++		}
++	}
++	contentHeight := options.ContentHeight
++	if contentHeight < 0 {
++		contentHeight = -1
++	} else {
++		contentHeight = min(contentHeight, absolute.H)
++	}
++	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
++	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
++	c.building = append(c.building, next)
++	if c.viewFocus == "" && focusable(next, c.currentModal) {
++		c.viewFocus = id
++	}
++}
++
++// End binds the registered geometry to this exact presented frame. Dropped,
++// failed, and pre-resize frames never become interactive.
++func (c *Context) End(frame *lux.Frame) {
++	if frame == nil {
++		return
++	}
++	c.mu.Lock()
++	if !c.begun {
++		c.mu.Unlock()
++		return
++	}
++	c.sequence++
++	sequence, generation := c.sequence, c.buildingGen
++	next := snapshot{
++		regions: append([]region(nil), c.building...),
++		modal:   c.buildingModal,
++		focus:   c.viewFocus,
++	}
++	if !focusValid(next, next.focus) {
++		next.focus = firstFocus(next)
++	}
++	c.currentModal = ""
++	c.begun = false
++	c.mu.Unlock()
++
++	frame.OnPresented(func() { c.commit(generation, sequence, next) })
++}
++
++// BeginModal starts a modal scope. Regions registered until EndModal receive
++// input exclusively once this frame is presented.
++func (c *Context) BeginModal(id ID, canvas *render.Canvas, bounds render.Rect) {
++	if id == "" || canvas == nil {
++		return
++	}
++	absolute := canvas.GlobalRect(bounds)
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !c.begun {
++		return
++	}
++	c.buildingModal = modal{id: id, bounds: absolute}
++	c.currentModal = id
++	if c.committed.modal.id == id {
++		c.viewFocus = c.focused
++	} else {
++		c.viewFocus = ""
++	}
++}
++
++// EndModal ends the current modal registration scope.
++func (c *Context) EndModal() {
++	c.mu.Lock()
++	c.currentModal = ""
++	c.mu.Unlock()
++}
++
++// Focus moves keyboard focus to a currently visible, enabled region.
++func (c *Context) Focus(id ID) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !focusValid(c.committed, id) {
++		return false
++	}
++	c.focused = id
++	if c.begun {
++		c.viewFocus = id
++	}
++	return true
++}
++
++// Focused reports whether id has keyboard focus. During View it reports the
++// focus intended for the frame being built, so first paints are correct.
++func (c *Context) Focused(id ID) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.begun {
++		return id != "" && c.viewFocus == id
++	}
++	return id != "" && c.focused == id
++}
++
++// Hovered reports whether the pointer is over id in the last presented frame.
++func (c *Context) Hovered(id ID) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return id != "" && c.hovered == id
++}
++
++// Pressed reports whether an activatable id owns the current left press.
++func (c *Context) Pressed(id ID) bool {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return id != "" && c.pressed == id
++}
++
++// Handle routes one terminal event against the last successfully presented
++// snapshot. The bool reports whether the interaction was consumed.
++func (c *Context) Handle(next event.Event) (Action, bool) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++
++	switch next.Kind {
++	case event.Resize:
++		c.resizeLocked(next.Width, next.Height)
++		return Action{}, false
++	case event.Focus:
++		if !next.Focused {
++			c.hovered, c.pressed, c.captured = "", "", ""
++			c.captureLeft = false
++			c.pointerKnown = false
++		}
++		return Action{}, false
++	case event.Mouse:
++		return c.handleMouseLocked(next)
++	case event.Key:
++		return c.handleKeyLocked(next)
++	case event.Text, event.Paste:
++		if target, ok := c.focusedRegionLocked(); ok && target.flags&Editable != 0 {
++			return actionFor(target, Input, next), true
++		}
++	}
++	if c.committed.modal.id != "" && (next.Kind == event.Key || next.Kind == event.Text || next.Kind == event.Paste) {
++		return Action{}, true
++	}
++	return Action{}, false
++}
++
++func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
++	key := next.Key
++	plain := key.Mod&(event.ModCtrl|event.ModAlt|event.ModSuper) == 0
++	if key.Code == event.KeyEscape && c.committed.modal.id != "" {
++		return Action{Target: c.committed.modal.id, Kind: Dismiss, Event: next}, true
++	}
++	if plain && (key.Code == event.KeyTab || key.Code == event.KeyBackTab) {
++		backward := key.Code == event.KeyBackTab || key.Mod&event.ModShift != 0
++		if target, ok := c.stepFocusLocked(backward); ok {
++			return actionFor(target, Focus, next), true
++		}
++		return Action{}, c.committed.modal.id != ""
++	}
++	target, ok := c.focusedRegionLocked()
++	if !ok {
++		return Action{}, c.committed.modal.id != ""
++	}
++	if target.flags&Activatable != 0 && plain && (key.Code == event.KeyEnter || key.Code == event.KeyRune && key.Rune == ' ') {
++		return actionFor(target, Activate, next), true
++	}
++	if target.flags&Editable != 0 {
++		return actionFor(target, Input, next), true
++	}
++	if target.flags&Scrollable != 0 && scrollKey(key.Code) {
++		return actionFor(target, Scroll, next), true
++	}
++	return Action{}, c.committed.modal.id != ""
++}
++
++func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
++	mouse := next.Mouse
++	c.pointerKnown, c.pointerX, c.pointerY = true, mouse.X, mouse.Y
++	target, found := hit(c.committed, mouse.X, mouse.Y, 0)
++	if found {
++		c.hovered = target.id
++	} else {
++		c.hovered = ""
++	}
++
++	if mouse.Action == event.MouseWheel {
++		if scrollTarget, ok := hit(c.committed, mouse.X, mouse.Y, Scrollable); ok {
++			return actionFor(scrollTarget, Scroll, next), true
++		}
++		return Action{}, c.committed.modal.id != ""
++	}
++
++	if mouse.Action == event.MousePress {
++		if c.outsideModalLocked(mouse.X, mouse.Y) {
++			c.pressed, c.captured = "", ""
++			c.captureLeft = false
++			return Action{Target: c.committed.modal.id, Kind: Dismiss, Event: next, X: mouse.X - c.committed.modal.bounds.X, Y: mouse.Y - c.committed.modal.bounds.Y}, true
++		}
++		if !found {
++			return Action{}, c.committed.modal.id != ""
++		}
++		if target.contentHeight >= 0 && mouse.Y-target.originY >= target.contentHeight {
++			return Action{}, true
++		}
++		if mouse.Button != event.MouseLeft {
++			return Action{}, true
++		}
++		c.captured, c.captureLeft = target.id, true
++		if target.flags&Activatable != 0 {
++			c.pressed = target.id
++		}
++		if target.flags&Focusable != 0 {
++			changed := c.focused != target.id
++			c.focused = target.id
++			if changed && target.flags&(Editable|Scrollable) == 0 {
++				return actionFor(target, Focus, next), true
++			}
++		}
++		if target.flags&Editable != 0 {
++			return actionFor(target, Input, next), true
++		}
++		if target.flags&Scrollable != 0 {
++			return actionFor(target, Scroll, next), true
++		}
++		return Action{}, true
++	}
++
++	if mouse.Action == event.MouseRelease {
++		captured, left := c.captured, c.captureLeft
++		c.captured, c.pressed, c.captureLeft = "", "", false
++		insideContent := target.contentHeight < 0 || mouse.Y-target.originY < target.contentHeight
++		if left && found && target.id == captured && target.flags&Activatable != 0 && insideContent {
++			return actionFor(target, Activate, next), true
++		}
++		return Action{}, captured != "" || c.committed.modal.id != ""
++	}
++
++	return Action{}, found || c.captured != "" || c.committed.modal.id != ""
++}
++
++func (c *Context) commit(generation, sequence uint64, next snapshot) {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if generation != c.generation || sequence <= c.committedAt {
++		return
++	}
++	previousModal := c.committed.modal.id
++	c.committed, c.committedAt = next, sequence
++
++	switch {
++	case previousModal == "" && next.modal.id != "":
++		c.restoreFocus = c.focused
++		c.focused = next.focus
++	case previousModal != "" && next.modal.id == "":
++		if focusValid(next, c.restoreFocus) {
++			c.focused = c.restoreFocus
++		} else {
++			c.focused = next.focus
++		}
++		c.restoreFocus = ""
++	case previousModal != next.modal.id:
++		c.focused = next.focus
++	case !focusValid(next, c.focused):
++		c.focused = next.focus
++	}
++	if !focusValid(next, c.focused) {
++		c.focused = firstFocus(next)
++	}
++
++	if c.pointerKnown {
++		if target, ok := hit(next, c.pointerX, c.pointerY, 0); ok {
++			c.hovered = target.id
++		} else {
++			c.hovered = ""
++		}
++	}
++	if _, ok := regionByID(next, c.captured); !ok {
++		c.captured, c.pressed, c.captureLeft = "", "", false
++	}
++}
++
++func (c *Context) resizeLocked(width, height int) {
++	if c.sizeKnown && c.width == width && c.height == height {
++		return
++	}
++	c.sizeKnown, c.width, c.height = true, width, height
++	c.generation++
++	// Keep only modality and focus identity while terminal coordinates are stale.
++	c.committed.regions = nil
++	c.committed.modal.bounds = render.Rect{}
++	c.hovered, c.pressed, c.captured = "", "", ""
++	c.captureLeft = false
++	c.pointerKnown = false
++}
++
++func (c *Context) stepFocusLocked(backward bool) (region, bool) {
++	regions := c.committed.regions
++	eligible := func(item region) bool { return focusable(item, c.committed.modal.id) }
++	start := -1
++	for index, item := range regions {
++		if eligible(item) && item.id == c.focused {
++			start = index
++			break
++		}
++	}
++	for step := 1; step <= len(regions); step++ {
++		index := start + step
++		if backward {
++			index = start - step
++		}
++		index %= len(regions)
++		if index < 0 {
++			index += len(regions)
++		}
++		if eligible(regions[index]) {
++			c.focused = regions[index].id
++			return regions[index], true
++		}
++	}
++	return region{}, false
++}
++
++func (c *Context) focusedRegionLocked() (region, bool) {
++	if target, ok := regionByID(c.committed, c.focused); ok && focusable(target, c.committed.modal.id) {
++		return target, true
++	}
++	if target, ok := firstFocusRegion(c.committed); ok {
++		c.focused = target.id
++		return target, true
++	}
++	return region{}, false
++}
++
++func (c *Context) outsideModalLocked(x, y int) bool {
++	active := c.committed.modal
++	return active.id != "" && !active.bounds.Empty() && !active.bounds.Contains(x, y)
++}
++
++func hit(state snapshot, x, y int, require Flags) (region, bool) {
++	for index := len(state.regions) - 1; index >= 0; index-- {
++		item := state.regions[index]
++		if state.modal.id != "" && item.modal != state.modal.id {
++			continue
++		}
++		if !item.bounds.Contains(x, y) {
++			continue
++		}
++		if item.flags&Disabled != 0 {
++			return region{}, false
++		}
++		if item.flags&(Focusable|Activatable|Editable|Scrollable) != 0 && (require == 0 || item.flags&require != 0) {
++			return item, true
++		}
++	}
++	return region{}, false
++}
++
++func regionByID(state snapshot, id ID) (region, bool) {
++	if id == "" {
++		return region{}, false
++	}
++	for index := len(state.regions) - 1; index >= 0; index-- {
++		item := state.regions[index]
++		if item.id == id && item.flags&Disabled == 0 && (state.modal.id == "" || item.modal == state.modal.id) {
++			return item, true
++		}
++	}
++	return region{}, false
++}
++
++func focusable(item region, activeModal ID) bool {
++	return item.flags&Focusable != 0 && item.flags&Disabled == 0 && (activeModal == "" || item.modal == activeModal)
++}
++
++func focusValid(state snapshot, id ID) bool {
++	item, ok := regionByID(state, id)
++	return ok && focusable(item, state.modal.id)
++}
++
++func firstFocus(state snapshot) ID {
++	item, _ := firstFocusRegion(state)
++	return item.id
++}
++
++func firstFocusRegion(state snapshot) (region, bool) {
++	for _, item := range state.regions {
++		if focusable(item, state.modal.id) {
++			return item, true
++		}
++	}
++	return region{}, false
++}
++
++func scrollKey(code event.KeyCode) bool {
++	switch code {
++	case event.KeyUp, event.KeyDown, event.KeyHome, event.KeyEnd, event.KeyPageUp, event.KeyPageDown:
++		return true
++	default:
++		return false
++	}
++}
++
++func actionFor(target region, kind ActionKind, next event.Event) Action {
++	action := Action{Target: target.id, Kind: kind, Event: next, Bounds: target.bounds}
++	if next.Kind == event.Mouse {
++		action.X = next.Mouse.X - target.originX
++		action.Y = next.Mouse.Y - target.originY
++	}
++	return action
++}
+diff --git a/ui/context_test.go b/ui/context_test.go
+new file mode 100644
+index 0000000..a049843
+--- /dev/null
++++ b/ui/context_test.go
+@@ -0,0 +1,331 @@
++package ui
++
++import (
++	"context"
++	"fmt"
++	"sync"
++	"testing"
++	"time"
++
++	lux "github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/capability"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++func presented(c *Context, regions []region, active modal) {
++	c.mu.Lock()
++	if c.generation == 0 {
++		c.generation = 1
++	}
++	c.sizeKnown = true
++	c.sequence++
++	generation, sequence := c.generation, c.sequence
++	c.mu.Unlock()
++	next := snapshot{regions: regions, modal: active}
++	for index := range next.regions {
++		if next.regions[index].contentHeight == 0 {
++			next.regions[index].contentHeight = -1
++		}
++		if next.regions[index].originX == 0 && next.regions[index].originY == 0 {
++			next.regions[index].originX = next.regions[index].bounds.X
++			next.regions[index].originY = next.regions[index].bounds.Y
++		}
++	}
++	next.focus = firstFocus(next)
++	c.commit(generation, sequence, next)
++}
++
++func TestReverseHitCaptureAndKeyboardFocus(t *testing.T) {
++	var ctx Context
++	presented(&ctx, []region{
++		{id: "back", bounds: render.Rect{W: 8, H: 3}, flags: Focusable | Activatable},
++		{id: "front", bounds: render.Rect{X: 2, Y: 1, W: 5, H: 2}, flags: Focusable | Activatable},
++		{id: "disabled", bounds: render.Rect{X: 10, Y: 1, W: 5, H: 2}, flags: Focusable | Activatable | Disabled},
++	}, modal{})
++
++	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 3, Y: 1, Action: event.MousePress, Button: event.MouseLeft}}
++	action, handled := ctx.Handle(press)
++	if !handled || action.Kind != Focus || action.Target != "front" || action.X != 1 || action.Y != 0 || !ctx.Pressed("front") {
++		t.Fatalf("press = %#v handled=%v pressed=%v", action, handled, ctx.Pressed("front"))
++	}
++	release := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 3, Y: 1, Action: event.MouseRelease, Button: event.MouseNone}}
++	action, handled = ctx.Handle(release)
++	if !handled || action.Kind != Activate || action.Target != "front" || ctx.Pressed("front") {
++		t.Fatalf("release = %#v handled=%v", action, handled)
++	}
++
++	action, handled = ctx.Handle(event.KeyPress(event.KeyTab, 0))
++	if !handled || action.Kind != Focus || action.Target != "back" || !ctx.Focused("back") {
++		t.Fatalf("tab = %#v handled=%v", action, handled)
++	}
++	action, handled = ctx.Handle(event.RuneKey(' ', 0))
++	if !handled || action.Kind != Activate || action.Target != "back" {
++		t.Fatalf("space = %#v handled=%v", action, handled)
++	}
++	if action, handled = ctx.Handle(event.RuneKey(' ', event.ModCtrl)); handled || action.Kind != None {
++		t.Fatalf("ctrl-space = %#v handled=%v", action, handled)
++	}
++
++	ctx.Handle(press)
++	release.Mouse.X = 12
++	if action, handled = ctx.Handle(release); !handled || action.Kind == Activate || ctx.Pressed("front") {
++		t.Fatalf("outside release = %#v handled=%v", action, handled)
++	}
++}
++
++func TestInputScrollAndFocusLoss(t *testing.T) {
++	var ctx Context
++	presented(&ctx, []region{
++		{id: "input", bounds: render.Rect{X: 4, Y: 2, W: 12, H: 1}, flags: Focusable | Editable},
++		{id: "list", bounds: render.Rect{Y: 4, W: 20, H: 5}, flags: Focusable | Scrollable},
++	}, modal{})
++
++	action, handled := ctx.Handle(event.RuneKey('界', 0))
++	if !handled || action.Kind != Input || action.Target != "input" {
++		t.Fatalf("input = %#v handled=%v", action, handled)
++	}
++	click := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 7, Y: 2, Action: event.MousePress, Button: event.MouseLeft}}
++	action, handled = ctx.Handle(click)
++	if !handled || action.Kind != Input || action.Target != "input" || action.X != 3 || action.Y != 0 {
++		t.Fatalf("input click = %#v handled=%v", action, handled)
++	}
++	ctx.Handle(event.KeyPress(event.KeyTab, 0))
++	wheel := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 3, Y: 6, Action: event.MouseWheel, Button: event.MouseWheelDown}}
++	action, handled = ctx.Handle(wheel)
++	if !handled || action.Kind != Scroll || action.Target != "list" || action.X != 3 || action.Y != 2 {
++		t.Fatalf("wheel = %#v handled=%v", action, handled)
++	}
++	listClick := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 4, Y: 7, Action: event.MousePress, Button: event.MouseLeft}}
++	action, handled = ctx.Handle(listClick)
++	if !handled || action.Kind != Scroll || action.Target != "list" || action.X != 4 || action.Y != 3 {
++		t.Fatalf("list click = %#v handled=%v", action, handled)
++	}
++	ctx.Handle(event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 3, Y: 6, Action: event.MouseMove}})
++	if !ctx.Hovered("list") {
++		t.Fatal("list was not hovered")
++	}
++	ctx.Handle(event.Event{Kind: event.Focus, Focused: false})
++	if ctx.Hovered("list") {
++		t.Fatal("focus loss retained hover")
++	}
++}
++
++func TestScrollableBlankTailDoesNotSelect(t *testing.T) {
++	var ctx Context
++	presented(&ctx, []region{{id: "list", bounds: render.Rect{W: 10, H: 5}, flags: Focusable | Scrollable | Activatable, contentHeight: 2}}, modal{})
++	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 4, Action: event.MousePress, Button: event.MouseLeft}}
++	if action, handled := ctx.Handle(press); !handled || action.Kind != None {
++		t.Fatalf("blank tail = %#v handled=%v", action, handled)
++	}
++	wheel := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 4, Action: event.MouseWheel, Button: event.MouseWheelDown}}
++	if action, handled := ctx.Handle(wheel); !handled || action.Kind != Scroll {
++		t.Fatalf("blank tail wheel = %#v handled=%v", action, handled)
++	}
++}
++
++func TestEmptyScrollableHasNoPressableRows(t *testing.T) {
++	var ctx Context
++	ctx.generation, ctx.sizeKnown = 1, true
++	next := snapshot{regions: []region{{id: "empty", bounds: render.Rect{W: 10, H: 3}, flags: Focusable | Scrollable | Activatable, contentHeight: 0}}, focus: "empty"}
++	ctx.commit(1, 1, next)
++	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 0, Action: event.MousePress, Button: event.MouseLeft}}
++	if action, handled := ctx.Handle(press); !handled || action.Kind != None {
++		t.Fatalf("empty list = %#v handled=%v", action, handled)
++	}
++}
++
++func TestDuplicateIDPanicsDuringBuild(t *testing.T) {
++	buffer := render.NewBuffer(10, 2)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	ctx.Begin(frame)
++	ctx.Region("same", canvas, render.Rect{W: 2, H: 1}, Focusable)
++	defer func() {
++		if recover() == nil {
++			t.Fatal("duplicate ID did not panic")
++		}
++	}()
++	ctx.Region("same", canvas, render.Rect{X: 3, W: 2, H: 1}, Focusable)
++}
++
++func TestReleaseInBlankTailDoesNotActivate(t *testing.T) {
++	var ctx Context
++	ctx.generation, ctx.sizeKnown = 1, true
++	ctx.commit(1, 1, snapshot{regions: []region{{id: "list", bounds: render.Rect{W: 10, H: 5}, flags: Focusable | Scrollable | Activatable, contentHeight: 2}}, focus: "list"})
++	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 1, Action: event.MousePress, Button: event.MouseLeft}}
++	if _, handled := ctx.Handle(press); !handled {
++		t.Fatal("press was not captured")
++	}
++	release := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 4, Action: event.MouseRelease}}
++	if action, handled := ctx.Handle(release); !handled || action.Kind == Activate {
++		t.Fatalf("blank release = %#v handled=%v", action, handled)
++	}
++}
++
++func TestClippedRegionKeepsLogicalCoordinates(t *testing.T) {
++	buffer := render.NewBuffer(10, 6)
++	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 2, Y: 2, W: 8, H: 4})
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	ctx.Begin(frame)
++	ctx.RegionWithOptions("list", canvas, render.Rect{W: 10, H: 5}, Focusable|Scrollable|Activatable, RegionOptions{ContentHeight: 5})
++	ctx.mu.Lock()
++	item := ctx.building[0]
++	ctx.mu.Unlock()
++	if item.bounds != (render.Rect{X: 2, Y: 2, W: 8, H: 3}) || item.originX != 0 || item.originY != 0 {
++		t.Fatalf("region = %#v", item)
++	}
++	action := actionFor(item, Scroll, event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 2, Y: 2, Action: event.MousePress, Button: event.MouseLeft}})
++	if action.X != 2 || action.Y != 2 {
++		t.Fatalf("local coordinates = %d,%d", action.X, action.Y)
++	}
++}
++
++func TestModalTrapDismissAndRestore(t *testing.T) {
++	var ctx Context
++	base := []region{
++		{id: "base-a", bounds: render.Rect{W: 8, H: 2}, flags: Focusable | Activatable},
++		{id: "base-b", bounds: render.Rect{X: 9, W: 8, H: 2}, flags: Focusable | Activatable},
++	}
++	presented(&ctx, base, modal{})
++	if !ctx.Focus("base-b") {
++		t.Fatal("could not focus base")
++	}
++	modalRegions := append(append([]region(nil), base...),
++		region{id: "modal-a", bounds: render.Rect{X: 5, Y: 3, W: 8, H: 1}, flags: Focusable | Editable, modal: "dialog"},
++		region{id: "modal-b", bounds: render.Rect{X: 5, Y: 5, W: 8, H: 1}, flags: Focusable | Activatable, modal: "dialog"},
++	)
++	presented(&ctx, modalRegions, modal{id: "dialog", bounds: render.Rect{X: 4, Y: 2, W: 10, H: 6}})
++	if !ctx.Focused("modal-a") || ctx.Focus("base-a") {
++		t.Fatalf("modal focus was not trapped")
++	}
++	action, handled := ctx.Handle(event.KeyPress(event.KeyBackTab, 0))
++	if !handled || action.Target != "modal-b" || action.Kind != Focus {
++		t.Fatalf("modal backtab = %#v handled=%v", action, handled)
++	}
++	action, handled = ctx.Handle(event.KeyPress(event.KeyEscape, 0))
++	if !handled || action.Kind != Dismiss || action.Target != "dialog" {
++		t.Fatalf("escape = %#v handled=%v", action, handled)
++	}
++	outside := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 1, Action: event.MousePress, Button: event.MouseLeft}}
++	action, handled = ctx.Handle(outside)
++	if !handled || action.Kind != Dismiss || action.Target != "dialog" || action.X != -3 || action.Y != -1 {
++		t.Fatalf("outside = %#v handled=%v", action, handled)
++	}
++	presented(&ctx, base, modal{})
++	if !ctx.Focused("base-b") {
++		t.Fatal("base focus was not restored")
++	}
++}
++
++func TestResizeRejectsStalePresentation(t *testing.T) {
++	var ctx Context
++	ctx.mu.Lock()
++	ctx.generation = 1
++	ctx.sequence = 1
++	ctx.sizeKnown, ctx.width, ctx.height = true, 20, 5
++	ctx.mu.Unlock()
++	stale := snapshot{regions: []region{{id: "old", bounds: render.Rect{W: 4, H: 1}, flags: Focusable}}, focus: "old"}
++	ctx.Handle(event.ResizeTo(40, 10))
++	ctx.commit(1, 1, stale)
++	if ctx.Focused("old") || ctx.Focus("old") {
++		t.Fatal("pre-resize geometry committed")
++	}
++}
++
++type gatedBackend struct {
++	events  chan event.Event
++	started chan struct{}
++	release chan struct{}
++	once    sync.Once
++}
++
++func (b *gatedBackend) Open(context.Context) (capability.Set, error) {
++	return capability.Set{Interactive: true}, nil
++}
++func (b *gatedBackend) NextEvent(ctx context.Context) (event.Event, error) {
++	select {
++	case next := <-b.events:
++		return next, nil
++	case <-ctx.Done():
++		return event.Event{}, ctx.Err()
++	}
++}
++func (b *gatedBackend) Present(ctx context.Context, _ *render.Buffer) error {
++	b.once.Do(func() { close(b.started) })
++	select {
++	case <-b.release:
++		return nil
++	case <-ctx.Done():
++		return ctx.Err()
++	}
++}
++func (*gatedBackend) Size() (int, int, error) { return 20, 5, nil }
++func (*gatedBackend) Close() error            { return nil }
++
++type commitModel struct{ ui *Context }
++
++func (m commitModel) Update(next event.Event) lux.Command {
++	if next.Kind == event.Key && next.Key.Rune == 'q' {
++		return lux.Quit()
++	}
++	return nil
++}
++func (m commitModel) View(frame *lux.Frame) {
++	m.ui.Begin(frame)
++	m.ui.Region("ready", frame.Canvas, render.Rect{W: 8, H: 1}, Focusable)
++	m.ui.End(frame)
++}
++
++func TestEndCommitsOnlyAfterSuccessfulPresent(t *testing.T) {
++	backend := &gatedBackend{events: make(chan event.Event, 1), started: make(chan struct{}), release: make(chan struct{})}
++	var ctx Context
++	done := make(chan error, 1)
++	go func() { done <- lux.Run(context.Background(), commitModel{ui: &ctx}, lux.WithBackend(backend)) }()
++	select {
++	case <-backend.started:
++	case <-time.After(time.Second):
++		t.Fatal("presentation did not start")
++	}
++	if ctx.Focused("ready") || ctx.Focus("ready") {
++		t.Fatal("unpresented region became interactive")
++	}
++	close(backend.release)
++	deadline := time.Now().Add(time.Second)
++	for !ctx.Focused("ready") && time.Now().Before(deadline) {
++		time.Sleep(time.Millisecond)
++	}
++	if !ctx.Focused("ready") {
++		t.Fatal("presented region did not commit")
++	}
++	backend.events <- event.RuneKey('q', 0)
++	select {
++	case err := <-done:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-time.After(time.Second):
++		t.Fatal("runtime did not stop")
++	}
++}
++
++func BenchmarkHitRouting(b *testing.B) {
++	for _, count := range []int{10, 100, 1000} {
++		b.Run(fmt.Sprint(count), func(b *testing.B) {
++			regions := make([]region, count)
++			for index := range regions {
++				regions[index] = region{id: ID(fmt.Sprint(index)), bounds: render.Rect{X: index, W: 1, H: 1}, flags: Focusable | Activatable}
++			}
++			var ctx Context
++			presented(&ctx, regions, modal{})
++			next := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: count - 1, Action: event.MouseMove}}
++			b.ReportAllocs()
++			b.ResetTimer()
++			for range b.N {
++				ctx.Handle(next)
++			}
++		})
++	}
++}
+diff --git a/ui/controls.go b/ui/controls.go
+new file mode 100644
+index 0000000..d4da45f
+--- /dev/null
++++ b/ui/controls.go
+@@ -0,0 +1,257 @@
++package ui
++
++import (
++	"strings"
++
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++	"github.com/rivo/uniseg"
++)
++
++// ButtonStyle defines the four visual states of a button. Zero values inherit
++// Normal; Disabled also disables interaction.
++type ButtonStyle struct {
++	Normal        render.Style
++	Focused       render.Style
++	Hovered       render.Style
++	Pressed       render.Style
++	DisabledStyle render.Style
++	Border        render.Border
++	Disabled      bool
++}
++
++// Button registers and draws one keyboard/pointer activatable control.
++func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label string, style ButtonStyle) {
++	if canvas == nil || bounds.Empty() {
++		return
++	}
++	bounds = bounds.Intersect(canvas.Bounds())
++	if bounds.Empty() {
++		return
++	}
++	flags := Focusable | Activatable
++	if style.Disabled {
++		flags |= Disabled
++	}
++	c.Region(id, canvas, bounds, flags)
++	visual := style.Normal
++	switch {
++	case style.Disabled:
++		visual = fallbackStyle(style.DisabledStyle, visual)
++	case c.Pressed(id):
++		visual = fallbackStyle(style.Pressed, visual)
++	case c.Focused(id):
++		visual = fallbackStyle(style.Focused, visual)
++	case c.Hovered(id):
++		visual = fallbackStyle(style.Hovered, visual)
++	}
++	canvas = canvas.Clip(bounds)
++	canvas.Fill(bounds, " ", visual)
++	border := style.Border
++	if border == (render.Border{}) {
++		border = render.RoundedBorder
++	}
++	canvas.Border(bounds, border, visual)
++	inner := bounds.Inset(1, 1)
++	if inner.Empty() {
++		inner = bounds
++	}
++	label = clipText(label, inner.W)
++	canvas.Text(inner.X+max((inner.W-render.TextWidth(label))/2, 0), inner.Y+max((inner.H-1)/2, 0), label, visual)
++}
++
++// ListState is the persistent selection and scroll position for a List.
++type ListState struct {
++	Selected int
++	Offset   int
++}
++
++// Apply mutates selection/offset for a routed List action. rows is the number
++// of visible item rows. Enter/space activates without moving selection.
++func (s *ListState) Apply(action Action, count, rows int) (changed, activated bool) {
++	if s == nil {
++		return false, false
++	}
++	beforeSelected, beforeOffset := s.Selected, s.Offset
++	count, rows = max(count, 0), max(rows, 0)
++	if count == 0 {
++		s.Selected, s.Offset = 0, 0
++		return beforeSelected != 0 || beforeOffset != 0, false
++	}
++	s.Selected = min(max(s.Selected, 0), count-1)
++	s.Offset = min(max(s.Offset, 0), max(count-rows, 0))
++	beforeSelected, beforeOffset = s.Selected, s.Offset
++
++	switch action.Kind {
++	case Activate:
++		activated = true
++	case Scroll:
++		switch action.Event.Kind {
++		case event.Key:
++			switch action.Event.Key.Code {
++			case event.KeyUp:
++				s.Selected--
++			case event.KeyDown:
++				s.Selected++
++			case event.KeyHome:
++				s.Selected = 0
++			case event.KeyEnd:
++				s.Selected = count - 1
++			case event.KeyPageUp:
++				s.Selected -= max(rows, 1)
++			case event.KeyPageDown:
++				s.Selected += max(rows, 1)
++			}
++		case event.Mouse:
++			switch action.Event.Mouse.Action {
++			case event.MouseWheel:
++				delta := max(rows/3, 1)
++				switch action.Event.Mouse.Button {
++				case event.MouseWheelUp, event.MouseWheelLeft:
++					s.Selected -= delta
++				case event.MouseWheelDown, event.MouseWheelRight:
++					s.Selected += delta
++				}
++			case event.MousePress:
++				if index := s.Offset + action.Y; action.Y >= 0 && action.Y < rows && index < count {
++					s.Selected = index
++				}
++			}
++		}
++	}
++	s.Selected = min(max(s.Selected, 0), count-1)
++	s.ensureVisible(count, rows)
++	return beforeSelected != s.Selected || beforeOffset != s.Offset, activated
++}
++
++func (s *ListState) ensureVisible(count, rows int) {
++	if rows <= 0 || count <= 0 {
++		s.Offset = 0
++		return
++	}
++	if s.Selected < s.Offset {
++		s.Offset = s.Selected
++	}
++	if s.Selected >= s.Offset+rows {
++		s.Offset = s.Selected - rows + 1
++	}
++	s.Offset = min(max(s.Offset, 0), max(count-rows, 0))
++}
++
++// ListStyle defines list row states. Zero values inherit Normal.
++type ListStyle struct {
++	Normal        render.Style
++	Selected      render.Style
++	Focused       render.Style
++	Hovered       render.Style
++	DisabledStyle render.Style
++	Disabled      bool
++	Marker        string
++}
++
++// List registers and draws a focusable, scrollable list. Apply its routed
++// actions in Model.Update; View is side-effect free except for bounds repair.
++func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *ListState, items []string, style ListStyle) {
++	if canvas == nil || state == nil || bounds.Empty() {
++		return
++	}
++	bounds = bounds.Intersect(canvas.Bounds())
++	if bounds.Empty() {
++		return
++	}
++	flags := Focusable | Scrollable | Activatable
++	if style.Disabled {
++		flags |= Disabled
++	}
++	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{ContentHeight: min(bounds.H, max(len(items)-state.Offset, 0))})
++	state.Selected = min(max(state.Selected, 0), max(len(items)-1, 0))
++	state.ensureVisible(len(items), bounds.H)
++	canvas = canvas.Clip(bounds)
++	canvas.Fill(bounds, " ", style.Normal)
++	marker := style.Marker
++	if marker == "" {
++		marker = "> "
++	}
++	for row := 0; row < bounds.H; row++ {
++		index := state.Offset + row
++		if index >= len(items) {
++			break
++		}
++		visual := style.Normal
++		if style.Disabled {
++			visual = fallbackStyle(style.DisabledStyle, visual)
++		} else if index == state.Selected {
++			visual = fallbackStyle(style.Selected, visual)
++			if c.Focused(id) {
++				visual = fallbackStyle(style.Focused, visual)
++			} else if c.Hovered(id) {
++				visual = fallbackStyle(style.Hovered, visual)
++			}
++		}
++		y := bounds.Y + row
++		canvas.Fill(render.Rect{X: bounds.X, Y: y, W: bounds.W, H: 1}, " ", visual)
++		prefix := ""
++		if index == state.Selected {
++			prefix = marker
++		}
++		text := clipText(prefix+items[index], bounds.W)
++		canvas.Text(bounds.X, y, text, visual)
++	}
++}
++
++// ModalStyle defines the panel, border, and title styling of a modal.
++type ModalStyle struct {
++	Panel  render.Style
++	Border render.Style
++	Title  render.Style
++	Frame  render.Border
++}
++
++// Modal draws a modal panel, begins its input scope, and returns its interior.
++// Call EndModal after registering all modal controls.
++func (c *Context) Modal(id ID, canvas *render.Canvas, bounds render.Rect, title string, style ModalStyle) *render.Canvas {
++	if canvas == nil {
++		return nil
++	}
++	bounds = bounds.Intersect(canvas.Bounds())
++	c.BeginModal(id, canvas, bounds)
++	canvas.Fill(bounds, " ", style.Panel)
++	border := style.Frame
++	if border == (render.Border{}) {
++		border = render.RoundedBorder
++	}
++	canvas.Border(bounds, border, fallbackStyle(style.Border, style.Panel))
++	if bounds.W > 4 && title != "" {
++		canvas.Text(bounds.X+2, bounds.Y, " "+clipText(title, bounds.W-4)+" ", fallbackStyle(style.Title, style.Border))
++	}
++	return canvas.Subview(bounds.Inset(1, 1))
++}
++
++func fallbackStyle(preferred, fallback render.Style) render.Style {
++	if preferred == (render.Style{}) {
++		return fallback
++	}
++	return preferred
++}
++
++func clipText(text string, width int) string {
++	if width <= 0 {
++		return ""
++	}
++	if render.TextWidth(text) <= width {
++		return text
++	}
++	var result strings.Builder
++	used := 0
++	graphemes := uniseg.NewGraphemes(text)
++	for graphemes.Next() {
++		cluster := graphemes.Str()
++		cells := render.GraphemeWidth(cluster)
++		if used+cells > width {
++			break
++		}
++		result.WriteString(cluster)
++		used += cells
++	}
++	return result.String()
++}
+diff --git a/ui/controls_test.go b/ui/controls_test.go
+new file mode 100644
+index 0000000..c80d842
+--- /dev/null
++++ b/ui/controls_test.go
+@@ -0,0 +1,109 @@
++package ui
++
++import (
++	"testing"
++
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++func keyAction(code event.KeyCode) Action {
++	return Action{Kind: Scroll, Event: event.KeyPress(code, 0)}
++}
++
++func TestListStateKeyboardScrollAndBounds(t *testing.T) {
++	state := ListState{Selected: 1}
++	if changed, activated := state.Apply(keyAction(event.KeyPageDown), 10, 3); !changed || activated || state.Selected != 4 || state.Offset != 2 {
++		t.Fatalf("pagedown = %#v changed=%v activated=%v", state, changed, activated)
++	}
++	state.Apply(keyAction(event.KeyEnd), 10, 3)
++	if state.Selected != 9 || state.Offset != 7 {
++		t.Fatalf("end = %#v", state)
++	}
++	state.Apply(keyAction(event.KeyHome), 10, 3)
++	if state.Selected != 0 || state.Offset != 0 {
++		t.Fatalf("home = %#v", state)
++	}
++	state.Selected, state.Offset = 99, 99
++	if changed, _ := state.Apply(Action{}, 2, 0); !changed || state.Selected != 1 || state.Offset != 0 {
++		t.Fatalf("tiny = %#v changed=%v", state, changed)
++	}
++	state.Apply(Action{}, 2, 1)
++	if changed, activated := state.Apply(Action{Kind: Activate}, 2, 1); changed || !activated {
++		t.Fatalf("activate changed=%v activated=%v", changed, activated)
++	}
++	if changed, activated := state.Apply(Action{}, 0, 0); !changed || activated || state != (ListState{}) {
++		t.Fatalf("empty = %#v changed=%v activated=%v", state, changed, activated)
++	}
++}
++
++func TestListStateWheelAndClick(t *testing.T) {
++	state := ListState{}
++	wheel := Action{Kind: Scroll, Event: event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseWheel, Button: event.MouseWheelDown}}}
++	state.Apply(wheel, 20, 6)
++	if state.Selected != 2 || state.Offset != 0 {
++		t.Fatalf("wheel = %#v", state)
++	}
++	click := Action{Kind: Scroll, Y: 4, Event: event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}}}
++	changed, activated := state.Apply(click, 20, 6)
++	if !changed || activated || state.Selected != 4 {
++		t.Fatalf("click = %#v changed=%v activated=%v", state, changed, activated)
++	}
++	if changed, activated = state.Apply(Action{Kind: Activate}, 20, 6); changed || !activated {
++		t.Fatalf("release changed=%v activated=%v", changed, activated)
++	}
++	outside := click
++	outside.Y = 8
++	if changed, activated = state.Apply(outside, 20, 6); changed || activated {
++		t.Fatalf("outside changed=%v activated=%v", changed, activated)
++	}
++	state = ListState{}
++	blank := click
++	blank.Y = 5
++	if changed, activated = state.Apply(blank, 2, 6); changed || activated || state != (ListState{}) {
++		t.Fatalf("blank changed=%v activated=%v state=%#v", changed, activated, state)
++	}
++}
++
++func TestButtonListAndModalRendering(t *testing.T) {
++	buffer := render.NewBuffer(32, 12)
++	canvas := render.NewCanvas(buffer)
++	var ctx Context
++	ctx.begun = true
++	ctx.viewFocus = "button"
++	ctx.Button("button", canvas, render.Rect{X: 1, Y: 1, W: 10, H: 3}, "Run 界", ButtonStyle{})
++	state := ListState{Selected: 1}
++	ctx.List("list", canvas, render.Rect{X: 1, Y: 5, W: 12, H: 3}, &state, []string{"one", "two", "three", "four"}, ListStyle{})
++	inner := ctx.Modal("help", canvas, render.Rect{X: 16, Y: 1, W: 14, H: 9}, "Help", ModalStyle{})
++	ctx.Region("close", inner, render.Rect{X: 1, Y: 1, W: 8, H: 2}, Focusable|Activatable)
++	ctx.EndModal()
++
++	if len(ctx.building) != 3 || ctx.building[2].modal != "help" {
++		t.Fatalf("regions = %#v", ctx.building)
++	}
++	if got := buffer.Cell(3, 2).Grapheme; got == " " {
++		t.Fatalf("button label not drawn: %q", got)
++	}
++	if got := buffer.Cell(1, 6).Grapheme; got == " " {
++		t.Fatal("selected list marker not drawn")
++	}
++	if width, height := inner.Size(); width != 12 || height != 7 {
++		t.Fatalf("modal inner = %dx%d", width, height)
++	}
++}
++
++func TestControlsTinyAndDisabledAreSafe(t *testing.T) {
++	buffer := render.NewBuffer(2, 1)
++	canvas := render.NewCanvas(buffer)
++	var ctx Context
++	ctx.begun = true
++	ctx.Button("x", canvas, render.Rect{W: 1, H: 1}, "too long", ButtonStyle{Disabled: true})
++	state := ListState{Selected: 4, Offset: 4}
++	ctx.List("list", canvas, render.Rect{X: 1, W: 1, H: 1}, &state, nil, ListStyle{Disabled: true})
++	if state != (ListState{}) {
++		t.Fatalf("empty list state = %#v", state)
++	}
++	if len(ctx.building) != 2 || ctx.building[0].flags&Disabled == 0 || ctx.building[1].flags&Disabled == 0 {
++		t.Fatalf("disabled regions = %#v", ctx.building)
++	}
++}
+diff --git a/ui/textinput.go b/ui/textinput.go
+new file mode 100644
+index 0000000..25827c6
+--- /dev/null
++++ b/ui/textinput.go
+@@ -0,0 +1,600 @@
++package ui
++
++import (
++	"strings"
++	"unicode"
++	"unicode/utf8"
++
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++	"github.com/rivo/uniseg"
++)
++
++// TextInput is the editable state of a one-line text field. Cursor, Anchor,
++// and Offset are UTF-8 byte offsets at extended-grapheme boundaries. Equal
++// Cursor and Anchor means there is no selection; the zero value is ready.
++type TextInput struct {
++	Value       string
++	Cursor      int
++	Anchor      int
++	MaxBytes    int
++	Offset      int
++	Placeholder string
++}
++
++// InputStyle controls painting and whether a field accepts interaction. Zero
++// Selection and Cursor styles inherit Normal with reverse video; a zero
++// Placeholder style inherits Normal with dim text.
++type InputStyle struct {
++	Normal      render.Style
++	Placeholder render.Style
++	Selection   render.Style
++	Cursor      render.Style
++	ReadOnly    bool
++	Disabled    bool
++}
++
++// SetValue replaces the value, applies the one-line input policy, moves the
++// caret to the end, and clears selection.
++func (t *TextInput) SetValue(value string) {
++	if t == nil {
++		return
++	}
++	t.Value = limitText(sanitizeInput(value), t.MaxBytes)
++	t.Cursor, t.Anchor, t.Offset = len(t.Value), len(t.Value), 0
++}
++
++// Selection returns the ordered half-open selected byte range. Equal values
++// mean no selection.
++func (t *TextInput) Selection() (start, end int) {
++	if t == nil {
++		return 0, 0
++	}
++	t.normalize()
++	if t.Cursor < t.Anchor {
++		return t.Cursor, t.Anchor
++	}
++	return t.Anchor, t.Cursor
++}
++
++// Apply applies one routed Input action and reports whether editable state
++// changed. It accepts committed text, bounded paste, navigation, deletion,
++// Ctrl+A, Ctrl+Left/Right UAX #29 word movement, and local mouse placement.
++func (t *TextInput) Apply(action Action) bool {
++	if t == nil || action.Kind != Input {
++		return false
++	}
++	before := *t
++	t.normalize()
++	switch action.Event.Kind {
++	case event.Text, event.Paste:
++		t.insert(action.Event.Text)
++	case event.Key:
++		t.applyKey(action.Event.Key)
++	case event.Mouse:
++		t.applyMouse(action)
++	}
++	return before.Value != t.Value || before.Cursor != t.Cursor || before.Anchor != t.Anchor || before.Offset != t.Offset
++}
++
++// Input registers and paints a one-line text input. Read-only fields remain
++// focusable but do not receive Input actions; disabled fields are inert.
++func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *TextInput, style InputStyle) {
++	if c == nil || canvas == nil || input == nil || id == "" {
++		return
++	}
++	input.normalize()
++	rect.H = min(max(rect.H, 0), 1)
++	line := rect.Intersect(canvas.Bounds())
++	flags := Focusable | Editable
++	if style.ReadOnly {
++		flags = Focusable
++	}
++	if style.Disabled {
++		flags |= Disabled
++	}
++	c.Region(id, canvas, line, flags)
++	if line.Empty() {
++		input.Offset = input.Cursor
++		return
++	}
++
++	base := style.Normal
++	if style.Disabled {
++		base.Attrs |= render.AttrDim
++	}
++	canvas.Fill(line, " ", base)
++	focused := c.Focused(id) && !style.ReadOnly && !style.Disabled
++	input.ensureOffset(line.W, focused)
++
++	placeholder := style.Placeholder
++	if placeholder == (render.Style{}) {
++		placeholder = base
++		placeholder.Attrs |= render.AttrDim
++	}
++	selection := style.Selection
++	if selection == (render.Style{}) {
++		selection = base
++		selection.Attrs |= render.AttrReverse
++	}
++	caret := style.Cursor
++	if caret == (render.Style{}) {
++		caret = base
++		caret.Attrs |= render.AttrReverse
++	}
++
++	if input.Value == "" {
++		drawPlaceholder(canvas, line, input.Placeholder, placeholder, caret, focused)
++		return
++	}
++	drawInput(canvas, line, input, base, selection, caret, focused)
++}
++
++func (t *TextInput) normalize() {
++	t.Value = limitText(sanitizeInput(t.Value), t.MaxBytes)
++	t.Cursor, t.Anchor, t.Offset = floorBoundaries(t.Value, t.Cursor, t.Anchor, t.Offset)
++}
++
++func (t *TextInput) applyKey(key event.KeyEvent) {
++	shift := key.Mod&event.ModShift != 0
++	ctrl := key.Mod&event.ModCtrl != 0
++	if key.Mod&(event.ModAlt|event.ModSuper) != 0 {
++		return
++	}
++	count := max(int(key.Repeat), 1)
++	count = min(count, uniseg.GraphemeClusterCount(t.Value)+1)
++
++	if key.Code == event.KeyRune && ctrl && unicode.ToLower(key.Rune) == 'a' {
++		t.Anchor, t.Cursor = 0, len(t.Value)
++		return
++	}
++	switch key.Code {
++	case event.KeyLeft:
++		for range count {
++			start, end := t.selection()
++			target := previousBoundary(t.Value, t.Cursor)
++			if ctrl {
++				target = previousWord(t.Value, t.Cursor)
++			} else if !shift && start != end {
++				target = start
++			}
++			t.move(target, shift)
++		}
++	case event.KeyRight:
++		for range count {
++			start, end := t.selection()
++			target := nextBoundary(t.Value, t.Cursor)
++			if ctrl {
++				target = nextWord(t.Value, t.Cursor)
++			} else if !shift && start != end {
++				target = end
++			}
++			t.move(target, shift)
++		}
++	case event.KeyHome:
++		t.move(0, shift)
++	case event.KeyEnd:
++		t.move(len(t.Value), shift)
++	case event.KeyBackspace:
++		if ctrl {
++			return
++		}
++		for range count {
++			start, end := t.selection()
++			if start == end {
++				start = previousBoundary(t.Value, t.Cursor)
++			}
++			if start == end {
++				break
++			}
++			t.remove(start, end)
++		}
++	case event.KeyDelete:
++		if ctrl {
++			return
++		}
++		for range count {
++			start, end := t.selection()
++			if start == end {
++				end = nextBoundary(t.Value, t.Cursor)
++			}
++			if start == end {
++				break
++			}
++			t.remove(start, end)
++		}
++	case event.KeyRune:
++		if !ctrl && !unicode.IsControl(key.Rune) {
++			t.insert(strings.Repeat(string(key.Rune), count))
++		}
++	}
++}
++
++func (t *TextInput) applyMouse(action Action) {
++	mouse := action.Event.Mouse
++	if mouse.Action != event.MousePress || mouse.Button != event.MouseLeft {
++		return
++	}
++	target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W)
++	if mouse.Mod&event.ModShift != 0 {
++		t.Cursor = target
++	} else {
++		t.Cursor, t.Anchor = target, target
++	}
++}
++
++func (t *TextInput) move(target int, extend bool) {
++	target = floorBoundary(t.Value, target)
++	if extend {
++		t.Cursor = target
++		return
++	}
++	t.Cursor, t.Anchor = target, target
++}
++
++func (t *TextInput) insert(value string) {
++	value = sanitizeInput(value)
++	if value == "" {
++		return
++	}
++	start, end := t.selection()
++	limit := -1
++	if t.MaxBytes > 0 {
++		limit = t.MaxBytes - (len(t.Value) - (end - start))
++	}
++	value = graphemePrefix(value, limit)
++	if value == "" {
++		return
++	}
++	t.Value = t.Value[:start] + value + t.Value[end:]
++	t.Cursor = ceilBoundary(t.Value, start+len(value))
++	t.Anchor = t.Cursor
++	t.Offset = floorBoundary(t.Value, min(t.Offset, t.Cursor))
++}
++
++func (t *TextInput) remove(start, end int) {
++	if start < 0 || start >= end || end > len(t.Value) {
++		return
++	}
++	t.Value = t.Value[:start] + t.Value[end:]
++	t.Cursor = floorBoundary(t.Value, start)
++	t.Anchor = t.Cursor
++	t.Offset = floorBoundary(t.Value, min(t.Offset, t.Cursor))
++}
++
++func (t *TextInput) ensureOffset(width int, caret bool) {
++	if width <= 0 {
++		t.Offset = t.Cursor
++		return
++	}
++	if t.Offset > t.Cursor {
++		t.Offset = t.Cursor
++	}
++	needed := 0
++	if t.Cursor < len(t.Value) {
++		needed = max(render.GraphemeWidth(t.Value[t.Cursor:]), 1)
++	} else if caret {
++		needed = 1
++	}
++	for t.Offset < t.Cursor && textCells(t.Value[t.Offset:t.Cursor])+needed > width {
++		t.Offset = nextBoundary(t.Value, t.Offset)
++	}
++	if textCells(t.Value[t.Offset:t.Cursor])+needed > width {
++		t.Offset = t.Cursor
++	}
++	for t.Offset > 0 {
++		previous := previousBoundary(t.Value, t.Offset)
++		if textCells(t.Value[previous:t.Cursor])+needed > width {
++			break
++		}
++		t.Offset = previous
++	}
++}
++
++func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal, selection, caret render.Style, focused bool) {
++	selectedStart, selectedEnd := input.selection()
++	x, caretPending := 0, false
++	graphemes := uniseg.NewGraphemes(input.Value[input.Offset:])
++	for graphemes.Next() {
++		from, to := graphemes.Positions()
++		from, to = from+input.Offset, to+input.Offset
++		if from == input.Cursor {
++			caretPending = focused
++		}
++		cluster := graphemes.Str()
++		width := render.GraphemeWidth(cluster)
++		if width == 0 {
++			canvas.Put(line.X+x, line.Y, cluster, normal)
++			continue
++		}
++		if x+width > line.W {
++			break
++		}
++		paint := normal
++		if from >= selectedStart && to <= selectedEnd && selectedStart != selectedEnd {
++			paint = selection
++		}
++		if caretPending {
++			paint, caretPending = caret, false
++		}
++		canvas.Put(line.X+x, line.Y, cluster, paint)
++		x += width
++	}
++	if !focused || !caretPending && input.Cursor != len(input.Value) {
++		return
++	}
++	cursorX := textCells(input.Value[input.Offset:input.Cursor])
++	if cursorX >= 0 && cursorX < line.W {
++		canvas.Put(line.X+cursorX, line.Y, " ", caret)
++	}
++}
++
++func drawPlaceholder(canvas *render.Canvas, line render.Rect, value string, placeholder, caret render.Style, focused bool) {
++	x, first := 0, true
++	graphemes := uniseg.NewGraphemes(sanitizeInput(value))
++	for graphemes.Next() {
++		cluster := graphemes.Str()
++		width := render.GraphemeWidth(cluster)
++		if width == 0 {
++			continue
++		}
++		if x+width > line.W {
++			break
++		}
++		paint := placeholder
++		if focused && first {
++			paint = caret
++		}
++		canvas.Put(line.X+x, line.Y, cluster, paint)
++		x += width
++		first = false
++	}
++	if focused && first && line.W > 0 {
++		canvas.Put(line.X, line.Y, " ", caret)
++	}
++}
++
++func sanitizeInput(value string) string {
++	if utf8.ValidString(value) {
++		clean := true
++		for _, r := range value {
++			if unicode.IsControl(r) {
++				clean = false
++				break
++			}
++		}
++		if clean {
++			return value
++		}
++	}
++	value = strings.ToValidUTF8(value, "\uFFFD")
++	var result strings.Builder
++	result.Grow(len(value))
++	previousCR := false
++	for _, r := range value {
++		switch r {
++		case '\r':
++			result.WriteByte(' ')
++			previousCR = true
++		case '\n':
++			if !previousCR {
++				result.WriteByte(' ')
++			}
++			previousCR = false
++		case '\t':
++			result.WriteByte(' ')
++			previousCR = false
++		default:
++			previousCR = false
++			if !unicode.IsControl(r) {
++				result.WriteRune(r)
++			}
++		}
++	}
++	return result.String()
++}
++
++func limitText(value string, maxBytes int) string {
++	if maxBytes <= 0 || len(value) <= maxBytes {
++		return value
++	}
++	return graphemePrefix(value, maxBytes)
++}
++
++// graphemePrefix uses a negative limit for unlimited input and never cuts an
++// extended grapheme cluster.
++func graphemePrefix(value string, maxBytes int) string {
++	if maxBytes < 0 || len(value) <= maxBytes {
++		return value
++	}
++	end := 0
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		_, next := graphemes.Positions()
++		if next > maxBytes {
++			break
++		}
++		end = next
++	}
++	return value[:end]
++}
++
++func floorBoundary(value string, position int) int {
++	position = min(max(position, 0), len(value))
++	if position == len(value) {
++		return position
++	}
++	boundary := 0
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		from, to := graphemes.Positions()
++		if position < to {
++			if position == to {
++				return to
++			}
++			return from
++		}
++		boundary = to
++	}
++	return boundary
++}
++
++func floorBoundaries(value string, cursor, anchor, offset int) (int, int, int) {
++	positions := [3]int{cursor, anchor, offset}
++	result := [3]int{}
++	maximum := 0
++	for index := range positions {
++		positions[index] = min(max(positions[index], 0), len(value))
++		maximum = max(maximum, positions[index])
++	}
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		_, to := graphemes.Positions()
++		for index, position := range positions {
++			if to <= position {
++				result[index] = to
++			}
++		}
++		if to >= maximum {
++			break
++		}
++	}
++	return result[0], result[1], result[2]
++}
++
++func (t *TextInput) selection() (start, end int) {
++	if t.Cursor < t.Anchor {
++		return t.Cursor, t.Anchor
++	}
++	return t.Anchor, t.Cursor
++}
++
++func ceilBoundary(value string, position int) int {
++	position = min(max(position, 0), len(value))
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		from, to := graphemes.Positions()
++		if position == from {
++			return from
++		}
++		if position < to {
++			return to
++		}
++	}
++	return len(value)
++}
++
++func previousBoundary(value string, position int) int {
++	position = floorBoundary(value, position)
++	previous := 0
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		from, _ := graphemes.Positions()
++		if from >= position {
++			break
++		}
++		previous = from
++	}
++	return previous
++}
++
++func nextBoundary(value string, position int) int {
++	position = floorBoundary(value, position)
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		_, to := graphemes.Positions()
++		if to > position {
++			return to
++		}
++	}
++	return len(value)
++}
++
++func wordLike(value string) bool {
++	for _, r := range value {
++		if r == '_' || unicode.IsLetter(r) || unicode.IsNumber(r) || unicode.IsMark(r) {
++			return true
++		}
++	}
++	return false
++}
++
++func previousWord(value string, position int) int {
++	position = floorBoundary(value, position)
++	start, target := 0, 0
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		_, end := graphemes.Positions()
++		if !graphemes.IsWordBoundary() {
++			continue
++		}
++		if wordLike(value[start:end]) {
++			if start >= position {
++				break
++			}
++			target = start
++		}
++		start = end
++		if start >= position {
++			break
++		}
++	}
++	return target
++}
++
++func nextWord(value string, position int) int {
++	position = floorBoundary(value, position)
++	start := 0
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		_, end := graphemes.Positions()
++		if !graphemes.IsWordBoundary() {
++			continue
++		}
++		if start > position && wordLike(value[start:end]) {
++			return start
++		}
++		start = end
++	}
++	return len(value)
++}
++
++func byteAtCell(value string, offset, cell, width int) int {
++	offset = floorBoundary(value, offset)
++	if cell <= 0 || width <= 0 {
++		return offset
++	}
++	x := 0
++	graphemes := uniseg.NewGraphemes(value[offset:])
++	for graphemes.Next() {
++		from, to := graphemes.Positions()
++		from, to = from+offset, to+offset
++		cells := render.GraphemeWidth(graphemes.Str())
++		if cells == 0 {
++			continue
++		}
++		if x+cells > width {
++			return from
++		}
++		if cell < x+cells {
++			if cell-x >= (cells+1)/2 {
++				return to
++			}
++			return from
++		}
++		x += cells
++		if x >= width {
++			return to
++		}
++	}
++	return len(value)
++}
++
++func textCells(value string) int {
++	width := 0
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		width += render.GraphemeWidth(graphemes.Str())
++	}
++	return width
++}
+diff --git a/ui/textinput_test.go b/ui/textinput_test.go
+new file mode 100644
+index 0000000..dc15404
+--- /dev/null
++++ b/ui/textinput_test.go
+@@ -0,0 +1,245 @@
++package ui
++
++import (
++	"fmt"
++	"strings"
++	"testing"
++	"unicode/utf8"
++
++	lux "github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++	"github.com/rivo/uniseg"
++)
++
++func inputAction(next event.Event) Action {
++	return Action{Kind: Input, Event: next, Bounds: render.Rect{W: 20, H: 1}}
++}
++
++func TestTextInputSanitizesAndBoundsWholeGraphemes(t *testing.T) {
++	input := TextInput{MaxBytes: 4}
++	input.SetValue("a\u754cb")
++	if input.Value != "a\u754c" || input.Cursor != len(input.Value) || input.Anchor != input.Cursor {
++		t.Fatalf("bounded value = %#v", input)
++	}
++	input.MaxBytes = 0
++	input.SetValue("a\r\nb\tc\x1bd" + string([]byte{0xff}) + "z")
++	if want := "a b cd\uFFFDz"; input.Value != want || !utf8.ValidString(input.Value) {
++		t.Fatalf("sanitized = %q, want %q", input.Value, want)
++	}
++}
++
++func TestTextInputEditsByExtendedGrapheme(t *testing.T) {
++	value := "e\u0301\U0001F468\u200D\U0001F469\u200D\U0001F467\u200D\U0001F466\u754c"
++	input := TextInput{}
++	input.SetValue(value)
++	if !input.Apply(inputAction(event.KeyPress(event.KeyLeft, event.ModShift))) {
++		t.Fatal("shift-left did not change selection")
++	}
++	start, end := input.Selection()
++	if got := input.Value[start:end]; got != "\u754c" {
++		t.Fatalf("selection = %q", got)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyBackspace, 0)))
++	if input.Value != "e\u0301\U0001F468\u200D\U0001F469\u200D\U0001F467\u200D\U0001F466" {
++		t.Fatalf("selection delete = %q", input.Value)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyBackspace, 0)))
++	if input.Value != "e\u0301" {
++		t.Fatalf("ZWJ delete split cluster: %q", input.Value)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyBackspace, 0)))
++	if input.Value != "" || input.Cursor != 0 || input.Anchor != 0 {
++		t.Fatalf("combining delete = %#v", input)
++	}
++
++	input.SetValue("e")
++	input.Apply(inputAction(event.RuneKey('\u0301', 0)))
++	if input.Value != "e\u0301" || uniseg.GraphemeClusterCount(input.Value) != 1 || !textBoundary(input.Value, input.Cursor) {
++		t.Fatalf("combining insertion = %#v", input)
++	}
++}
++
++func TestTextInputSelectionWordAndReplacement(t *testing.T) {
++	input := TextInput{}
++	input.SetValue("hello, \u4E16\u754C next")
++	input.Cursor, input.Anchor = 0, 0
++	input.Apply(inputAction(event.KeyPress(event.KeyRight, event.ModCtrl)))
++	if input.Cursor != len("hello, ") {
++		t.Fatalf("ctrl-right cursor = %d", input.Cursor)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyLeft, event.ModCtrl|event.ModShift)))
++	start, end := input.Selection()
++	if start != 0 || end != len("hello, ") {
++		t.Fatalf("ctrl-shift selection = %d:%d", start, end)
++	}
++	input.Apply(inputAction(event.Event{Kind: event.Text, Text: "go"}))
++	if input.Value != "go\u4E16\u754C next" || input.Cursor != 2 || input.Anchor != 2 {
++		t.Fatalf("replacement = %#v", input)
++	}
++	input.Apply(inputAction(event.RuneKey('A', event.ModCtrl)))
++	start, end = input.Selection()
++	if start != 0 || end != len(input.Value) {
++		t.Fatalf("ctrl-a = %d:%d", start, end)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyDelete, 0)))
++	if input.Value != "" {
++		t.Fatalf("delete selection = %q", input.Value)
++	}
++}
++
++func TestTextInputPasteLimitDoesNotSplitOrDeleteOnReject(t *testing.T) {
++	input := TextInput{MaxBytes: 4}
++	input.SetValue("ab")
++	input.Cursor, input.Anchor = 0, len(input.Value)
++	if input.Apply(inputAction(event.Event{Kind: event.Paste, Text: "\U0001F468\u200D\U0001F469\u200D\U0001F467\u200D\U0001F466"})) {
++		t.Fatalf("oversize paste changed input: %#v", input)
++	}
++	input.Apply(inputAction(event.Event{Kind: event.Paste, Text: "\u754cx"}))
++	if input.Value != "\u754cx" || len(input.Value) != 4 {
++		t.Fatalf("bounded paste = %q", input.Value)
++	}
++}
++
++func TestTextInputMouseMapsWideCellsAndShiftExtends(t *testing.T) {
++	input := TextInput{}
++	input.SetValue("a\u754cb")
++	click := inputAction(event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}})
++	click.Bounds.W = 4
++	click.X = 1
++	input.Apply(click)
++	if input.Cursor != len("a") {
++		t.Fatalf("wide first cell cursor = %d", input.Cursor)
++	}
++	click.X = 2
++	input.Apply(click)
++	if input.Cursor != len("a\u754c") {
++		t.Fatalf("wide second cell cursor = %d", input.Cursor)
++	}
++	click.X = 0
++	click.Event.Mouse.Mod = event.ModShift
++	input.Apply(click)
++	start, end := input.Selection()
++	if start != 0 || end != len("a\u754c") {
++		t.Fatalf("shift click selection = %d:%d", start, end)
++	}
++}
++
++func TestContextInputScrollsPaintsCaretAndTinyWideValue(t *testing.T) {
++	buffer := render.NewBuffer(3, 1)
++	canvas := render.NewCanvas(buffer)
++	ctx := Context{focused: "field"}
++	input := TextInput{}
++	input.SetValue("ab\u754ccd")
++	ctx.Input("field", canvas, canvas.Bounds(), &input, InputStyle{})
++	if input.Offset != len("ab\u754c") {
++		t.Fatalf("offset = %d", input.Offset)
++	}
++	if got := buffer.Cell(0, 0).Grapheme + buffer.Cell(1, 0).Grapheme; got != "cd" {
++		t.Fatalf("viewport = %q", got)
++	}
++	if !buffer.Cell(2, 0).Style.Has(render.AttrReverse) {
++		t.Fatal("end caret was not painted")
++	}
++
++	tiny := render.NewBuffer(1, 1)
++	tinyCanvas := render.NewCanvas(tiny)
++	input.SetValue("\u754c")
++	input.Cursor, input.Anchor = 0, 0
++	ctx.Input("field", tinyCanvas, tinyCanvas.Bounds(), &input, InputStyle{})
++	cell := tiny.Cell(0, 0)
++	if cell.Grapheme != " " || cell.Width != 1 || !cell.Style.Has(render.AttrReverse) {
++		t.Fatalf("tiny wide caret = %#v", cell)
++	}
++}
++
++func TestContextInputPlaceholderAndInteractionModes(t *testing.T) {
++	buffer := render.NewBuffer(8, 1)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	ctx.Begin(frame)
++	var input TextInput
++	ctx.Input("read", canvas, canvas.Bounds(), &input, InputStyle{ReadOnly: true})
++	if len(ctx.building) != 1 || ctx.building[0].flags != Focusable {
++		t.Fatalf("read-only flags = %#v", ctx.building)
++	}
++	ctx.Input("off", canvas, canvas.Bounds(), &input, InputStyle{Disabled: true})
++	if len(ctx.building) != 2 || ctx.building[1].flags&Disabled == 0 || ctx.building[1].flags&Editable == 0 {
++		t.Fatalf("disabled flags = %#v", ctx.building)
++	}
++
++	ctx.focused = "hint"
++	input.Placeholder = "\u754c hint"
++	ctx.Input("hint", canvas, canvas.Bounds(), &input, InputStyle{})
++	if buffer.Cell(0, 0).Grapheme != "\u754c" || !buffer.Cell(0, 0).Style.Has(render.AttrDim) || !buffer.Cell(1, 0).IsContinuation() {
++		t.Fatalf("placeholder caret = %#v %#v", buffer.Cell(0, 0), buffer.Cell(1, 0))
++	}
++}
++
++func FuzzTextInputInvariants(f *testing.F) {
++	f.Add([]byte("e\u0301\U0001F468\u200D\U0001F469\u200D\U0001F467\u200D\U0001F466\u754c"), uint8(9), uint8(3), uint8(32), uint8(1))
++	f.Add([]byte{0xff, '\r', '\n', '\t', 0x1b}, uint8(255), uint8(0), uint8(4), uint8(4))
++	f.Fuzz(func(t *testing.T, raw []byte, cursor, anchor, limit, operation uint8) {
++		input := TextInput{Value: string(raw), Cursor: int(cursor), Anchor: int(anchor), Offset: int(anchor), MaxBytes: int(limit)}
++		action := inputAction(event.KeyPress(event.KeyLeft, event.ModShift))
++		switch operation % 6 {
++		case 0:
++			action.Event = event.KeyPress(event.KeyBackspace, 0)
++		case 1:
++			action.Event = event.KeyPress(event.KeyDelete, 0)
++		case 2:
++			action.Event = event.Event{Kind: event.Text, Text: string(raw)}
++		case 3:
++			action.Event = event.Event{Kind: event.Paste, Text: string(raw)}
++		case 4:
++			action.Event = event.KeyPress(event.KeyRight, event.ModCtrl|event.ModShift)
++		case 5:
++			action.Event = event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}}
++			action.X, action.Bounds.W = int(cursor%16), int(anchor%16)
++		}
++		input.Apply(action)
++		buffer := render.NewBuffer(int(anchor%16), 1)
++		var ctx Context
++		ctx.Input("fuzz", render.NewCanvas(buffer), buffer.Bounds(), &input, InputStyle{})
++		if !utf8.ValidString(input.Value) || input.MaxBytes > 0 && len(input.Value) > input.MaxBytes {
++			t.Fatalf("invalid bounded value: %#v", input)
++		}
++		for _, position := range []int{input.Cursor, input.Anchor, input.Offset} {
++			if !textBoundary(input.Value, position) {
++				t.Fatalf("offset %d is not a grapheme boundary in %q", position, input.Value)
++			}
++		}
++	})
++}
++
++func BenchmarkTextInput(b *testing.B) {
++	for _, size := range []int{32, 1024, 64 << 10} {
++		b.Run(fmt.Sprint(size), func(b *testing.B) {
++			value := strings.Repeat("ab界🙂", max(size/10, 1))
++			var input TextInput
++			input.SetValue(value)
++			action := inputAction(event.KeyPress(event.KeyLeft, event.ModCtrl))
++			b.ReportAllocs()
++			b.ResetTimer()
++			for range b.N {
++				input.Cursor, input.Anchor = len(input.Value), len(input.Value)
++				input.Apply(action)
++			}
++		})
++	}
++}
++
++func textBoundary(value string, position int) bool {
++	if position == 0 || position == len(value) {
++		return true
++	}
++	graphemes := uniseg.NewGraphemes(value)
++	for graphemes.Next() {
++		from, to := graphemes.Positions()
++		if position == from || position == to {
++			return true
++		}
++	}
++	return false
++}
