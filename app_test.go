@@ -208,6 +208,26 @@ func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
 	}
 }
 
+type callbackPanicModel struct{}
+
+func (callbackPanicModel) Update(event.Event) Command { return nil }
+func (callbackPanicModel) View(frame *Frame) {
+	frame.OnPresented(func() { panic("callback boom") })
+}
+
+func TestPresentationCallbackPanicReturnsErrorAndRestores(t *testing.T) {
+	backend := newFakeBackend(10, 3)
+	err := Run(context.Background(), callbackPanicModel{}, WithBackend(backend))
+	if err == nil || !strings.Contains(err.Error(), "presentation callback panic: callback boom") {
+		t.Fatalf("error = %v", err)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if !backend.closed {
+		t.Fatal("backend was not restored")
+	}
+}
+
 type blockingBackend struct {
 	*fakeBackend
 	started chan struct{}

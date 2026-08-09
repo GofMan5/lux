@@ -247,7 +247,17 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 	presented := make(chan presentResult, 3)
 	writerDone := make(chan struct{})
 	go func() {
-		defer close(writerDone)
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				err := fmt.Errorf("lux: presentation callback panic: %v\n%s", recovered, debug.Stack())
+				cancel(err)
+				select {
+				case presented <- presentResult{err: err}:
+				default:
+				}
+			}
+			close(writerDone)
+		}()
 		for {
 			var next *surface
 			select {
@@ -262,6 +272,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 					callback()
 				}
 			}
+			clear(next.presented)
 			next.presented = next.presented[:0]
 			select {
 			case presented <- presentResult{surface: next, duration: time.Since(started), err: err}:
@@ -371,6 +382,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			}
 			current.resize(width, height)
 			current.buffer.Reset()
+			clear(current.presented)
 			current.presented = current.presented[:0]
 			delta := time.Duration(0)
 			if !lastFrame.IsZero() {
