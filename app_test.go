@@ -284,6 +284,15 @@ func TestRunRestoresAfterModelPanic(t *testing.T) {
 	}
 }
 
+func TestRunJoinsPanicAndFirstCloseError(t *testing.T) {
+	restoreErr := errors.New("restore failed")
+	backend := &closeErrorBackend{fakeBackend: newFakeBackend(10, 3), err: restoreErr}
+	err := Run(context.Background(), panicModel{}, WithBackend(backend))
+	if err == nil || !strings.Contains(err.Error(), "model panic: boom") || !errors.Is(err, restoreErr) {
+		t.Fatalf("combined error = %v", err)
+	}
+}
+
 type closeErrorBackend struct {
 	*fakeBackend
 	err  error

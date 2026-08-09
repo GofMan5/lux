@@ -180,18 +180,20 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 		return err
 	}
 	closed := false
+	var closeErr error
 	closeBackend := func() error {
 		if closed {
-			return nil
+			return closeErr
 		}
 		closed = true
-		return settings.backend.Close()
+		closeErr = settings.backend.Close()
+		return closeErr
 	}
-	defer func() { result = errors.Join(result, closeBackend()) }()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			result = fmt.Errorf("lux: model panic: %v\n%s", recovered, debug.Stack())
 		}
+		result = errors.Join(result, closeBackend())
 	}()
 	return run(runCtx, cancel, model, settings, features, closeBackend)
 }
