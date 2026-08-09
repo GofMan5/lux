@@ -38,6 +38,12 @@ type showcase struct {
 	name          ui.TextInput
 	scenes        ui.ListState
 	showHelp      bool
+	observe       chan showcaseState
+}
+
+type showcaseState struct {
+	name     string
+	showHelp bool
 }
 
 func newShowcase() *showcase {
@@ -132,6 +138,12 @@ func (app *showcase) View(frame *lux.Frame) {
 	canvas.Text(max((area.W-render.TextWidth(footer))/2, 0), max(area.H-1, 0), footer, render.Style{Foreground: muted})
 	if frame.Capabilities.Interactive && !app.paused && !frame.ReducedMotion {
 		frame.RequestFrame()
+	}
+	if app.observe != nil {
+		select {
+		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp}:
+		default:
+		}
 	}
 }
 

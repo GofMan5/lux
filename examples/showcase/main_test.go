@@ -1,9 +1,15 @@
 package main
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/lux-tui/lux"
+	"github.com/lux-tui/lux/capability"
 	"github.com/lux-tui/lux/event"
+	"github.com/lux-tui/lux/render"
 	"github.com/lux-tui/lux/ui"
 )
 
@@ -22,5 +28,100 @@ func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
 	}
 	if command := app.Update(event.RuneKey('Q', event.ModCtrl)); command == nil {
 		t.Fatal("Ctrl+Q did not request quit")
+	}
+}
+
+type interactiveBackend struct {
+	events chan event.Event
+	frames chan *render.Buffer
+	once   sync.Once
+}
+
+func (b *interactiveBackend) Open(context.Context) (capability.Set, error) {
+	return capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}, nil
+}
+func (b *interactiveBackend) NextEvent(ctx context.Context) (event.Event, error) {
+	select {
+	case next := <-b.events:
+		return next, nil
+	case <-ctx.Done():
+		return event.Event{}, ctx.Err()
+	}
+}
+func (b *interactiveBackend) Present(_ context.Context, frame *render.Buffer) error {
+	select {
+	case b.frames <- frame.Clone():
+	default:
+	}
+	return nil
+}
+func (*interactiveBackend) Size() (int, int, error) { return 120, 36, nil }
+func (*interactiveBackend) Close() error            { return nil }
+
+func TestShowcaseEndToEndInputAndModal(t *testing.T) {
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newShowcase()
+	app.observe = make(chan showcaseState, 32)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	waitFrame(t, backend.frames)
+	waitState(t, app.observe)
+	// Focus starts on TextInput; committed Unicode text must reach the editor.
+	backend.events <- event.RuneKey('界', 0)
+	state := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.name != "LUX explorer" })
+	if state.name != "LUX explorer界" {
+		t.Fatalf("name = %q", state.name)
+	}
+	backend.events <- event.KeyPress(event.KeyF1, 0)
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.showHelp })
+	waitFrame(t, backend.frames)
+	// Wait until the modal hit/focus snapshot, not merely its pixels, is live.
+	time.Sleep(10 * time.Millisecond)
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return !state.showHelp })
+	backend.events <- event.RuneKey('q', event.ModCtrl)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("showcase did not quit")
+	}
+}
+
+func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
+	t.Helper()
+	select {
+	case state := <-states:
+		return state
+	case <-time.After(2 * time.Second):
+		t.Fatal("state timeout")
+		return showcaseState{}
+	}
+}
+
+func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showcaseState) bool) showcaseState {
+	t.Helper()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case state := <-states:
+			if match(state) {
+				return state
+			}
+		case <-deadline:
+			t.Fatal("matching state timeout")
+			return showcaseState{}
+		}
+	}
+}
+
+func waitFrame(t *testing.T, frames <-chan *render.Buffer) {
+	t.Helper()
+	select {
+	case <-frames:
+	case <-time.After(2 * time.Second):
+		t.Fatal("frame timeout")
 	}
 }

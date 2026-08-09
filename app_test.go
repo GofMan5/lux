@@ -188,6 +188,20 @@ func TestOfferLatestKeepsNewest(t *testing.T) {
 	}
 }
 
+func TestDroppedSurfaceCallbacksAreReleased(t *testing.T) {
+	queue := make(chan *surface, 1)
+	stale := newSurface(1, 1)
+	stale.presented = append(stale.presented, func() {})
+	queue <- stale
+	latest := newSurface(1, 1)
+	recycled := offerLatest(queue, latest)
+	clear(recycled.presented)
+	recycled.presented = recycled.presented[:0]
+	if len(recycled.presented) != 0 || cap(recycled.presented) > 0 && recycled.presented[:cap(recycled.presented)][0] != nil {
+		t.Fatal("dropped callback remained reachable")
+	}
+}
+
 func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
 	frame := &Frame{}
 	called := 0

@@ -414,6 +414,8 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			}
 			if recycled != nil {
 				dropped++
+				clear(recycled.presented)
+				recycled.presented = recycled.presented[:0]
 				current = recycled
 				continue
 			}
