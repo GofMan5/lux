@@ -84,4 +84,3 @@ Accessed 2026-08-09:
 - WAI focus and keyboard principles (semantic reference, not a VT claim):
   <https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/>
 - OSC 52 clipboard security context: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html>
-
