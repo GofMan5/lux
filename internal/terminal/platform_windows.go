@@ -27,6 +27,21 @@ func enableVT(file *os.File) (func() error, error) {
 	return func() error { return windows.SetConsoleMode(handle, mode) }, nil
 }
 
+func duplicateFile(file *os.File, name string) (*os.File, error) {
+	if file == nil {
+		return nil, nil
+	}
+	process, err := windows.GetCurrentProcess()
+	if err != nil {
+		return nil, err
+	}
+	var duplicate windows.Handle
+	if err := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(duplicate), name), nil
+}
+
 func terminalSize(file *os.File) (int, int, error) { return term.GetSize(int(file.Fd())) }
 
 var errReadTimeout = errors.New("terminal: read timeout")

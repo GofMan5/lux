@@ -70,13 +70,13 @@ func (app *showcase) View(frame *lux.Frame) {
 		canvas.Text(0, 0, "LUX TUI - enlarge terminal", render.Style{Foreground: violet, Attrs: render.AttrBold})
 		return
 	case layout.Compact:
-		app.drawHeader(canvas, area)
+		app.drawHeader(canvas, area, frame.Capabilities.Unicode)
 		viewport := render.Rect{X: 1, Y: 3, W: max(area.W-2, 1), H: max(area.H-5, 1)}
 		app.drawScene(frame, viewport)
 	default:
 		header, body := area.SplitTop(3)
 		body.H = max(body.H-2, 0)
-		app.drawHeader(canvas, header)
+		app.drawHeader(canvas, header, frame.Capabilities.Unicode)
 		panels := layout.Flex(app.panels[:], body.Inset(1, 0), layout.Horizontal, 2,
 			layout.Constraint{Basis: 29, Min: 23, Max: 38, Grow: 1, Shrink: 1},
 			layout.Constraint{Basis: 70, Min: 28, Grow: 3, Shrink: 2},
@@ -91,13 +91,20 @@ func (app *showcase) View(frame *lux.Frame) {
 	}
 }
 
-func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect) {
+func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect, unicode bool) {
 	style := render.Style{Foreground: violet, Attrs: render.AttrBold}
-	canvas.Text(2, area.Y, "LUX", style)
-	canvas.Text(6, area.Y, "TUI", render.Style{Foreground: ink, Attrs: render.AttrBold})
-	canvas.Text(2, area.Y+1, "terminal graphics, without the weight", render.Style{Foreground: muted})
+	name, tagline := "LUX", "terminal graphics, without the weight"
+	if !unicode {
+		name, tagline = "LUX TUI", "fast terminal graphics"
+	}
+	canvas.Text(2, area.Y, name, style)
+	if name == "LUX" {
+		canvas.Text(6, area.Y, "TUI", render.Style{Foreground: ink, Attrs: render.AttrBold})
+	}
+	canvas.Text(2, area.Y+1, tagline, render.Style{Foreground: muted})
 	if area.W > 55 {
-		canvas.Text(area.W-22, area.Y, "● LIVE / CELL ENGINE", render.Style{Foreground: cyan, Attrs: render.AttrBold})
+		status := "* LIVE / CELL ENGINE"
+		canvas.Text(area.W-22, area.Y, status, render.Style{Foreground: cyan, Attrs: render.AttrBold})
 	}
 }
 

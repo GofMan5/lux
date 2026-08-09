@@ -40,4 +40,4 @@ type Set struct {
 }
 
 // Portable returns conservative features suitable for redirected output.
-func Portable() Set { return Set{Terminal: "dumb", Unicode: true, Color: Monochrome} }
+func Portable() Set { return Set{Terminal: "dumb", Color: Monochrome} }

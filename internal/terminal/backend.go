@@ -27,6 +27,7 @@ const (
 type Backend struct {
 	input  *os.File
 	output *os.File
+	writer *os.File
 
 	mu           sync.Mutex
 	writeMu      sync.Mutex
@@ -66,6 +67,11 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	}
 	b.plain = b.output == nil || os.Getenv("TERM") == "dumb" || !isTerminal(b.output)
 	if b.plain {
+		writer, err := duplicateFile(b.output, "lux-tui-output")
+		if err != nil && b.output != nil {
+			return capability.Set{}, err
+		}
+		b.writer = writer
 		b.features = capability.Portable()
 		b.events = make(chan event.Event, 64)
 		b.opened = true
@@ -86,11 +92,21 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 		return capability.Set{}, err
 	}
 	b.restoreVT = restoreVT
+	writer, err := duplicateFile(b.output, "lux-tui-output")
+	if err != nil {
+		_ = term.Restore(int(b.input.Fd()), b.state)
+		_ = b.restoreVT()
+		b.state, b.restoreVT = nil, nil
+		return capability.Set{}, err
+	}
+	b.writer = writer
 	b.synchronized = syncOutputConfigured()
 	b.features = detectCapabilities(b.synchronized)
 	b.opened = true
 	if err := writeAll(b.output, []byte(enterTerminal)); err != nil {
-		_ = writeAll(b.output, []byte(leaveTerminal))
+		_ = writeAll(b.writer, []byte(leaveTerminal))
+		_ = b.writer.Close()
+		b.writer = nil
 		_ = term.Restore(int(b.input.Fd()), b.state)
 		if b.restoreVT != nil {
 			_ = b.restoreVT()
@@ -172,11 +188,11 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		b.mu.Unlock()
 		return errors.New("terminal: backend is not open")
 	}
-	if b.output == nil {
+	if b.writer == nil {
 		b.mu.Unlock()
 		return errors.New("terminal: nil output")
 	}
-	output, plain, synchronized, features, previous := b.output, b.plain, b.synchronized, b.features, b.previous
+	output, plain, synchronized, features, previous := b.writer, b.plain, b.synchronized, b.features, b.previous
 	b.mu.Unlock()
 	var data []byte
 	if plain {
@@ -223,7 +239,8 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, output, input, state, restoreVT := b.plain, b.output, b.input, b.state, b.restoreVT
+	plain, output, writer, input, state, restoreVT := b.plain, b.output, b.writer, b.input, b.state, b.restoreVT
+	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
 	b.previous = nil
@@ -233,6 +250,9 @@ func (b *Backend) Close() error {
 	if cancel != nil {
 		cancel()
 		cancelRead(input)
+	}
+	if writer != nil {
+		_ = writer.Close()
 	}
 	b.writeMu.Lock()
 	defer b.writeMu.Unlock()

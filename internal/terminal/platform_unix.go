@@ -17,6 +17,17 @@ import (
 
 func enableVT(*os.File) (func() error, error) { return nil, nil }
 
+func duplicateFile(file *os.File, name string) (*os.File, error) {
+	if file == nil {
+		return nil, nil
+	}
+	fd, err := unix.Dup(int(file.Fd()))
+	if err != nil {
+		return nil, err
+	}
+	return os.NewFile(uintptr(fd), name), nil
+}
+
 func terminalSize(file *os.File) (int, int, error) { return term.GetSize(int(file.Fd())) }
 
 var errReadTimeout = errors.New("terminal: read timeout")

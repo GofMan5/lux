@@ -62,7 +62,8 @@ func Flex(into []render.Rect, area render.Rect, axis Axis, gap int, items ...Con
 	}
 	available = max(available, 0)
 	if len(items) > 1 {
-		gap = min(gap, available/(len(items)-1))
+		// Reserve a cell per child before spending scarce space on decoration.
+		gap = min(gap, max(available-len(items), 0)/(len(items)-1))
 	}
 	available = max(available-gap*(len(items)-1), 0)
 	used := 0

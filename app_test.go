@@ -283,3 +283,22 @@ func TestRunRestoresAfterModelPanic(t *testing.T) {
 		t.Fatal("backend was not closed after model panic")
 	}
 }
+
+type closeErrorBackend struct {
+	*fakeBackend
+	err error
+}
+
+func (b *closeErrorBackend) Close() error {
+	_ = b.fakeBackend.Close()
+	return b.err
+}
+
+func TestRunReturnsFirstCloseError(t *testing.T) {
+	restoreErr := errors.New("restore failed")
+	backend := &closeErrorBackend{fakeBackend: newFakeBackend(10, 3), err: restoreErr}
+	model := &testModel{quitOn: event.Resize}
+	if err := Run(context.Background(), model, WithBackend(backend)); !errors.Is(err, restoreErr) {
+		t.Fatalf("close error = %v", err)
+	}
+}
