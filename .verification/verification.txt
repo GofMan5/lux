@@ -1,0 +1,46 @@
+LUX TUI verification record
+UTC: 2026-08-09T03:39:35.8993130Z
+Baseline: 3f33aae4eb2086a33c2a036711afb4b4ccf7af87
+Modified: 43a377bd26647a8d58e2ecd50c6360031b87fc0e
+
+Baseline command:
+  git switch --detach 3f33aae; go test ./...
+Baseline literal result:
+  no Go module/packages existed (empty baseline); command not applicable
+Baseline status: N/A
+
+Modified commands and literal results:
+  go test -count=1 ./...
+  PASS: all packages
+  exit status: 0
+
+  go test -race -count=1 ./...
+  PASS: all packages
+  exit status: 0
+
+  go vet ./...
+  output: <empty>
+  exit status: 0
+
+  go mod verify
+  output: all modules verified
+  exit status: 0
+
+  git diff --check
+  output: <empty>
+  exit status: 0
+
+  GOOS=linux GOARCH=amd64 go build ./examples/showcase
+  exit status: 0
+
+  GOOS=windows GOARCH=amd64 go build ./examples/showcase
+  exit status: 0
+
+Benchmarks (Windows amd64, Intel i5-10400F, Go 1.25.5):
+  Canvas 120x40: 778718 ns/op, 0 allocs/op
+  unchanged diff 160x50: 53790 ns/op, 0 allocs/op
+  scene3d 80x24: 220345 ns/op, 0 allocs/op
+  scene3d 160x48: 826701 ns/op, 0 allocs/op
+
+Rollback:
+  powershell -NoProfile -ExecutionPolicy Bypass -File .verification/rollback.ps1
