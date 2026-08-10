@@ -37,13 +37,35 @@ type showcase struct {
 	ui            ui.Context
 	name          ui.TextInput
 	scenes        ui.ListState
+	logs          ui.ScrollState
 	showHelp      bool
 	observe       chan showcaseState
+	clipboard     memoryClipboard
 }
 
 type showcaseState struct {
 	name     string
 	showHelp bool
+}
+
+// memoryClipboard demonstrates the explicit port without touching the host
+// clipboard or emitting OSC 52. Production applications inject their own
+// bounded, consent-aware adapter.
+type memoryClipboard struct{ text string }
+
+func (c *memoryClipboard) Read(ctx context.Context) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return c.text, nil
+}
+
+func (c *memoryClipboard) Write(ctx context.Context, text string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	c.text = text
+	return nil
 }
 
 func newShowcase() *showcase {
@@ -53,15 +75,6 @@ func newShowcase() *showcase {
 }
 
 func (app *showcase) Update(next event.Event) lux.Command {
-	if next.Kind == event.Key {
-		if next.Key.Code == event.KeyF1 {
-			app.showHelp = true
-			return nil
-		}
-		if next.Key.Code == event.KeyRune && next.Key.Mod&event.ModCtrl != 0 && (next.Key.Rune == 'q' || next.Key.Rune == 'Q') {
-			return lux.Quit()
-		}
-	}
 	if action, handled := app.ui.Handle(next); handled {
 		switch action.Target {
 		case "pause":
@@ -70,6 +83,12 @@ func (app *showcase) Update(next event.Event) lux.Command {
 			}
 		case "name":
 			app.name.Apply(action)
+		case "name-copy":
+			_ = app.name.Copy(context.Background(), &app.clipboard)
+		case "name-cut":
+			_ = app.name.Cut(context.Background(), &app.clipboard)
+		case "name-paste":
+			_ = app.name.Paste(context.Background(), &app.clipboard)
 		case "scenes":
 			_, _ = app.scenes.Apply(action, len(sceneNames), max(action.Bounds.H, 1))
 		case "help":
@@ -80,6 +99,10 @@ func (app *showcase) Update(next event.Event) lux.Command {
 			if action.Kind == ui.Dismiss || action.Kind == ui.Activate {
 				app.showHelp = false
 			}
+		case "quit":
+			return lux.Quit()
+		case "logs":
+			app.logs.Apply(action, virtualLogCount, max(action.Bounds.H, 1))
 		}
 		return nil
 	}
@@ -109,6 +132,9 @@ func (app *showcase) View(frame *lux.Frame) {
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
 	defer app.ui.End(frame)
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "help", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'q', Mod: event.ModCtrl}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'Q', Mod: event.ModCtrl}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 
 	switch layout.Classify(area) {
 	case layout.Tiny:
@@ -119,6 +145,11 @@ func (app *showcase) View(frame *lux.Frame) {
 		toolbar := render.Rect{X: 1, Y: 3, W: max(area.W-2, 1), H: 3}
 		app.drawToolbar(canvas, toolbar)
 		viewport := render.Rect{X: 1, Y: 6, W: max(area.W-2, 1), H: max(area.H-8, 1)}
+		if viewport.H >= 8 {
+			logHeight := min(4, max(viewport.H/3, 2))
+			app.drawVirtualLog(canvas, render.Rect{X: viewport.X, Y: viewport.Bottom() - logHeight, W: viewport.W, H: logHeight})
+			viewport.H -= logHeight + 1
+		}
 		app.drawScene(frame, viewport)
 	default:
 		header, body := area.SplitTop(3)
@@ -149,11 +180,25 @@ func (app *showcase) View(frame *lux.Frame) {
 
 var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matrix", "Calm orbit"}
 
+const virtualLogCount = 1_000_000
+
 func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
 	buttonWidth := min(14, max(area.W/3, 6))
 	app.ui.Button("pause", canvas, render.Rect{X: area.X, Y: area.Y, W: buttonWidth, H: min(area.H, 3)}, pauseLabel(app.paused), buttonStyle())
 	if area.W > buttonWidth+8 {
 		app.ui.Button("help", canvas, render.Rect{X: area.Right() - 8, Y: area.Y, W: 8, H: min(area.H, 3)}, "Help", buttonStyle())
+	}
+}
+
+func (app *showcase) drawVirtualLog(canvas *render.Canvas, area render.Rect) {
+	if area.Empty() {
+		return
+	}
+	canvas.Fill(area, " ", render.Style{Background: background})
+	view := app.ui.ScrollViewport("logs", canvas, area, &app.logs, virtualLogCount, ui.ScrollStyle{})
+	visible := app.logs.Range(virtualLogCount, area.H)
+	for index := visible.First; index < visible.Last; index++ {
+		view.Text(0, index-visible.First, fmt.Sprintf("%06d event ready", index+1), render.Style{Foreground: muted, Background: background})
 	}
 }
 
@@ -170,14 +215,31 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 		canvas.Text(inner.X, y, "Project name", render.Style{Foreground: muted, Background: panel})
 		y++
 		app.ui.Input("name", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: 1}, &app.name, inputStyle())
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}, Owner: "name", Target: "name-copy", Kind: ui.Activate, Scope: ui.ScopeFocused})
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Mod: event.ModCtrl}, Owner: "name", Target: "name-cut", Kind: ui.Activate, Scope: ui.ScopeFocused})
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'v', Mod: event.ModCtrl}, Owner: "name", Target: "name-paste", Kind: ui.Activate, Scope: ui.ScopeFocused})
 		y += 2
 	}
-	listHeight := max(inner.Bottom()-y-4, 0)
+	available := max(inner.Bottom()-y, 0)
+	// Reserve the virtual viewport and primary actions before letting the small
+	// scene list consume remaining height.
+	reserved := 0
+	if available >= 10 {
+		reserved = 8
+	}
+	listHeight := min(max(available-reserved-1, 0), 5)
 	if listHeight > 0 {
 		canvas.Text(inner.X, y, "Scene", render.Style{Foreground: muted, Background: panel})
 		y++
 		app.ui.List("scenes", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: listHeight}, &app.scenes, sceneNames, listStyle())
 		y += listHeight + 1
+	}
+	logHeight := min(max(inner.Bottom()-y-4, 0), 4)
+	if logHeight > 0 {
+		canvas.Text(inner.X, y, "Virtual log (1M)", render.Style{Foreground: muted, Background: panel})
+		y++
+		app.drawVirtualLog(canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: logHeight})
+		y += logHeight + 1
 	}
 	if y+2 < inner.Bottom() {
 		app.ui.Button("pause", canvas, render.Rect{X: inner.X, Y: y, W: min(inner.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
@@ -193,7 +255,7 @@ func (app *showcase) drawHelp(canvas *render.Canvas, area render.Rect) {
 	rect := render.Rect{X: max((area.W-width)/2, 0), Y: max((area.H-height)/2, 0), W: width, H: height}
 	inner := app.ui.Modal("help-modal", canvas, rect, "Interactive controls", ui.ModalStyle{Panel: render.Style{Background: panel}, Border: render.Style{Foreground: violet, Background: panel}, Title: render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold}})
 	if inner != nil {
-		lines := []string{"Tab / Shift+Tab  move focus", "Enter / Space     activate", "Arrows / wheel    select scene", "Type / paste       edit project name", "Esc / outside      close this dialog", "Ctrl+Q             quit application"}
+		lines := []string{"Tab / Shift+Tab  move focus", "Enter / Space     activate", "Arrows / wheel    select or scroll", "Type / paste       edit project name", "Ctrl+Z / Shift+Z  undo / redo", "Esc / outside      close this dialog", "Ctrl+Q             quit application"}
 		for index, line := range lines {
 			if index >= inner.Bounds().H-4 {
 				break

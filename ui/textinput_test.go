@@ -88,6 +88,110 @@ func TestTextInputSelectionWordAndReplacement(t *testing.T) {
 	}
 }
 
+func TestTextInputUndoRedoAndInvalidation(t *testing.T) {
+	var input TextInput
+	input.SetValue("a")
+	input.Apply(inputAction(event.RuneKey('b', 0)))
+	input.Apply(inputAction(event.RuneKey('c', 0)))
+	if !input.Apply(inputAction(event.RuneKey('z', event.ModCtrl))) || input.Value != "ab" {
+		t.Fatalf("undo = %#v", input)
+	}
+	if !input.Apply(inputAction(event.RuneKey('z', event.ModCtrl|event.ModShift))) || input.Value != "abc" {
+		t.Fatalf("shift redo = %#v", input)
+	}
+	input.Undo()
+	input.Apply(inputAction(event.RuneKey('x', 0)))
+	if input.Redo() || input.Value != "abx" {
+		t.Fatalf("redo survived branch = %#v", input)
+	}
+	input.Apply(inputAction(event.KeyPress(event.KeyLeft, 0)))
+	if !input.Undo() || input.Value != "ab" {
+		t.Fatalf("navigation entered history = %#v", input)
+	}
+	input.SetValue("reset")
+	if input.Undo() || input.Redo() {
+		t.Fatal("SetValue did not reset history")
+	}
+}
+
+func TestTextInputUndoBoundsAndDisable(t *testing.T) {
+	input := TextInput{UndoBytes: 2}
+	input.SetValue("a")
+	input.Apply(inputAction(event.RuneKey('b', 0))) // snapshot "a"
+	input.Apply(inputAction(event.RuneKey('c', 0))) // snapshot "ab", evicts "a"
+	input.Apply(inputAction(event.RuneKey('d', 0))) // snapshot "abc" cannot fit, clears
+	if input.Undo() {
+		t.Fatal("oversize snapshot was retained")
+	}
+	input.UndoBytes = -1
+	input.Apply(inputAction(event.RuneKey('e', 0)))
+	if input.Undo() {
+		t.Fatal("negative UndoBytes retained history")
+	}
+}
+
+func TestUndoRedoRespectChangedMaxBytes(t *testing.T) {
+	var input TextInput
+	input.SetValue("abc")
+	input.Apply(inputAction(event.RuneKey('d', 0)))
+	input.MaxBytes = 1
+	if !input.Undo() || input.Value != "a" || len(input.Value) > input.MaxBytes || !textBoundary(input.Value, input.Cursor) {
+		t.Fatalf("bounded undo = %#v", input)
+	}
+	if !input.Redo() || input.Value != "a" || len(input.Value) > input.MaxBytes {
+		t.Fatalf("bounded redo = %#v", input)
+	}
+}
+
+func TestTextInputUndoRestoresSelectionNotViewport(t *testing.T) {
+	var input TextInput
+	input.SetValue("abcdef")
+	input.Cursor, input.Anchor, input.Offset = 4, 1, 1
+	input.ReplaceSelection("X")
+	input.Offset = 0
+	if !input.Undo() || input.Value != "abcdef" || input.Cursor != 4 || input.Anchor != 1 || input.Offset != 0 {
+		t.Fatalf("restored state = %#v", input)
+	}
+}
+
+func TestTextInputRejectedEditDoesNotInvalidateRedo(t *testing.T) {
+	input := TextInput{MaxBytes: 1}
+	input.SetValue("a")
+	input.Cursor, input.Anchor = 0, len(input.Value)
+	input.ReplaceSelection("b")
+	input.Undo()
+	if input.ReplaceSelection("\U0001f642") {
+		t.Fatal("oversize edit was accepted")
+	}
+	if !input.Redo() || input.Value != "b" {
+		t.Fatalf("rejected edit invalidated redo: %#v", input)
+	}
+}
+
+func TestTextInputReplaceSelectionAndWordDelete(t *testing.T) {
+	input := TextInput{}
+	input.SetValue("go e\u0301lan, \u4e16\u754c next")
+	input.Cursor, input.Anchor = len("go e\u0301lan"), len("go ")
+	if got := input.SelectedText(); got != "e\u0301lan" {
+		t.Fatalf("selection = %q", got)
+	}
+	if !input.ReplaceSelection("\U0001f642") || input.Value != "go \U0001f642, \u4e16\u754c next" {
+		t.Fatalf("replace = %#v", input)
+	}
+	input.Apply(inputAction(event.KeyPress(event.KeyBackspace, event.ModCtrl)))
+	if input.Value != ", \u4e16\u754c next" || !textBoundary(input.Value, input.Cursor) {
+		t.Fatalf("ctrl-backspace = %#v", input)
+	}
+	input.Cursor, input.Anchor = len(", "), len(", ")
+	input.Apply(inputAction(event.KeyPress(event.KeyDelete, event.ModCtrl)))
+	if input.Value != ", \u754c next" || !textBoundary(input.Value, input.Cursor) {
+		t.Fatalf("ctrl-delete = %#v", input)
+	}
+	if !input.Undo() || input.Value != ", \u4e16\u754c next" {
+		t.Fatalf("word delete undo = %#v", input)
+	}
+}
+
 func TestTextInputPasteLimitDoesNotSplitOrDeleteOnReject(t *testing.T) {
 	input := TextInput{MaxBytes: 4}
 	input.SetValue("ab")

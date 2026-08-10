@@ -18,8 +18,21 @@ type TextInput struct {
 	Cursor      int
 	Anchor      int
 	MaxBytes    int
+	UndoBytes   int
 	Offset      int
 	Placeholder string
+
+	undo      []textInputSnapshot
+	redo      []textInputSnapshot
+	undoBytes int
+	redoBytes int
+}
+
+const defaultUndoBytes = 64 << 10
+
+type textInputSnapshot struct {
+	value          string
+	cursor, anchor int
 }
 
 // InputStyle controls painting and whether a field accepts interaction. Zero
@@ -42,6 +55,7 @@ func (t *TextInput) SetValue(value string) {
 	}
 	t.Value = limitText(sanitizeInput(value), t.MaxBytes)
 	t.Cursor, t.Anchor, t.Offset = len(t.Value), len(t.Value), 0
+	t.clearHistory()
 }
 
 // Selection returns the ordered half-open selected byte range. Equal values
@@ -57,6 +71,72 @@ func (t *TextInput) Selection() (start, end int) {
 	return t.Anchor, t.Cursor
 }
 
+// SelectedText returns a detached copy of the selected text.
+func (t *TextInput) SelectedText() string {
+	if t == nil {
+		return ""
+	}
+	start, end := t.Selection()
+	return strings.Clone(t.Value[start:end])
+}
+
+// ReplaceSelection replaces the selection as one undoable edit. An empty
+// value deletes the selection.
+func (t *TextInput) ReplaceSelection(value string) bool {
+	if t == nil {
+		return false
+	}
+	t.normalize()
+	t.prepareHistory()
+	before := t.snapshot()
+	state := t.state()
+	deleteSelection := value == ""
+	value = sanitizeInput(value)
+	if value == "" && !deleteSelection {
+		return state.changed(t)
+	}
+	if deleteSelection {
+		start, end := t.selection()
+		t.remove(start, end)
+	} else {
+		t.insert(value)
+	}
+	t.recordEdit(before)
+	return state.changed(t)
+}
+
+// Undo restores the last value-changing edit.
+func (t *TextInput) Undo() bool {
+	if t == nil {
+		return false
+	}
+	t.normalize()
+	t.prepareHistory()
+	previous, ok := t.popHistory(&t.undo, &t.undoBytes)
+	if !ok {
+		return false
+	}
+	t.pushHistory(&t.redo, &t.redoBytes, t.snapshot())
+	t.restore(previous)
+	return true
+}
+
+// Redo reapplies the last undone edit.
+func (t *TextInput) Redo() bool {
+	if t == nil {
+		return false
+	}
+	t.normalize()
+	t.prepareHistory()
+	next, ok := t.popHistory(&t.redo, &t.redoBytes)
+	if !ok {
+		return false
+	}
+	t.pushHistory(&t.undo, &t.undoBytes, t.snapshot())
+	t.restore(next)
+	return true
+}
+
 // Apply applies one routed Input action and reports whether editable state
 // changed. It accepts committed text, bounded paste, navigation, deletion,
 // Ctrl+A, Ctrl+Left/Right UAX #29 word movement, and local mouse placement.
@@ -64,8 +144,15 @@ func (t *TextInput) Apply(action Action) bool {
 	if t == nil || action.Kind != Input {
 		return false
 	}
-	before := *t
+	original := t.state()
 	t.normalize()
+	t.prepareHistory()
+	if action.Event.Kind == event.Key {
+		if handled, changed := t.applyHistoryKey(action.Event.Key); handled {
+			return changed || original.changed(t)
+		}
+	}
+	before := t.snapshot()
 	switch action.Event.Kind {
 	case event.Text, event.Paste:
 		t.insert(action.Event.Text)
@@ -74,7 +161,8 @@ func (t *TextInput) Apply(action Action) bool {
 	case event.Mouse:
 		t.applyMouse(action)
 	}
-	return before.Value != t.Value || before.Cursor != t.Cursor || before.Anchor != t.Anchor || before.Offset != t.Offset
+	t.recordEdit(before)
+	return original.changed(t)
 }
 
 // Input registers and paints a one-line text input. Read-only fields remain
@@ -135,6 +223,132 @@ func (t *TextInput) normalize() {
 	t.Cursor, t.Anchor, t.Offset = floorBoundaries(t.Value, t.Cursor, t.Anchor, t.Offset)
 }
 
+type textInputState struct {
+	value                  string
+	cursor, anchor, offset int
+}
+
+func (t *TextInput) state() textInputState {
+	return textInputState{value: t.Value, cursor: t.Cursor, anchor: t.Anchor, offset: t.Offset}
+}
+
+func (s textInputState) changed(t *TextInput) bool {
+	return s.value != t.Value || s.cursor != t.Cursor || s.anchor != t.Anchor || s.offset != t.Offset
+}
+
+func (t *TextInput) snapshot() textInputSnapshot {
+	return textInputSnapshot{value: t.Value, cursor: t.Cursor, anchor: t.Anchor}
+}
+
+func (t *TextInput) restore(snapshot textInputSnapshot) {
+	t.Value = limitText(sanitizeInput(snapshot.value), t.MaxBytes)
+	t.Cursor, t.Anchor, _ = floorBoundaries(t.Value, snapshot.cursor, snapshot.anchor, 0)
+	t.Offset = floorBoundary(t.Value, min(t.Offset, t.Cursor))
+}
+
+func (t *TextInput) historyLimit() int {
+	if t.UndoBytes == 0 {
+		return defaultUndoBytes
+	}
+	return t.UndoBytes
+}
+
+func (t *TextInput) prepareHistory() {
+	limit := t.historyLimit()
+	if limit < 0 {
+		t.clearHistory()
+		return
+	}
+	t.trimHistory(&t.undo, &t.undoBytes, limit)
+	t.trimHistory(&t.redo, &t.redoBytes, limit)
+}
+
+func (t *TextInput) clearHistory() {
+	clear(t.undo)
+	clear(t.redo)
+	t.undo, t.redo = nil, nil
+	t.undoBytes, t.redoBytes = 0, 0
+}
+
+func (t *TextInput) recordEdit(before textInputSnapshot) {
+	if before.value == t.Value {
+		return
+	}
+	clear(t.redo)
+	t.redo, t.redoBytes = nil, 0
+	t.pushHistory(&t.undo, &t.undoBytes, before)
+}
+
+func (t *TextInput) pushHistory(stack *[]textInputSnapshot, bytes *int, snapshot textInputSnapshot) {
+	limit := t.historyLimit()
+	if limit < 0 {
+		clear(*stack)
+		*stack, *bytes = nil, 0
+		return
+	}
+	snapshot.value = strings.Clone(snapshot.value)
+	size := snapshotSize(snapshot)
+	if size > limit {
+		clear(*stack)
+		*stack, *bytes = nil, 0
+		return
+	}
+	*stack = append(*stack, snapshot)
+	*bytes += size
+	t.trimHistory(stack, bytes, limit)
+}
+
+func (t *TextInput) trimHistory(stack *[]textInputSnapshot, bytes *int, limit int) {
+	remove := 0
+	for *bytes > limit && remove < len(*stack) {
+		*bytes -= snapshotSize((*stack)[remove])
+		remove++
+	}
+	if remove == 0 {
+		return
+	}
+	copy(*stack, (*stack)[remove:])
+	clear((*stack)[len(*stack)-remove:])
+	*stack = (*stack)[:len(*stack)-remove]
+}
+
+func (t *TextInput) popHistory(stack *[]textInputSnapshot, bytes *int) (textInputSnapshot, bool) {
+	if len(*stack) == 0 {
+		return textInputSnapshot{}, false
+	}
+	last := len(*stack) - 1
+	snapshot := (*stack)[last]
+	(*stack)[last] = textInputSnapshot{}
+	*stack = (*stack)[:last]
+	*bytes -= snapshotSize(snapshot)
+	return snapshot, true
+}
+
+func snapshotSize(snapshot textInputSnapshot) int {
+	return max(len(snapshot.value), 1)
+}
+
+func (t *TextInput) applyHistoryKey(key event.KeyEvent) (handled, changed bool) {
+	if key.Code != event.KeyRune || key.Mod&event.ModCtrl == 0 || key.Mod&(event.ModAlt|event.ModSuper) != 0 {
+		return false, false
+	}
+	r := unicode.ToLower(key.Rune)
+	undo := r == 'z' && key.Mod&event.ModShift == 0
+	redo := r == 'y' && key.Mod&event.ModShift == 0 || r == 'z' && key.Mod&event.ModShift != 0
+	if !undo && !redo {
+		return false, false
+	}
+	count := min(max(int(key.Repeat), 1), len(t.undo)+len(t.redo)+1)
+	for range count {
+		if undo {
+			changed = t.Undo() || changed
+		} else {
+			changed = t.Redo() || changed
+		}
+	}
+	return true, changed
+}
+
 func (t *TextInput) applyKey(key event.KeyEvent) {
 	shift := key.Mod&event.ModShift != 0
 	ctrl := key.Mod&event.ModCtrl != 0
@@ -176,13 +390,14 @@ func (t *TextInput) applyKey(key event.KeyEvent) {
 	case event.KeyEnd:
 		t.move(len(t.Value), shift)
 	case event.KeyBackspace:
-		if ctrl {
-			return
-		}
 		for range count {
 			start, end := t.selection()
 			if start == end {
-				start = previousBoundary(t.Value, t.Cursor)
+				if ctrl {
+					start = previousWord(t.Value, t.Cursor)
+				} else {
+					start = previousBoundary(t.Value, t.Cursor)
+				}
 			}
 			if start == end {
 				break
@@ -190,13 +405,14 @@ func (t *TextInput) applyKey(key event.KeyEvent) {
 			t.remove(start, end)
 		}
 	case event.KeyDelete:
-		if ctrl {
-			return
-		}
 		for range count {
 			start, end := t.selection()
 			if start == end {
-				end = nextBoundary(t.Value, t.Cursor)
+				if ctrl {
+					end = nextWord(t.Value, t.Cursor)
+				} else {
+					end = nextBoundary(t.Value, t.Cursor)
+				}
 			}
 			if start == end {
 				break

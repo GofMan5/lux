@@ -39,7 +39,7 @@ comparative claims require reproducible results.
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
 | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
-| [`ui`](./ui) | presentation-bound hit testing, focus/modal routing, buttons, Unicode text input, selectable scrolling lists, and modal panels |
+| [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, small lists, virtual scroll viewports, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
 | `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, color downgrade, and plain-output fallback |
@@ -127,13 +127,14 @@ scopes trap and restore focus, and lists support arrows/pages/wheel/click.
 `ui.TextInput` edits extended grapheme clusters rather than runes. Its byte
 offsets remain grapheme boundaries across typing, bounded paste, selection,
 navigation, deletion, wide-cell mouse placement, and horizontal scrolling.
-It is intentionally single-line; password hardening, undo, multiline editing,
-RTL visual reordering, and IME preedit are not claimed.
+It includes byte-bounded undo/redo and an application-supplied clipboard port,
+but remains intentionally single-line; password hardening, multiline editing,
+RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
 
 ## Direction
 
-Next slices are shortcut scopes, virtualized viewports, explicit clipboard and
-bounded undo ports, and modern keyboard capability negotiation. Graphics
+Next slices are variable-height virtualization, automatic nested scrolling,
+drag selection, semantic bridges, and modern keyboard negotiation. Graphics
 protocols follow only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.

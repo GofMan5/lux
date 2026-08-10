@@ -131,6 +131,14 @@ Built-in vertical slices are Button, selectable List, Modal, and a single-line
 TextInput. Text offsets are UTF-8 bytes at UAX #29 extended-grapheme boundaries,
 using the same width policy as `render`.
 
+Shortcuts are value registrations committed with the same presented snapshot:
+focused bindings precede native control behavior, modal bindings suppress app
+bindings, and explicit priority app bindings are limited to lifecycle commands.
+`ScrollViewport` keeps only a row offset and returns a half-open visible range;
+one-million-row models therefore remain O(visible) at draw time. Text history
+clones snapshots under a byte budget, and clipboard access is a hexagonal app
+port rather than a terminal escape sequence.
+
 ### Motion
 
 Tweens and springs are sampled from `time.Time`. If rendering pauses, the next

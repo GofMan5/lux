@@ -116,5 +116,10 @@ single-line editor is therefore tuned for ordinary form fields, not documents;
 a cached boundary table belongs in a future document editor rather than this
 small control.
 
+The fixed-row virtual range for a declared one-million-row viewport remains
+O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and
+48 ns (80 rows), all 0 alloc/op. Applications draw only that returned range;
+LUX does not materialize one million IDs or strings.
+
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

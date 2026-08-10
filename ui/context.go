@@ -71,9 +71,10 @@ type modal struct {
 }
 
 type snapshot struct {
-	regions []region
-	modal   modal
-	focus   ID
+	regions   []region
+	shortcuts []Shortcut
+	modal     modal
+	focus     ID
 }
 
 // Context owns focus and pointer routing. Its zero value is ready to use.
@@ -91,6 +92,7 @@ type Context struct {
 	committed   snapshot
 
 	building      []region
+	shortcuts     []Shortcut
 	buildingModal modal
 	currentModal  ID
 	buildingGen   uint64
@@ -120,6 +122,7 @@ func (c *Context) Begin(frame *lux.Frame) {
 	defer c.mu.Unlock()
 	c.resizeLocked(width, height)
 	c.building = c.building[:0]
+	c.shortcuts = c.shortcuts[:0]
 	c.buildingModal = modal{}
 	c.currentModal = ""
 	c.buildingGen = c.generation
@@ -156,12 +159,13 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
 		}
 	}
 	contentHeight := options.ContentHeight
+	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
 	if contentHeight < 0 {
 		contentHeight = -1
 	} else {
-		contentHeight = min(contentHeight, absolute.H)
+		// Preserve local row coordinates when the region is clipped at its top.
+		contentHeight = min(contentHeight, max(absolute.Bottom()-originY, 0))
 	}
-	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
 	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
 	c.building = append(c.building, next)
 	if c.viewFocus == "" && focusable(next, c.currentModal) {
@@ -183,9 +187,10 @@ func (c *Context) End(frame *lux.Frame) {
 	c.sequence++
 	sequence, generation := c.sequence, c.buildingGen
 	next := snapshot{
-		regions: append([]region(nil), c.building...),
-		modal:   c.buildingModal,
-		focus:   c.viewFocus,
+		regions:   append([]region(nil), c.building...),
+		shortcuts: append([]Shortcut(nil), c.shortcuts...),
+		modal:     c.buildingModal,
+		focus:     c.viewFocus,
 	}
 	if !focusValid(next, next.focus) {
 		next.focus = firstFocus(next)
@@ -302,6 +307,17 @@ func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
 	if key.Code == event.KeyEscape && c.committed.modal.id != "" {
 		return Action{Target: c.committed.modal.id, Kind: Dismiss, Event: next}, true
 	}
+	if shortcut, ok := matchPriorityShortcut(c.committed, key); ok {
+		return shortcutAction(shortcut, next), true
+	}
+	if shortcut, ok := matchShortcut(c.committed, key, ScopeFocused, c.focused); ok {
+		return shortcutAction(shortcut, next), true
+	}
+	if c.committed.modal.id != "" {
+		if shortcut, ok := matchShortcut(c.committed, key, ScopeModal, c.committed.modal.id); ok {
+			return shortcutAction(shortcut, next), true
+		}
+	}
 	if plain && (key.Code == event.KeyTab || key.Code == event.KeyBackTab) {
 		backward := key.Code == event.KeyBackTab || key.Mod&event.ModShift != 0
 		if target, ok := c.stepFocusLocked(backward); ok {
@@ -309,20 +325,25 @@ func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
 		}
 		return Action{}, c.committed.modal.id != ""
 	}
-	target, ok := c.focusedRegionLocked()
-	if !ok {
-		return Action{}, c.committed.modal.id != ""
+	target, focused := c.focusedRegionLocked()
+	if focused {
+		if target.flags&Activatable != 0 && plain && (key.Code == event.KeyEnter || key.Code == event.KeyRune && key.Rune == ' ') {
+			return actionFor(target, Activate, next), true
+		}
+		if target.flags&Editable != 0 {
+			return actionFor(target, Input, next), true
+		}
+		if target.flags&Scrollable != 0 && scrollKey(key.Code) {
+			return actionFor(target, Scroll, next), true
+		}
 	}
-	if target.flags&Activatable != 0 && plain && (key.Code == event.KeyEnter || key.Code == event.KeyRune && key.Rune == ' ') {
-		return actionFor(target, Activate, next), true
+	if c.committed.modal.id != "" {
+		return Action{}, true
 	}
-	if target.flags&Editable != 0 {
-		return actionFor(target, Input, next), true
+	if shortcut, ok := matchShortcut(c.committed, key, ScopeApp, ""); ok {
+		return shortcutAction(shortcut, next), true
 	}
-	if target.flags&Scrollable != 0 && scrollKey(key.Code) {
-		return actionFor(target, Scroll, next), true
-	}
-	return Action{}, c.committed.modal.id != ""
+	return Action{}, false
 }
 
 func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
@@ -439,6 +460,7 @@ func (c *Context) resizeLocked(width, height int) {
 	c.generation++
 	// Keep only modality and focus identity while terminal coordinates are stale.
 	c.committed.regions = nil
+	c.committed.shortcuts = nil
 	c.committed.modal.bounds = render.Rect{}
 	c.hovered, c.pressed, c.captured = "", "", ""
 	c.captureLeft = false

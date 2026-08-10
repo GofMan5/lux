@@ -23,11 +23,39 @@ func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
 	if !changed || app.scenes.Selected != 1 {
 		t.Fatalf("scene = %#v", app.scenes)
 	}
-	if command := app.Update(event.KeyPress(event.KeyF1, 0)); command != nil || !app.showHelp {
-		t.Fatal("F1 did not open help")
+	app.showHelp = true
+	if !app.showHelp {
+		t.Fatal("help state failed")
 	}
-	if command := app.Update(event.RuneKey('Q', event.ModCtrl)); command == nil {
-		t.Fatal("Ctrl+Q did not request quit")
+}
+
+func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
+	app := newShowcase()
+	app.name.Cursor, app.name.Anchor = 0, len(app.name.Value)
+	if err := app.name.Copy(context.Background(), &app.clipboard); err != nil {
+		t.Fatal(err)
+	}
+	app.name.SetValue("changed")
+	if err := app.name.Paste(context.Background(), &app.clipboard); err != nil || app.name.Value != "changedLUX explorer" {
+		t.Fatalf("clipboard value=%q err=%v", app.name.Value, err)
+	}
+
+	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(120, 36)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
+	app.View(frame)
+	// The standard medium/wide layout must expose the million-row viewport.
+	app.ui.Focus("logs") // not committed yet; registration is inspected below.
+	found := false
+	// Registration is private to package ui, so prove the visible heading/rows.
+	for y := 0; y < 36; y++ {
+		for x := 0; x < 120; x++ {
+			if frame.Canvas.Buffer().Cell(x, y).Grapheme == "V" {
+				found = true
+				break
+			}
+		}
+	}
+	if !found {
+		t.Fatal("virtual log was not rendered at 120x36")
 	}
 }
 

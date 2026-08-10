@@ -29,7 +29,13 @@ Terminal/font width, RTL visual editing, locale-tailored words, IME preedit,
 password hardening, undo, and multiline are outside the current claim. Paste is
 bracketed/bounded by the adapter and then sanitized/bounded again by the field.
 LUX TUI does not read/write OSC 52 automatically; clipboard mutation requires
-a future explicit application port and confirmation policy.
+an explicit application-supplied `Clipboard` implementation. No OS adapter is
+bundled; remote OSC 52 remains outside core and needs capability/user policy.
+
+Scoped shortcuts compare exact key code, rune, and modifiers while ignoring
+repeat count. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M, Backspace/Ctrl-H)
+remain indistinguishable; do not register them as separate commands until a
+modern keyboard protocol has been positively negotiated.
 
 `cmd.exe`, PowerShell, and shells running under SSH are command interpreters,
 not terminal emulators. Compatibility decisions must be based on the actual TTY

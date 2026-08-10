@@ -62,11 +62,24 @@ is stored and edited logically; visual UAX #9 cursor behavior is not claimed.
 
 ## Deferred by evidence
 
-1. shortcut resolver layers (focused control, modal scope, application);
-2. virtualized viewport/provider API and clipped child hit regions;
-3. explicit clipboard port, bounded undo/redo, drag selection;
-4. Kitty associated-text/keyboard negotiation and restoration;
-5. nested parent capture/bubble and a semantic accessibility bridge.
+Implemented follow-up slices:
+
+- presentation-bound shortcuts with focused, modal, and app scopes; exact
+  `(Code, Rune, Mod)` matching ignores repeat count, while explicit priority is
+  reserved for lifecycle keys;
+- fixed-row `ScrollViewport` with O(1) state, O(visible) drawing, range/clamp,
+  EnsureVisible, Page/Home/End/wheel, and explicit parent fallback when a child
+  cannot move at its boundary;
+- TextInput Ctrl-word deletion and byte-bounded cloned undo/redo history;
+- an app-supplied synchronous `Clipboard` port. Core ships no OS or OSC 52
+  adapter; Copy/Cut/Paste errors remain visible and failed Cut preserves text.
+
+Still deferred by evidence:
+
+1. variable-height rows and automatic nested wheel bubbling;
+2. drag selection and coalesced edit history;
+3. Kitty associated-text/keyboard negotiation and restoration;
+4. nested parent capture/bubble and a semantic accessibility bridge.
 
 ## Sources
 
@@ -84,3 +97,6 @@ Accessed 2026-08-09:
 - WAI focus and keyboard principles (semantic reference, not a VT claim):
   <https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/>
 - OSC 52 clipboard security context: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html>
+- tmux clipboard security: <https://github.com/tmux/tmux/wiki/Clipboard>
+- WAI listbox semantics: <https://www.w3.org/WAI/ARIA/apg/patterns/listbox/>
+- Flutter shortcut scopes: <https://api.flutter.dev/flutter/widgets/Shortcuts-class.html>
