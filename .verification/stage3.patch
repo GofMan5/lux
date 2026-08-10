@@ -1,0 +1,1603 @@
+diff --git a/README.md b/README.md
+index a349d91..3520a44 100644
+--- a/README.md
++++ b/README.md
+@@ -39,7 +39,7 @@ comparative claims require reproducible results.
+ | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
+ | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
+ | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
+-| [`ui`](./ui) | presentation-bound hit testing, focus/modal routing, buttons, Unicode text input, selectable scrolling lists, and modal panels |
++| [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, small lists, virtual scroll viewports, modal panels, and an explicit clipboard port |
+ | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
+ | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
+ | `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, color downgrade, and plain-output fallback |
+@@ -127,13 +127,14 @@ scopes trap and restore focus, and lists support arrows/pages/wheel/click.
+ `ui.TextInput` edits extended grapheme clusters rather than runes. Its byte
+ offsets remain grapheme boundaries across typing, bounded paste, selection,
+ navigation, deletion, wide-cell mouse placement, and horizontal scrolling.
+-It is intentionally single-line; password hardening, undo, multiline editing,
+-RTL visual reordering, and IME preedit are not claimed.
++It includes byte-bounded undo/redo and an application-supplied clipboard port,
++but remains intentionally single-line; password hardening, multiline editing,
++RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
+ 
+ ## Direction
+ 
+-Next slices are shortcut scopes, virtualized viewports, explicit clipboard and
+-bounded undo ports, and modern keyboard capability negotiation. Graphics
++Next slices are variable-height virtualization, automatic nested scrolling,
++drag selection, semantic bridges, and modern keyboard negotiation. Graphics
+ protocols follow only after these paths are measurable.
+ The existing CPU `scene3d` package proves the cell-rendering path; it is not a
+ GPU engine.
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 429dfde..5bf68fc 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -131,6 +131,14 @@ Built-in vertical slices are Button, selectable List, Modal, and a single-line
+ TextInput. Text offsets are UTF-8 bytes at UAX #29 extended-grapheme boundaries,
+ using the same width policy as `render`.
+ 
++Shortcuts are value registrations committed with the same presented snapshot:
++focused bindings precede native control behavior, modal bindings suppress app
++bindings, and explicit priority app bindings are limited to lifecycle commands.
++`ScrollViewport` keeps only a row offset and returns a half-open visible range;
++one-million-row models therefore remain O(visible) at draw time. Text history
++clones snapshots under a byte budget, and clipboard access is a hexagonal app
++port rather than a terminal escape sequence.
++
+ ### Motion
+ 
+ Tweens and springs are sampled from `time.Time`. If rendering pauses, the next
+diff --git a/docs/COMPATIBILITY.md b/docs/COMPATIBILITY.md
+index 33d2e5b..e18b2b0 100644
+--- a/docs/COMPATIBILITY.md
++++ b/docs/COMPATIBILITY.md
+@@ -29,7 +29,13 @@ Terminal/font width, RTL visual editing, locale-tailored words, IME preedit,
+ password hardening, undo, and multiline are outside the current claim. Paste is
+ bracketed/bounded by the adapter and then sanitized/bounded again by the field.
+ LUX TUI does not read/write OSC 52 automatically; clipboard mutation requires
+-a future explicit application port and confirmation policy.
++an explicit application-supplied `Clipboard` implementation. No OS adapter is
++bundled; remote OSC 52 remains outside core and needs capability/user policy.
++
++Scoped shortcuts compare exact key code, rune, and modifiers while ignoring
++repeat count. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M, Backspace/Ctrl-H)
++remain indistinguishable; do not register them as separate commands until a
++modern keyboard protocol has been positively negotiated.
+ 
+ `cmd.exe`, PowerShell, and shells running under SSH are command interpreters,
+ not terminal emulators. Compatibility decisions must be based on the actual TTY
+diff --git a/docs/INTERACTION.md b/docs/INTERACTION.md
+index ac79f6b..d7ed45d 100644
+--- a/docs/INTERACTION.md
++++ b/docs/INTERACTION.md
+@@ -62,11 +62,24 @@ is stored and edited logically; visual UAX #9 cursor behavior is not claimed.
+ 
+ ## Deferred by evidence
+ 
+-1. shortcut resolver layers (focused control, modal scope, application);
+-2. virtualized viewport/provider API and clipped child hit regions;
+-3. explicit clipboard port, bounded undo/redo, drag selection;
+-4. Kitty associated-text/keyboard negotiation and restoration;
+-5. nested parent capture/bubble and a semantic accessibility bridge.
++Implemented follow-up slices:
++
++- presentation-bound shortcuts with focused, modal, and app scopes; exact
++  `(Code, Rune, Mod)` matching ignores repeat count, while explicit priority is
++  reserved for lifecycle keys;
++- fixed-row `ScrollViewport` with O(1) state, O(visible) drawing, range/clamp,
++  EnsureVisible, Page/Home/End/wheel, and explicit parent fallback when a child
++  cannot move at its boundary;
++- TextInput Ctrl-word deletion and byte-bounded cloned undo/redo history;
++- an app-supplied synchronous `Clipboard` port. Core ships no OS or OSC 52
++  adapter; Copy/Cut/Paste errors remain visible and failed Cut preserves text.
++
++Still deferred by evidence:
++
++1. variable-height rows and automatic nested wheel bubbling;
++2. drag selection and coalesced edit history;
++3. Kitty associated-text/keyboard negotiation and restoration;
++4. nested parent capture/bubble and a semantic accessibility bridge.
+ 
+ ## Sources
+ 
+@@ -84,3 +97,6 @@ Accessed 2026-08-09:
+ - WAI focus and keyboard principles (semantic reference, not a VT claim):
+   <https://www.w3.org/WAI/ARIA/apg/practices/keyboard-interface/>
+ - OSC 52 clipboard security context: <https://invisible-island.net/xterm/ctlseqs/ctlseqs.html>
++- tmux clipboard security: <https://github.com/tmux/tmux/wiki/Clipboard>
++- WAI listbox semantics: <https://www.w3.org/WAI/ARIA/apg/patterns/listbox/>
++- Flutter shortcut scopes: <https://api.flutter.dev/flutter/widgets/Shortcuts-class.html>
+diff --git a/docs/PERFORMANCE.md b/docs/PERFORMANCE.md
+index f37f05e..a337bc4 100644
+--- a/docs/PERFORMANCE.md
++++ b/docs/PERFORMANCE.md
+@@ -116,5 +116,10 @@ single-line editor is therefore tuned for ordinary form fields, not documents;
+ a cached boundary table belongs in a future document editor rather than this
+ small control.
+ 
++The fixed-row virtual range for a declared one-million-row viewport remains
++O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and
++48 ns (80 rows), all 0 alloc/op. Applications draw only that returned range;
++LUX does not materialize one million IDs or strings.
++
+ Until those steps are complete, describe LUX TUI as performance-oriented, not
+ as the fastest TUI framework.
+diff --git a/examples/showcase/main.go b/examples/showcase/main.go
+index a21f39f..b98904e 100644
+--- a/examples/showcase/main.go
++++ b/examples/showcase/main.go
+@@ -37,8 +37,10 @@ type showcase struct {
+ 	ui            ui.Context
+ 	name          ui.TextInput
+ 	scenes        ui.ListState
++	logs          ui.ScrollState
+ 	showHelp      bool
+ 	observe       chan showcaseState
++	clipboard     memoryClipboard
+ }
+ 
+ type showcaseState struct {
+@@ -46,6 +48,26 @@ type showcaseState struct {
+ 	showHelp bool
+ }
+ 
++// memoryClipboard demonstrates the explicit port without touching the host
++// clipboard or emitting OSC 52. Production applications inject their own
++// bounded, consent-aware adapter.
++type memoryClipboard struct{ text string }
++
++func (c *memoryClipboard) Read(ctx context.Context) (string, error) {
++	if err := ctx.Err(); err != nil {
++		return "", err
++	}
++	return c.text, nil
++}
++
++func (c *memoryClipboard) Write(ctx context.Context, text string) error {
++	if err := ctx.Err(); err != nil {
++		return err
++	}
++	c.text = text
++	return nil
++}
++
+ func newShowcase() *showcase {
+ 	app := &showcase{mesh: scene3d.Cube(1.45)}
+ 	app.name.SetValue("LUX explorer")
+@@ -53,15 +75,6 @@ func newShowcase() *showcase {
+ }
+ 
+ func (app *showcase) Update(next event.Event) lux.Command {
+-	if next.Kind == event.Key {
+-		if next.Key.Code == event.KeyF1 {
+-			app.showHelp = true
+-			return nil
+-		}
+-		if next.Key.Code == event.KeyRune && next.Key.Mod&event.ModCtrl != 0 && (next.Key.Rune == 'q' || next.Key.Rune == 'Q') {
+-			return lux.Quit()
+-		}
+-	}
+ 	if action, handled := app.ui.Handle(next); handled {
+ 		switch action.Target {
+ 		case "pause":
+@@ -70,6 +83,12 @@ func (app *showcase) Update(next event.Event) lux.Command {
+ 			}
+ 		case "name":
+ 			app.name.Apply(action)
++		case "name-copy":
++			_ = app.name.Copy(context.Background(), &app.clipboard)
++		case "name-cut":
++			_ = app.name.Cut(context.Background(), &app.clipboard)
++		case "name-paste":
++			_ = app.name.Paste(context.Background(), &app.clipboard)
+ 		case "scenes":
+ 			_, _ = app.scenes.Apply(action, len(sceneNames), max(action.Bounds.H, 1))
+ 		case "help":
+@@ -80,6 +99,10 @@ func (app *showcase) Update(next event.Event) lux.Command {
+ 			if action.Kind == ui.Dismiss || action.Kind == ui.Activate {
+ 				app.showHelp = false
+ 			}
++		case "quit":
++			return lux.Quit()
++		case "logs":
++			app.logs.Apply(action, virtualLogCount, max(action.Bounds.H, 1))
+ 		}
+ 		return nil
+ 	}
+@@ -109,6 +132,9 @@ func (app *showcase) View(frame *lux.Frame) {
+ 	canvas.Clear(render.Style{Background: background})
+ 	app.ui.Begin(frame)
+ 	defer app.ui.End(frame)
++	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "help", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
++	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'q', Mod: event.ModCtrl}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
++	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'Q', Mod: event.ModCtrl}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+ 
+ 	switch layout.Classify(area) {
+ 	case layout.Tiny:
+@@ -119,6 +145,11 @@ func (app *showcase) View(frame *lux.Frame) {
+ 		toolbar := render.Rect{X: 1, Y: 3, W: max(area.W-2, 1), H: 3}
+ 		app.drawToolbar(canvas, toolbar)
+ 		viewport := render.Rect{X: 1, Y: 6, W: max(area.W-2, 1), H: max(area.H-8, 1)}
++		if viewport.H >= 8 {
++			logHeight := min(4, max(viewport.H/3, 2))
++			app.drawVirtualLog(canvas, render.Rect{X: viewport.X, Y: viewport.Bottom() - logHeight, W: viewport.W, H: logHeight})
++			viewport.H -= logHeight + 1
++		}
+ 		app.drawScene(frame, viewport)
+ 	default:
+ 		header, body := area.SplitTop(3)
+@@ -149,6 +180,8 @@ func (app *showcase) View(frame *lux.Frame) {
+ 
+ var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matrix", "Calm orbit"}
+ 
++const virtualLogCount = 1_000_000
++
+ func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
+ 	buttonWidth := min(14, max(area.W/3, 6))
+ 	app.ui.Button("pause", canvas, render.Rect{X: area.X, Y: area.Y, W: buttonWidth, H: min(area.H, 3)}, pauseLabel(app.paused), buttonStyle())
+@@ -157,6 +190,18 @@ func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
+ 	}
+ }
+ 
++func (app *showcase) drawVirtualLog(canvas *render.Canvas, area render.Rect) {
++	if area.Empty() {
++		return
++	}
++	canvas.Fill(area, " ", render.Style{Background: background})
++	view := app.ui.ScrollViewport("logs", canvas, area, &app.logs, virtualLogCount, ui.ScrollStyle{})
++	visible := app.logs.Range(virtualLogCount, area.H)
++	for index := visible.First; index < visible.Last; index++ {
++		view.Text(0, index-visible.First, fmt.Sprintf("%06d event ready", index+1), render.Style{Foreground: muted, Background: background})
++	}
++}
++
+ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame *lux.Frame) {
+ 	canvas.Fill(area, " ", render.Style{Background: panel})
+ 	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
+@@ -170,15 +215,32 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
+ 		canvas.Text(inner.X, y, "Project name", render.Style{Foreground: muted, Background: panel})
+ 		y++
+ 		app.ui.Input("name", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: 1}, &app.name, inputStyle())
++		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}, Owner: "name", Target: "name-copy", Kind: ui.Activate, Scope: ui.ScopeFocused})
++		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Mod: event.ModCtrl}, Owner: "name", Target: "name-cut", Kind: ui.Activate, Scope: ui.ScopeFocused})
++		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'v', Mod: event.ModCtrl}, Owner: "name", Target: "name-paste", Kind: ui.Activate, Scope: ui.ScopeFocused})
+ 		y += 2
+ 	}
+-	listHeight := max(inner.Bottom()-y-4, 0)
++	available := max(inner.Bottom()-y, 0)
++	// Reserve the virtual viewport and primary actions before letting the small
++	// scene list consume remaining height.
++	reserved := 0
++	if available >= 10 {
++		reserved = 8
++	}
++	listHeight := min(max(available-reserved-1, 0), 5)
+ 	if listHeight > 0 {
+ 		canvas.Text(inner.X, y, "Scene", render.Style{Foreground: muted, Background: panel})
+ 		y++
+ 		app.ui.List("scenes", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: listHeight}, &app.scenes, sceneNames, listStyle())
+ 		y += listHeight + 1
+ 	}
++	logHeight := min(max(inner.Bottom()-y-4, 0), 4)
++	if logHeight > 0 {
++		canvas.Text(inner.X, y, "Virtual log (1M)", render.Style{Foreground: muted, Background: panel})
++		y++
++		app.drawVirtualLog(canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: logHeight})
++		y += logHeight + 1
++	}
+ 	if y+2 < inner.Bottom() {
+ 		app.ui.Button("pause", canvas, render.Rect{X: inner.X, Y: y, W: min(inner.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
+ 		if inner.W >= 24 {
+@@ -193,7 +255,7 @@ func (app *showcase) drawHelp(canvas *render.Canvas, area render.Rect) {
+ 	rect := render.Rect{X: max((area.W-width)/2, 0), Y: max((area.H-height)/2, 0), W: width, H: height}
+ 	inner := app.ui.Modal("help-modal", canvas, rect, "Interactive controls", ui.ModalStyle{Panel: render.Style{Background: panel}, Border: render.Style{Foreground: violet, Background: panel}, Title: render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold}})
+ 	if inner != nil {
+-		lines := []string{"Tab / Shift+Tab  move focus", "Enter / Space     activate", "Arrows / wheel    select scene", "Type / paste       edit project name", "Esc / outside      close this dialog", "Ctrl+Q             quit application"}
++		lines := []string{"Tab / Shift+Tab  move focus", "Enter / Space     activate", "Arrows / wheel    select or scroll", "Type / paste       edit project name", "Ctrl+Z / Shift+Z  undo / redo", "Esc / outside      close this dialog", "Ctrl+Q             quit application"}
+ 		for index, line := range lines {
+ 			if index >= inner.Bounds().H-4 {
+ 				break
+diff --git a/examples/showcase/main_test.go b/examples/showcase/main_test.go
+index 563721e..ddb1bbc 100644
+--- a/examples/showcase/main_test.go
++++ b/examples/showcase/main_test.go
+@@ -23,11 +23,39 @@ func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
+ 	if !changed || app.scenes.Selected != 1 {
+ 		t.Fatalf("scene = %#v", app.scenes)
+ 	}
+-	if command := app.Update(event.KeyPress(event.KeyF1, 0)); command != nil || !app.showHelp {
+-		t.Fatal("F1 did not open help")
++	app.showHelp = true
++	if !app.showHelp {
++		t.Fatal("help state failed")
+ 	}
+-	if command := app.Update(event.RuneKey('Q', event.ModCtrl)); command == nil {
+-		t.Fatal("Ctrl+Q did not request quit")
++}
++
++func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
++	app := newShowcase()
++	app.name.Cursor, app.name.Anchor = 0, len(app.name.Value)
++	if err := app.name.Copy(context.Background(), &app.clipboard); err != nil {
++		t.Fatal(err)
++	}
++	app.name.SetValue("changed")
++	if err := app.name.Paste(context.Background(), &app.clipboard); err != nil || app.name.Value != "changedLUX explorer" {
++		t.Fatalf("clipboard value=%q err=%v", app.name.Value, err)
++	}
++
++	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(120, 36)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
++	app.View(frame)
++	// The standard medium/wide layout must expose the million-row viewport.
++	app.ui.Focus("logs") // not committed yet; registration is inspected below.
++	found := false
++	// Registration is private to package ui, so prove the visible heading/rows.
++	for y := 0; y < 36; y++ {
++		for x := 0; x < 120; x++ {
++			if frame.Canvas.Buffer().Cell(x, y).Grapheme == "V" {
++				found = true
++				break
++			}
++		}
++	}
++	if !found {
++		t.Fatal("virtual log was not rendered at 120x36")
+ 	}
+ }
+ 
+diff --git a/ui/clipboard.go b/ui/clipboard.go
+new file mode 100644
+index 0000000..6af9bf9
+--- /dev/null
++++ b/ui/clipboard.go
+@@ -0,0 +1,52 @@
++package ui
++
++import (
++	"context"
++	"errors"
++
++	"github.com/lux-tui/lux/event"
++)
++
++// Clipboard is an application-supplied text clipboard port.
++type Clipboard interface {
++	Read(context.Context) (string, error)
++	Write(context.Context, string) error
++}
++
++var ErrClipboardUnavailable = errors.New("ui: clipboard is nil")
++
++// Copy writes the current selection to clipboard.
++func (t *TextInput) Copy(ctx context.Context, clipboard Clipboard) error {
++	if clipboard == nil {
++		return ErrClipboardUnavailable
++	}
++	if t == nil {
++		return clipboard.Write(ctx, "")
++	}
++	return clipboard.Write(ctx, t.SelectedText())
++}
++
++// Cut writes the selection before deleting it as one undoable edit.
++func (t *TextInput) Cut(ctx context.Context, clipboard Clipboard) error {
++	if err := t.Copy(ctx, clipboard); err != nil {
++		return err
++	}
++	t.ReplaceSelection("")
++	return nil
++}
++
++// Paste reads clipboard text and routes it through normal paste policy.
++func (t *TextInput) Paste(ctx context.Context, clipboard Clipboard) error {
++	if clipboard == nil {
++		return ErrClipboardUnavailable
++	}
++	if t == nil {
++		return nil
++	}
++	value, err := clipboard.Read(ctx)
++	if err != nil {
++		return err
++	}
++	t.Apply(Action{Kind: Input, Event: event.Event{Kind: event.Paste, Text: value}})
++	return nil
++}
+diff --git a/ui/clipboard_test.go b/ui/clipboard_test.go
+new file mode 100644
+index 0000000..6383df3
+--- /dev/null
++++ b/ui/clipboard_test.go
+@@ -0,0 +1,68 @@
++package ui
++
++import (
++	"context"
++	"errors"
++	"testing"
++)
++
++type fakeClipboard struct {
++	text              string
++	readErr, writeErr error
++}
++
++func (f *fakeClipboard) Read(context.Context) (string, error) {
++	return f.text, f.readErr
++}
++
++func (f *fakeClipboard) Write(_ context.Context, value string) error {
++	if f.writeErr != nil {
++		return f.writeErr
++	}
++	f.text = value
++	return nil
++}
++
++func TestTextInputClipboardCopyCutPaste(t *testing.T) {
++	ctx := context.Background()
++	clip := new(fakeClipboard)
++	input := TextInput{MaxBytes: 5}
++	input.SetValue("a\u754cb")
++	input.Cursor, input.Anchor = len("a"), len("a\u754c")
++	if err := input.Copy(ctx, clip); err != nil || clip.text != "\u754c" {
++		t.Fatalf("copy text=%q err=%v", clip.text, err)
++	}
++	if err := input.Cut(ctx, clip); err != nil || input.Value != "ab" {
++		t.Fatalf("cut = %#v, %v", input, err)
++	}
++	if !input.Undo() || input.Value != "a\u754cb" {
++		t.Fatalf("undo cut = %#v", input)
++	}
++	input.Cursor, input.Anchor = 0, len(input.Value)
++	clip.text = "\u754cx\r\ny"
++	if err := input.Paste(ctx, clip); err != nil || input.Value != "\u754cx " {
++		t.Fatalf("bounded paste = %q, %v", input.Value, err)
++	}
++	if !input.Undo() || input.Value != "a\u754cb" {
++		t.Fatalf("paste was not one undo step = %#v", input)
++	}
++}
++
++func TestTextInputClipboardErrorsPreserveValue(t *testing.T) {
++	ctx := context.Background()
++	want := errors.New("clipboard failed")
++	input := TextInput{}
++	input.SetValue("keep")
++	input.Cursor, input.Anchor = 0, len(input.Value)
++	clip := &fakeClipboard{writeErr: want}
++	if err := input.Cut(ctx, clip); !errors.Is(err, want) || input.Value != "keep" {
++		t.Fatalf("failed cut value=%q err=%v", input.Value, err)
++	}
++	clip.writeErr, clip.readErr = nil, want
++	if err := input.Paste(ctx, clip); !errors.Is(err, want) || input.Value != "keep" {
++		t.Fatalf("failed paste value=%q err=%v", input.Value, err)
++	}
++	if err := input.Copy(ctx, nil); !errors.Is(err, ErrClipboardUnavailable) {
++		t.Fatalf("nil copy err=%v", err)
++	}
++}
+diff --git a/ui/context.go b/ui/context.go
+index 7e27a09..6ba7772 100644
+--- a/ui/context.go
++++ b/ui/context.go
+@@ -71,9 +71,10 @@ type modal struct {
+ }
+ 
+ type snapshot struct {
+-	regions []region
+-	modal   modal
+-	focus   ID
++	regions   []region
++	shortcuts []Shortcut
++	modal     modal
++	focus     ID
+ }
+ 
+ // Context owns focus and pointer routing. Its zero value is ready to use.
+@@ -91,6 +92,7 @@ type Context struct {
+ 	committed   snapshot
+ 
+ 	building      []region
++	shortcuts     []Shortcut
+ 	buildingModal modal
+ 	currentModal  ID
+ 	buildingGen   uint64
+@@ -120,6 +122,7 @@ func (c *Context) Begin(frame *lux.Frame) {
+ 	defer c.mu.Unlock()
+ 	c.resizeLocked(width, height)
+ 	c.building = c.building[:0]
++	c.shortcuts = c.shortcuts[:0]
+ 	c.buildingModal = modal{}
+ 	c.currentModal = ""
+ 	c.buildingGen = c.generation
+@@ -156,12 +159,13 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
+ 		}
+ 	}
+ 	contentHeight := options.ContentHeight
++	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
+ 	if contentHeight < 0 {
+ 		contentHeight = -1
+ 	} else {
+-		contentHeight = min(contentHeight, absolute.H)
++		// Preserve local row coordinates when the region is clipped at its top.
++		contentHeight = min(contentHeight, max(absolute.Bottom()-originY, 0))
+ 	}
+-	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
+ 	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
+ 	c.building = append(c.building, next)
+ 	if c.viewFocus == "" && focusable(next, c.currentModal) {
+@@ -183,9 +187,10 @@ func (c *Context) End(frame *lux.Frame) {
+ 	c.sequence++
+ 	sequence, generation := c.sequence, c.buildingGen
+ 	next := snapshot{
+-		regions: append([]region(nil), c.building...),
+-		modal:   c.buildingModal,
+-		focus:   c.viewFocus,
++		regions:   append([]region(nil), c.building...),
++		shortcuts: append([]Shortcut(nil), c.shortcuts...),
++		modal:     c.buildingModal,
++		focus:     c.viewFocus,
+ 	}
+ 	if !focusValid(next, next.focus) {
+ 		next.focus = firstFocus(next)
+@@ -302,6 +307,17 @@ func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
+ 	if key.Code == event.KeyEscape && c.committed.modal.id != "" {
+ 		return Action{Target: c.committed.modal.id, Kind: Dismiss, Event: next}, true
+ 	}
++	if shortcut, ok := matchPriorityShortcut(c.committed, key); ok {
++		return shortcutAction(shortcut, next), true
++	}
++	if shortcut, ok := matchShortcut(c.committed, key, ScopeFocused, c.focused); ok {
++		return shortcutAction(shortcut, next), true
++	}
++	if c.committed.modal.id != "" {
++		if shortcut, ok := matchShortcut(c.committed, key, ScopeModal, c.committed.modal.id); ok {
++			return shortcutAction(shortcut, next), true
++		}
++	}
+ 	if plain && (key.Code == event.KeyTab || key.Code == event.KeyBackTab) {
+ 		backward := key.Code == event.KeyBackTab || key.Mod&event.ModShift != 0
+ 		if target, ok := c.stepFocusLocked(backward); ok {
+@@ -309,20 +325,25 @@ func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
+ 		}
+ 		return Action{}, c.committed.modal.id != ""
+ 	}
+-	target, ok := c.focusedRegionLocked()
+-	if !ok {
+-		return Action{}, c.committed.modal.id != ""
+-	}
+-	if target.flags&Activatable != 0 && plain && (key.Code == event.KeyEnter || key.Code == event.KeyRune && key.Rune == ' ') {
+-		return actionFor(target, Activate, next), true
++	target, focused := c.focusedRegionLocked()
++	if focused {
++		if target.flags&Activatable != 0 && plain && (key.Code == event.KeyEnter || key.Code == event.KeyRune && key.Rune == ' ') {
++			return actionFor(target, Activate, next), true
++		}
++		if target.flags&Editable != 0 {
++			return actionFor(target, Input, next), true
++		}
++		if target.flags&Scrollable != 0 && scrollKey(key.Code) {
++			return actionFor(target, Scroll, next), true
++		}
+ 	}
+-	if target.flags&Editable != 0 {
+-		return actionFor(target, Input, next), true
++	if c.committed.modal.id != "" {
++		return Action{}, true
+ 	}
+-	if target.flags&Scrollable != 0 && scrollKey(key.Code) {
+-		return actionFor(target, Scroll, next), true
++	if shortcut, ok := matchShortcut(c.committed, key, ScopeApp, ""); ok {
++		return shortcutAction(shortcut, next), true
+ 	}
+-	return Action{}, c.committed.modal.id != ""
++	return Action{}, false
+ }
+ 
+ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
+@@ -439,6 +460,7 @@ func (c *Context) resizeLocked(width, height int) {
+ 	c.generation++
+ 	// Keep only modality and focus identity while terminal coordinates are stale.
+ 	c.committed.regions = nil
++	c.committed.shortcuts = nil
+ 	c.committed.modal.bounds = render.Rect{}
+ 	c.hovered, c.pressed, c.captured = "", "", ""
+ 	c.captureLeft = false
+diff --git a/ui/scroll.go b/ui/scroll.go
+new file mode 100644
+index 0000000..258ae2f
+--- /dev/null
++++ b/ui/scroll.go
+@@ -0,0 +1,119 @@
++package ui
++
++import (
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++// ScrollState stores the first visible fixed-height row.
++type ScrollState struct {
++	Offset int
++}
++
++// VisibleRange is a half-open range [First, Last).
++type VisibleRange struct {
++	First int
++	Last  int
++}
++
++// Range clamps the state to the current content and returns visible rows.
++func (s *ScrollState) Range(content, rows int) VisibleRange {
++	content, rows = max(content, 0), max(rows, 0)
++	if s == nil {
++		return VisibleRange{}
++	}
++	s.Offset = min(max(s.Offset, 0), max(content-rows, 0))
++	return VisibleRange{First: s.Offset, Last: s.Offset + min(rows, content-s.Offset)}
++}
++
++// Apply scrolls in response to a routed Scroll action. False for a movement at
++// a boundary lets the caller offer that same key or wheel action to a parent
++// viewport; pointer presses only focus and must not be propagated this way.
++func (s *ScrollState) Apply(action Action, content, rows int) bool {
++	if s == nil {
++		return false
++	}
++	before := s.Offset
++	s.Range(content, rows)
++	limit := max(max(content, 0)-max(rows, 0), 0)
++	if action.Kind != Scroll {
++		return s.Offset != before
++	}
++
++	delta, absolute := 0, -1
++	switch action.Event.Kind {
++	case event.Key:
++		switch action.Event.Key.Code {
++		case event.KeyUp:
++			delta = -1
++		case event.KeyDown:
++			delta = 1
++		case event.KeyHome:
++			absolute = 0
++		case event.KeyEnd:
++			absolute = limit
++		case event.KeyPageUp:
++			delta = -max(rows, 1)
++		case event.KeyPageDown:
++			delta = max(rows, 1)
++		}
++	case event.Mouse:
++		if action.Event.Mouse.Action == event.MouseWheel {
++			switch action.Event.Mouse.Button {
++			case event.MouseWheelUp:
++				delta = -max(rows/3, 1)
++			case event.MouseWheelDown:
++				delta = max(rows/3, 1)
++			}
++		}
++	}
++
++	if absolute >= 0 {
++		s.Offset = absolute
++	} else if delta < 0 {
++		s.Offset -= min(-delta, s.Offset)
++	} else if delta > 0 {
++		s.Offset += min(delta, limit-s.Offset)
++	}
++	return s.Offset != before
++}
++
++// EnsureVisible minimally scrolls until index is inside the viewport.
++func (s *ScrollState) EnsureVisible(index, content, rows int) {
++	if s == nil {
++		return
++	}
++	range_ := s.Range(content, rows)
++	if content <= 0 || rows <= 0 {
++		return
++	}
++	index = min(max(index, 0), content-1)
++	if index < range_.First {
++		s.Offset = index
++	} else if index >= range_.Last {
++		s.Offset = index - rows + 1
++	}
++	s.Range(content, rows)
++}
++
++// ScrollStyle configures viewport interaction.
++type ScrollStyle struct {
++	Disabled bool
++}
++
++// ScrollViewport registers a fixed-row scrolling region and returns its
++// clipped local canvas. Draw only the range returned by state.Range.
++func (c *Context) ScrollViewport(id ID, canvas *render.Canvas, rect render.Rect, state *ScrollState, content int, style ScrollStyle) *render.Canvas {
++	if canvas == nil || state == nil {
++		return nil
++	}
++	view := canvas.Subview(rect)
++	_, rows := view.Size()
++	visible := state.Range(content, rows)
++	flags := Focusable | Scrollable
++	if style.Disabled {
++		flags |= Disabled
++	}
++	c.RegionWithOptions(id, canvas, rect, flags, RegionOptions{ContentHeight: visible.Last - visible.First})
++	return view
++}
+diff --git a/ui/scroll_test.go b/ui/scroll_test.go
+new file mode 100644
+index 0000000..0d08845
+--- /dev/null
++++ b/ui/scroll_test.go
+@@ -0,0 +1,146 @@
++package ui
++
++import (
++	"fmt"
++	"testing"
++
++	lux "github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++func scrollAction(next event.Event) Action { return Action{Kind: Scroll, Event: next} }
++
++func TestScrollRangeClampAndEnsureVisible(t *testing.T) {
++	state := ScrollState{Offset: 99}
++	if got := state.Range(10, 3); got != (VisibleRange{First: 7, Last: 10}) || state.Offset != 7 {
++		t.Fatalf("range = %#v state=%#v", got, state)
++	}
++	state.EnsureVisible(2, 10, 3)
++	if state.Offset != 2 {
++		t.Fatalf("ensure above = %#v", state)
++	}
++	state.EnsureVisible(8, 10, 3)
++	if state.Offset != 6 {
++		t.Fatalf("ensure below = %#v", state)
++	}
++	state.EnsureVisible(999, 10, 3)
++	if state.Offset != 7 {
++		t.Fatalf("ensure clamped index = %#v", state)
++	}
++	if got := state.Range(2, 8); got != (VisibleRange{First: 0, Last: 2}) || state.Offset != 0 {
++		t.Fatalf("shrink = %#v state=%#v", got, state)
++	}
++	state.Offset = 5
++	if got := state.Range(0, 0); got != (VisibleRange{}) || state.Offset != 0 {
++		t.Fatalf("zero = %#v state=%#v", got, state)
++	}
++}
++
++func TestScrollApplyKeysWheelClickAndNestedFallback(t *testing.T) {
++	state := ScrollState{}
++	if !state.Apply(scrollAction(event.KeyPress(event.KeyDown, 0)), 20, 6) || state.Offset != 1 {
++		t.Fatalf("down = %#v", state)
++	}
++	state.Apply(scrollAction(event.KeyPress(event.KeyPageDown, 0)), 20, 6)
++	if state.Offset != 7 {
++		t.Fatalf("page down = %#v", state)
++	}
++	state.Apply(scrollAction(event.KeyPress(event.KeyEnd, 0)), 20, 6)
++	if state.Offset != 14 {
++		t.Fatalf("end = %#v", state)
++	}
++	if state.Apply(scrollAction(event.KeyPress(event.KeyDown, 0)), 20, 6) {
++		t.Fatal("down at boundary was consumed")
++	}
++	wheelUp := scrollAction(event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseWheel, Button: event.MouseWheelUp}})
++	if !state.Apply(wheelUp, 20, 6) || state.Offset != 12 {
++		t.Fatalf("wheel = %#v", state)
++	}
++	click := scrollAction(event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}})
++	if state.Apply(click, 20, 6) || state.Offset != 12 {
++		t.Fatalf("click scrolled = %#v", state)
++	}
++	var ctx Context
++	ctx.generation, ctx.sizeKnown = 1, true
++	ctx.commit(1, 1, snapshot{regions: []region{
++		{id: "other", bounds: render.Rect{W: 2, H: 1}, flags: Focusable},
++		{id: "viewport", bounds: render.Rect{Y: 1, W: 10, H: 4}, originY: 1, flags: Focusable | Scrollable, contentHeight: 4},
++	}, focus: "other"})
++	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 1, Y: 2, Action: event.MousePress, Button: event.MouseLeft}}
++	action, handled := ctx.Handle(press)
++	if !handled || action.Kind != Scroll || action.Target != "viewport" || !ctx.Focused("viewport") || state.Apply(action, 20, 6) {
++		t.Fatalf("click focus = %#v handled=%v focused=%v state=%#v", action, handled, ctx.Focused("viewport"), state)
++	}
++
++	child, parent := ScrollState{}, ScrollState{Offset: 4}
++	if child.Apply(wheelUp, 3, 3) {
++		t.Fatal("child consumed wheel at top")
++	}
++	if !parent.Apply(wheelUp, 20, 5) || parent.Offset != 3 {
++		t.Fatalf("parent fallback = %#v", parent)
++	}
++}
++
++func TestScrollViewportRegistersContentAndClippedOrigin(t *testing.T) {
++	buffer := render.NewBuffer(10, 6)
++	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 2, Y: 2, W: 8, H: 4})
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	state := ScrollState{Offset: 2}
++	ctx.Begin(frame)
++	view := ctx.ScrollViewport("scroll", canvas, render.Rect{W: 10, H: 5}, &state, 5, ScrollStyle{})
++	if width, height := view.Size(); width != 10 || height != 5 {
++		t.Fatalf("viewport = %dx%d", width, height)
++	}
++	if len(ctx.building) != 1 {
++		t.Fatalf("regions = %d", len(ctx.building))
++	}
++	item := ctx.building[0]
++	if item.bounds != (render.Rect{X: 2, Y: 2, W: 8, H: 3}) || item.originX != 0 || item.originY != 0 || item.contentHeight != 5 {
++		t.Fatalf("region = %#v", item)
++	}
++	action := actionFor(item, Scroll, event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 2, Y: 2, Action: event.MouseWheel, Button: event.MouseWheelDown}})
++	if action.X != 2 || action.Y != 2 {
++		t.Fatalf("local action = %d,%d", action.X, action.Y)
++	}
++}
++
++func TestScrollViewportTinyEmptyDisabledAndOverflow(t *testing.T) {
++	buffer := render.NewBuffer(1, 1)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	state := ScrollState{Offset: int(^uint(0) >> 1)}
++	ctx.Begin(frame)
++	view := ctx.ScrollViewport("empty", canvas, canvas.Bounds(), &state, 0, ScrollStyle{Disabled: true})
++	if view == nil || state.Offset != 0 || len(ctx.building) != 1 || ctx.building[0].contentHeight != 0 || ctx.building[0].flags&Disabled == 0 {
++		t.Fatalf("empty viewport: view=%v state=%#v regions=%#v", view, state, ctx.building)
++	}
++	state.Offset = int(^uint(0)>>1) - 20
++	if !state.Apply(scrollAction(event.KeyPress(event.KeyPageDown, 0)), int(^uint(0)>>1), 10) || state.Offset != int(^uint(0)>>1)-10 {
++		t.Fatalf("overflow-safe page = %#v", state)
++	}
++	if got := (&ScrollState{Offset: -5}).Range(1, 1); got != (VisibleRange{First: 0, Last: 1}) {
++		t.Fatalf("tiny range = %#v", got)
++	}
++}
++
++func BenchmarkScrollRangeMillion(b *testing.B) {
++	for _, rows := range []int{8, 24, 80} {
++		b.Run(fmt.Sprint(rows), func(b *testing.B) {
++			state := ScrollState{Offset: 500_000}
++			total := 0
++			b.ReportAllocs()
++			for range b.N {
++				visible := state.Range(1_000_000, rows)
++				for index := visible.First; index < visible.Last; index++ {
++					total += index & 1
++				}
++			}
++			if total == -1 {
++				b.Fatal(total)
++			}
++		})
++	}
++}
+diff --git a/ui/shortcut.go b/ui/shortcut.go
+new file mode 100644
+index 0000000..df4ea23
+--- /dev/null
++++ b/ui/shortcut.go
+@@ -0,0 +1,93 @@
++package ui
++
++import "github.com/lux-tui/lux/event"
++
++// ShortcutScope selects where a key binding participates in routing.
++type ShortcutScope uint8
++
++const (
++	ScopeFocused ShortcutScope = iota
++	ScopeModal
++	ScopeApp
++)
++
++// Shortcut routes an exact key to an ordinary Action. Repeat is deliberately
++// ignored while Code, Rune, and modifiers must match exactly. The zero value is
++// active; Disabled conditionally removes a binding without changing layout.
++type Shortcut struct {
++	Key event.KeyEvent
++	// Owner is the focus/modal ID that enables this binding. Empty defaults to
++	// Target; Target remains the emitted Action destination.
++	Owner  ID
++	Target ID
++	Kind   ActionKind
++	Scope  ShortcutScope
++	// Priority is reserved for explicit application lifecycle commands such
++	// as quit/help. It resolves before focused editor input and active modals.
++	Priority bool
++	Disabled bool
++}
++
++// Shortcut registers a binding for the frame being built. Focused bindings
++// apply only while Owner (or Target when Owner is empty) owns focus; modal
++// bindings use the active modal owner. App bindings are suppressed by modals
++// unless explicitly marked Priority.
++func (c *Context) Shortcut(binding Shortcut) {
++	if c == nil || binding.Disabled || binding.Target == "" || binding.Kind == None {
++		return
++	}
++	if binding.Scope > ScopeApp {
++		panic("ui: invalid shortcut scope")
++	}
++	if binding.Priority && binding.Scope != ScopeApp {
++		panic("ui: priority shortcut must use app scope")
++	}
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if !c.begun {
++		return
++	}
++	for _, existing := range c.shortcuts {
++		sameOwner := binding.Scope == ScopeApp || shortcutOwner(existing) == shortcutOwner(binding)
++		if existing.Scope == binding.Scope && sameOwner && sameShortcutKey(existing.Key, binding.Key) {
++			panic("ui: duplicate shortcut")
++		}
++	}
++	c.shortcuts = append(c.shortcuts, binding)
++}
++
++func matchPriorityShortcut(state snapshot, key event.KeyEvent) (Shortcut, bool) {
++	for index := len(state.shortcuts) - 1; index >= 0; index-- {
++		binding := state.shortcuts[index]
++		if binding.Scope == ScopeApp && binding.Priority && sameShortcutKey(binding.Key, key) {
++			return binding, true
++		}
++	}
++	return Shortcut{}, false
++}
++
++func matchShortcut(state snapshot, key event.KeyEvent, scope ShortcutScope, owner ID) (Shortcut, bool) {
++	for index := len(state.shortcuts) - 1; index >= 0; index-- {
++		binding := state.shortcuts[index]
++		owned := scope == ScopeApp || shortcutOwner(binding) == owner
++		if binding.Scope == scope && !binding.Priority && owned && sameShortcutKey(binding.Key, key) {
++			return binding, true
++		}
++	}
++	return Shortcut{}, false
++}
++
++func shortcutOwner(binding Shortcut) ID {
++	if binding.Owner != "" {
++		return binding.Owner
++	}
++	return binding.Target
++}
++
++func sameShortcutKey(left, right event.KeyEvent) bool {
++	return left.Code == right.Code && left.Rune == right.Rune && left.Mod == right.Mod
++}
++
++func shortcutAction(binding Shortcut, next event.Event) Action {
++	return Action{Target: binding.Target, Kind: binding.Kind, Event: next}
++}
+diff --git a/ui/shortcut_test.go b/ui/shortcut_test.go
+new file mode 100644
+index 0000000..756e164
+--- /dev/null
++++ b/ui/shortcut_test.go
+@@ -0,0 +1,193 @@
++package ui
++
++import (
++	"testing"
++
++	lux "github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++func shortcutSnapshot(t *testing.T, ctx *Context, modalID ID, bindings ...Shortcut) {
++	t.Helper()
++	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(20, 5))}
++	ctx.Begin(frame)
++	ctx.Region("field", frame.Canvas, render.Rect{W: 10, H: 1}, Focusable|Editable)
++	if modalID != "" {
++		ctx.BeginModal(modalID, frame.Canvas, render.Rect{W: 20, H: 5})
++		ctx.Region("modal-button", frame.Canvas, render.Rect{Y: 2, W: 10, H: 1}, Focusable|Activatable)
++	}
++	for _, binding := range bindings {
++		ctx.Shortcut(binding)
++	}
++	if modalID != "" {
++		ctx.EndModal()
++	}
++	ctx.End(frame)
++	commitBuilt(ctx)
++}
++
++func commitBuilt(ctx *Context) {
++	ctx.mu.Lock()
++	next := snapshot{regions: append([]region(nil), ctx.building...), shortcuts: append([]Shortcut(nil), ctx.shortcuts...), modal: ctx.buildingModal, focus: ctx.viewFocus}
++	generation, sequence := ctx.buildingGen, ctx.sequence
++	ctx.mu.Unlock()
++	ctx.commit(generation, sequence, next)
++}
++
++func TestShortcutScopePriorityAndExactKey(t *testing.T) {
++	var ctx Context
++	key := event.KeyEvent{Code: event.KeyRune, Rune: 'k', Mod: event.ModCtrl}
++	shortcutSnapshot(t, &ctx, "",
++		Shortcut{Key: key, Target: "field", Kind: Activate, Scope: ScopeFocused},
++		Shortcut{Key: key, Target: "app", Kind: Dismiss, Scope: ScopeApp},
++	)
++	action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'k', Mod: event.ModCtrl, Repeat: 9}})
++	if !handled || action.Target != "field" || action.Kind != Activate {
++		t.Fatalf("focused shortcut = %#v handled=%v", action, handled)
++	}
++	if action, handled = ctx.Handle(event.RuneKey('k', event.ModCtrl|event.ModShift)); !handled || action.Kind != Input || action.Target != "field" {
++		t.Fatalf("extra modifier shortcut matched = %#v handled=%v", action, handled)
++	}
++}
++
++func TestNativeEditorBeatsModalAndAppButFocusedMayOverride(t *testing.T) {
++	var ctx Context
++	shortcutSnapshot(t, &ctx, "",
++		Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x'}, Target: "app", Kind: Activate, Scope: ScopeApp},
++	)
++	action, handled := ctx.Handle(event.RuneKey('x', 0))
++	if !handled || action.Target != "field" || action.Kind != Input {
++		t.Fatalf("editor input = %#v handled=%v", action, handled)
++	}
++
++	shortcutSnapshot(t, &ctx, "",
++		Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x'}, Target: "field", Kind: Activate, Scope: ScopeFocused},
++	)
++	action, handled = ctx.Handle(event.RuneKey('x', 0))
++	if !handled || action.Target != "field" || action.Kind != Activate {
++		t.Fatalf("explicit focused override = %#v handled=%v", action, handled)
++	}
++}
++
++func TestModalShortcutSuppressesAppAndEscapeWins(t *testing.T) {
++	var ctx Context
++	key := event.KeyEvent{Code: event.KeyF1}
++	shortcutSnapshot(t, &ctx, "dialog",
++		Shortcut{Key: key, Target: "dialog", Kind: Activate, Scope: ScopeModal},
++		Shortcut{Key: key, Target: "app", Kind: Activate, Scope: ScopeApp},
++		Shortcut{Key: event.KeyEvent{Code: event.KeyEscape}, Target: "dialog", Kind: Activate, Scope: ScopeModal},
++	)
++	action, handled := ctx.Handle(event.KeyPress(event.KeyF1, 0))
++	if !handled || action.Target != "dialog" || action.Kind != Activate {
++		t.Fatalf("modal shortcut = %#v handled=%v", action, handled)
++	}
++	action, handled = ctx.Handle(event.KeyPress(event.KeyEscape, 0))
++	if !handled || action.Target != "dialog" || action.Kind != Dismiss {
++		t.Fatalf("escape = %#v handled=%v", action, handled)
++	}
++}
++
++func TestModalShortcutBeatsNativeEditableAndScrollable(t *testing.T) {
++	key := event.KeyEvent{Code: event.KeyF1}
++	for _, flags := range []Flags{Focusable | Editable, Focusable | Scrollable} {
++		var ctx Context
++		ctx.generation, ctx.sizeKnown = 1, true
++		ctx.commit(1, 1, snapshot{
++			regions:   []region{{id: "control", bounds: render.Rect{W: 10, H: 1}, flags: flags, modal: "dialog", contentHeight: -1}},
++			shortcuts: []Shortcut{{Key: key, Target: "dialog", Kind: Activate, Scope: ScopeModal}},
++			modal:     modal{id: "dialog", bounds: render.Rect{W: 20, H: 5}},
++			focus:     "control",
++		})
++		action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: key})
++		if !handled || action.Target != "dialog" || action.Kind != Activate {
++			t.Fatalf("flags %v: action=%#v handled=%v", flags, action, handled)
++		}
++	}
++}
++
++func TestShortcutDisabledDuplicateAndPresentationBinding(t *testing.T) {
++	var ctx Context
++	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(10, 2))}
++	ctx.Begin(frame)
++	key := event.KeyEvent{Code: event.KeyF2}
++	ctx.Shortcut(Shortcut{Key: key, Target: "app", Kind: Activate, Scope: ScopeApp, Disabled: true})
++	ctx.Shortcut(Shortcut{Key: key, Target: "app", Kind: Activate, Scope: ScopeApp})
++	ctx.End(frame)
++	if action, handled := ctx.Handle(event.KeyPress(event.KeyF2, 0)); handled || action.Kind != None {
++		t.Fatalf("unpresented shortcut = %#v handled=%v", action, handled)
++	}
++	commitBuilt(&ctx)
++	if action, handled := ctx.Handle(event.KeyPress(event.KeyF2, 0)); !handled || action.Target != "app" {
++		t.Fatalf("presented shortcut = %#v handled=%v", action, handled)
++	}
++
++	defer func() {
++		if recover() == nil {
++			t.Fatal("duplicate shortcut did not panic")
++		}
++	}()
++	ctx.Begin(frame)
++	ctx.Shortcut(Shortcut{Key: key, Target: "one", Kind: Activate, Scope: ScopeApp})
++	ctx.Shortcut(Shortcut{Key: event.KeyEvent{Code: event.KeyF2, Repeat: 99}, Target: "two", Kind: Dismiss, Scope: ScopeApp})
++}
++
++func TestShortcutResizeInvalidatesCommittedBinding(t *testing.T) {
++	var ctx Context
++	shortcutSnapshot(t, &ctx, "", Shortcut{Key: event.KeyEvent{Code: event.KeyF3}, Target: "app", Kind: Activate, Scope: ScopeApp})
++	ctx.Handle(event.ResizeTo(40, 10))
++	if action, handled := ctx.Handle(event.KeyPress(event.KeyF3, 0)); handled || action.Kind != None {
++		t.Fatalf("stale shortcut = %#v handled=%v", action, handled)
++	}
++}
++
++func TestPriorityAppShortcutBeatsEditorAndModal(t *testing.T) {
++	var ctx Context
++	key := event.KeyEvent{Code: event.KeyRune, Rune: 'q', Mod: event.ModCtrl}
++	shortcutSnapshot(t, &ctx, "dialog", Shortcut{Key: key, Target: "quit", Kind: Activate, Scope: ScopeApp, Priority: true})
++	action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: key})
++	if !handled || action.Target != "quit" || action.Kind != Activate {
++		t.Fatalf("priority = %#v handled=%v", action, handled)
++	}
++}
++
++func TestAppShortcutBeatsEditorWhenNoModal(t *testing.T) {
++	var ctx Context
++	key := event.KeyEvent{Code: event.KeyF1}
++	shortcutSnapshot(t, &ctx, "", Shortcut{Key: key, Target: "help", Kind: Activate, Scope: ScopeApp, Priority: true})
++	action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: key})
++	if !handled || action.Target != "help" {
++		t.Fatalf("app shortcut = %#v handled=%v", action, handled)
++	}
++}
++
++func TestFocusedControlsMayShareAChord(t *testing.T) {
++	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(20, 2))}
++	var ctx Context
++	ctx.Begin(frame)
++	key := event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}
++	ctx.Shortcut(Shortcut{Key: key, Target: "one", Kind: Activate, Scope: ScopeFocused})
++	ctx.Shortcut(Shortcut{Key: key, Target: "two", Kind: Activate, Scope: ScopeFocused})
++}
++
++func TestShortcutOwnerMayDifferFromActionTarget(t *testing.T) {
++	var ctx Context
++	key := event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}
++	shortcutSnapshot(t, &ctx, "", Shortcut{Key: key, Owner: "field", Target: "copy", Kind: Activate, Scope: ScopeFocused})
++	action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: key})
++	if !handled || action.Target != "copy" {
++		t.Fatalf("owned shortcut = %#v handled=%v", action, handled)
++	}
++}
++
++func TestPriorityNonAppPanics(t *testing.T) {
++	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(10, 2))}
++	var ctx Context
++	ctx.Begin(frame)
++	defer func() {
++		if recover() == nil {
++			t.Fatal("invalid priority shortcut did not panic")
++		}
++	}()
++	ctx.Shortcut(Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "x", Kind: Activate, Scope: ScopeFocused, Priority: true})
++}
+diff --git a/ui/textinput.go b/ui/textinput.go
+index 25827c6..40118ba 100644
+--- a/ui/textinput.go
++++ b/ui/textinput.go
+@@ -18,8 +18,21 @@ type TextInput struct {
+ 	Cursor      int
+ 	Anchor      int
+ 	MaxBytes    int
++	UndoBytes   int
+ 	Offset      int
+ 	Placeholder string
++
++	undo      []textInputSnapshot
++	redo      []textInputSnapshot
++	undoBytes int
++	redoBytes int
++}
++
++const defaultUndoBytes = 64 << 10
++
++type textInputSnapshot struct {
++	value          string
++	cursor, anchor int
+ }
+ 
+ // InputStyle controls painting and whether a field accepts interaction. Zero
+@@ -42,6 +55,7 @@ func (t *TextInput) SetValue(value string) {
+ 	}
+ 	t.Value = limitText(sanitizeInput(value), t.MaxBytes)
+ 	t.Cursor, t.Anchor, t.Offset = len(t.Value), len(t.Value), 0
++	t.clearHistory()
+ }
+ 
+ // Selection returns the ordered half-open selected byte range. Equal values
+@@ -57,6 +71,72 @@ func (t *TextInput) Selection() (start, end int) {
+ 	return t.Anchor, t.Cursor
+ }
+ 
++// SelectedText returns a detached copy of the selected text.
++func (t *TextInput) SelectedText() string {
++	if t == nil {
++		return ""
++	}
++	start, end := t.Selection()
++	return strings.Clone(t.Value[start:end])
++}
++
++// ReplaceSelection replaces the selection as one undoable edit. An empty
++// value deletes the selection.
++func (t *TextInput) ReplaceSelection(value string) bool {
++	if t == nil {
++		return false
++	}
++	t.normalize()
++	t.prepareHistory()
++	before := t.snapshot()
++	state := t.state()
++	deleteSelection := value == ""
++	value = sanitizeInput(value)
++	if value == "" && !deleteSelection {
++		return state.changed(t)
++	}
++	if deleteSelection {
++		start, end := t.selection()
++		t.remove(start, end)
++	} else {
++		t.insert(value)
++	}
++	t.recordEdit(before)
++	return state.changed(t)
++}
++
++// Undo restores the last value-changing edit.
++func (t *TextInput) Undo() bool {
++	if t == nil {
++		return false
++	}
++	t.normalize()
++	t.prepareHistory()
++	previous, ok := t.popHistory(&t.undo, &t.undoBytes)
++	if !ok {
++		return false
++	}
++	t.pushHistory(&t.redo, &t.redoBytes, t.snapshot())
++	t.restore(previous)
++	return true
++}
++
++// Redo reapplies the last undone edit.
++func (t *TextInput) Redo() bool {
++	if t == nil {
++		return false
++	}
++	t.normalize()
++	t.prepareHistory()
++	next, ok := t.popHistory(&t.redo, &t.redoBytes)
++	if !ok {
++		return false
++	}
++	t.pushHistory(&t.undo, &t.undoBytes, t.snapshot())
++	t.restore(next)
++	return true
++}
++
+ // Apply applies one routed Input action and reports whether editable state
+ // changed. It accepts committed text, bounded paste, navigation, deletion,
+ // Ctrl+A, Ctrl+Left/Right UAX #29 word movement, and local mouse placement.
+@@ -64,8 +144,15 @@ func (t *TextInput) Apply(action Action) bool {
+ 	if t == nil || action.Kind != Input {
+ 		return false
+ 	}
+-	before := *t
++	original := t.state()
+ 	t.normalize()
++	t.prepareHistory()
++	if action.Event.Kind == event.Key {
++		if handled, changed := t.applyHistoryKey(action.Event.Key); handled {
++			return changed || original.changed(t)
++		}
++	}
++	before := t.snapshot()
+ 	switch action.Event.Kind {
+ 	case event.Text, event.Paste:
+ 		t.insert(action.Event.Text)
+@@ -74,7 +161,8 @@ func (t *TextInput) Apply(action Action) bool {
+ 	case event.Mouse:
+ 		t.applyMouse(action)
+ 	}
+-	return before.Value != t.Value || before.Cursor != t.Cursor || before.Anchor != t.Anchor || before.Offset != t.Offset
++	t.recordEdit(before)
++	return original.changed(t)
+ }
+ 
+ // Input registers and paints a one-line text input. Read-only fields remain
+@@ -135,6 +223,132 @@ func (t *TextInput) normalize() {
+ 	t.Cursor, t.Anchor, t.Offset = floorBoundaries(t.Value, t.Cursor, t.Anchor, t.Offset)
+ }
+ 
++type textInputState struct {
++	value                  string
++	cursor, anchor, offset int
++}
++
++func (t *TextInput) state() textInputState {
++	return textInputState{value: t.Value, cursor: t.Cursor, anchor: t.Anchor, offset: t.Offset}
++}
++
++func (s textInputState) changed(t *TextInput) bool {
++	return s.value != t.Value || s.cursor != t.Cursor || s.anchor != t.Anchor || s.offset != t.Offset
++}
++
++func (t *TextInput) snapshot() textInputSnapshot {
++	return textInputSnapshot{value: t.Value, cursor: t.Cursor, anchor: t.Anchor}
++}
++
++func (t *TextInput) restore(snapshot textInputSnapshot) {
++	t.Value = limitText(sanitizeInput(snapshot.value), t.MaxBytes)
++	t.Cursor, t.Anchor, _ = floorBoundaries(t.Value, snapshot.cursor, snapshot.anchor, 0)
++	t.Offset = floorBoundary(t.Value, min(t.Offset, t.Cursor))
++}
++
++func (t *TextInput) historyLimit() int {
++	if t.UndoBytes == 0 {
++		return defaultUndoBytes
++	}
++	return t.UndoBytes
++}
++
++func (t *TextInput) prepareHistory() {
++	limit := t.historyLimit()
++	if limit < 0 {
++		t.clearHistory()
++		return
++	}
++	t.trimHistory(&t.undo, &t.undoBytes, limit)
++	t.trimHistory(&t.redo, &t.redoBytes, limit)
++}
++
++func (t *TextInput) clearHistory() {
++	clear(t.undo)
++	clear(t.redo)
++	t.undo, t.redo = nil, nil
++	t.undoBytes, t.redoBytes = 0, 0
++}
++
++func (t *TextInput) recordEdit(before textInputSnapshot) {
++	if before.value == t.Value {
++		return
++	}
++	clear(t.redo)
++	t.redo, t.redoBytes = nil, 0
++	t.pushHistory(&t.undo, &t.undoBytes, before)
++}
++
++func (t *TextInput) pushHistory(stack *[]textInputSnapshot, bytes *int, snapshot textInputSnapshot) {
++	limit := t.historyLimit()
++	if limit < 0 {
++		clear(*stack)
++		*stack, *bytes = nil, 0
++		return
++	}
++	snapshot.value = strings.Clone(snapshot.value)
++	size := snapshotSize(snapshot)
++	if size > limit {
++		clear(*stack)
++		*stack, *bytes = nil, 0
++		return
++	}
++	*stack = append(*stack, snapshot)
++	*bytes += size
++	t.trimHistory(stack, bytes, limit)
++}
++
++func (t *TextInput) trimHistory(stack *[]textInputSnapshot, bytes *int, limit int) {
++	remove := 0
++	for *bytes > limit && remove < len(*stack) {
++		*bytes -= snapshotSize((*stack)[remove])
++		remove++
++	}
++	if remove == 0 {
++		return
++	}
++	copy(*stack, (*stack)[remove:])
++	clear((*stack)[len(*stack)-remove:])
++	*stack = (*stack)[:len(*stack)-remove]
++}
++
++func (t *TextInput) popHistory(stack *[]textInputSnapshot, bytes *int) (textInputSnapshot, bool) {
++	if len(*stack) == 0 {
++		return textInputSnapshot{}, false
++	}
++	last := len(*stack) - 1
++	snapshot := (*stack)[last]
++	(*stack)[last] = textInputSnapshot{}
++	*stack = (*stack)[:last]
++	*bytes -= snapshotSize(snapshot)
++	return snapshot, true
++}
++
++func snapshotSize(snapshot textInputSnapshot) int {
++	return max(len(snapshot.value), 1)
++}
++
++func (t *TextInput) applyHistoryKey(key event.KeyEvent) (handled, changed bool) {
++	if key.Code != event.KeyRune || key.Mod&event.ModCtrl == 0 || key.Mod&(event.ModAlt|event.ModSuper) != 0 {
++		return false, false
++	}
++	r := unicode.ToLower(key.Rune)
++	undo := r == 'z' && key.Mod&event.ModShift == 0
++	redo := r == 'y' && key.Mod&event.ModShift == 0 || r == 'z' && key.Mod&event.ModShift != 0
++	if !undo && !redo {
++		return false, false
++	}
++	count := min(max(int(key.Repeat), 1), len(t.undo)+len(t.redo)+1)
++	for range count {
++		if undo {
++			changed = t.Undo() || changed
++		} else {
++			changed = t.Redo() || changed
++		}
++	}
++	return true, changed
++}
++
+ func (t *TextInput) applyKey(key event.KeyEvent) {
+ 	shift := key.Mod&event.ModShift != 0
+ 	ctrl := key.Mod&event.ModCtrl != 0
+@@ -176,13 +390,14 @@ func (t *TextInput) applyKey(key event.KeyEvent) {
+ 	case event.KeyEnd:
+ 		t.move(len(t.Value), shift)
+ 	case event.KeyBackspace:
+-		if ctrl {
+-			return
+-		}
+ 		for range count {
+ 			start, end := t.selection()
+ 			if start == end {
+-				start = previousBoundary(t.Value, t.Cursor)
++				if ctrl {
++					start = previousWord(t.Value, t.Cursor)
++				} else {
++					start = previousBoundary(t.Value, t.Cursor)
++				}
+ 			}
+ 			if start == end {
+ 				break
+@@ -190,13 +405,14 @@ func (t *TextInput) applyKey(key event.KeyEvent) {
+ 			t.remove(start, end)
+ 		}
+ 	case event.KeyDelete:
+-		if ctrl {
+-			return
+-		}
+ 		for range count {
+ 			start, end := t.selection()
+ 			if start == end {
+-				end = nextBoundary(t.Value, t.Cursor)
++				if ctrl {
++					end = nextWord(t.Value, t.Cursor)
++				} else {
++					end = nextBoundary(t.Value, t.Cursor)
++				}
+ 			}
+ 			if start == end {
+ 				break
+diff --git a/ui/textinput_test.go b/ui/textinput_test.go
+index dc15404..e4be12f 100644
+--- a/ui/textinput_test.go
++++ b/ui/textinput_test.go
+@@ -88,6 +88,110 @@ func TestTextInputSelectionWordAndReplacement(t *testing.T) {
+ 	}
+ }
+ 
++func TestTextInputUndoRedoAndInvalidation(t *testing.T) {
++	var input TextInput
++	input.SetValue("a")
++	input.Apply(inputAction(event.RuneKey('b', 0)))
++	input.Apply(inputAction(event.RuneKey('c', 0)))
++	if !input.Apply(inputAction(event.RuneKey('z', event.ModCtrl))) || input.Value != "ab" {
++		t.Fatalf("undo = %#v", input)
++	}
++	if !input.Apply(inputAction(event.RuneKey('z', event.ModCtrl|event.ModShift))) || input.Value != "abc" {
++		t.Fatalf("shift redo = %#v", input)
++	}
++	input.Undo()
++	input.Apply(inputAction(event.RuneKey('x', 0)))
++	if input.Redo() || input.Value != "abx" {
++		t.Fatalf("redo survived branch = %#v", input)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyLeft, 0)))
++	if !input.Undo() || input.Value != "ab" {
++		t.Fatalf("navigation entered history = %#v", input)
++	}
++	input.SetValue("reset")
++	if input.Undo() || input.Redo() {
++		t.Fatal("SetValue did not reset history")
++	}
++}
++
++func TestTextInputUndoBoundsAndDisable(t *testing.T) {
++	input := TextInput{UndoBytes: 2}
++	input.SetValue("a")
++	input.Apply(inputAction(event.RuneKey('b', 0))) // snapshot "a"
++	input.Apply(inputAction(event.RuneKey('c', 0))) // snapshot "ab", evicts "a"
++	input.Apply(inputAction(event.RuneKey('d', 0))) // snapshot "abc" cannot fit, clears
++	if input.Undo() {
++		t.Fatal("oversize snapshot was retained")
++	}
++	input.UndoBytes = -1
++	input.Apply(inputAction(event.RuneKey('e', 0)))
++	if input.Undo() {
++		t.Fatal("negative UndoBytes retained history")
++	}
++}
++
++func TestUndoRedoRespectChangedMaxBytes(t *testing.T) {
++	var input TextInput
++	input.SetValue("abc")
++	input.Apply(inputAction(event.RuneKey('d', 0)))
++	input.MaxBytes = 1
++	if !input.Undo() || input.Value != "a" || len(input.Value) > input.MaxBytes || !textBoundary(input.Value, input.Cursor) {
++		t.Fatalf("bounded undo = %#v", input)
++	}
++	if !input.Redo() || input.Value != "a" || len(input.Value) > input.MaxBytes {
++		t.Fatalf("bounded redo = %#v", input)
++	}
++}
++
++func TestTextInputUndoRestoresSelectionNotViewport(t *testing.T) {
++	var input TextInput
++	input.SetValue("abcdef")
++	input.Cursor, input.Anchor, input.Offset = 4, 1, 1
++	input.ReplaceSelection("X")
++	input.Offset = 0
++	if !input.Undo() || input.Value != "abcdef" || input.Cursor != 4 || input.Anchor != 1 || input.Offset != 0 {
++		t.Fatalf("restored state = %#v", input)
++	}
++}
++
++func TestTextInputRejectedEditDoesNotInvalidateRedo(t *testing.T) {
++	input := TextInput{MaxBytes: 1}
++	input.SetValue("a")
++	input.Cursor, input.Anchor = 0, len(input.Value)
++	input.ReplaceSelection("b")
++	input.Undo()
++	if input.ReplaceSelection("\U0001f642") {
++		t.Fatal("oversize edit was accepted")
++	}
++	if !input.Redo() || input.Value != "b" {
++		t.Fatalf("rejected edit invalidated redo: %#v", input)
++	}
++}
++
++func TestTextInputReplaceSelectionAndWordDelete(t *testing.T) {
++	input := TextInput{}
++	input.SetValue("go e\u0301lan, \u4e16\u754c next")
++	input.Cursor, input.Anchor = len("go e\u0301lan"), len("go ")
++	if got := input.SelectedText(); got != "e\u0301lan" {
++		t.Fatalf("selection = %q", got)
++	}
++	if !input.ReplaceSelection("\U0001f642") || input.Value != "go \U0001f642, \u4e16\u754c next" {
++		t.Fatalf("replace = %#v", input)
++	}
++	input.Apply(inputAction(event.KeyPress(event.KeyBackspace, event.ModCtrl)))
++	if input.Value != ", \u4e16\u754c next" || !textBoundary(input.Value, input.Cursor) {
++		t.Fatalf("ctrl-backspace = %#v", input)
++	}
++	input.Cursor, input.Anchor = len(", "), len(", ")
++	input.Apply(inputAction(event.KeyPress(event.KeyDelete, event.ModCtrl)))
++	if input.Value != ", \u754c next" || !textBoundary(input.Value, input.Cursor) {
++		t.Fatalf("ctrl-delete = %#v", input)
++	}
++	if !input.Undo() || input.Value != ", \u4e16\u754c next" {
++		t.Fatalf("word delete undo = %#v", input)
++	}
++}
++
+ func TestTextInputPasteLimitDoesNotSplitOrDeleteOnReject(t *testing.T) {
+ 	input := TextInput{MaxBytes: 4}
+ 	input.SetValue("ab")

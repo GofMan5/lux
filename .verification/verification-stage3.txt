@@ -1,0 +1,31 @@
+LUX TUI stage 3 verification
+UTC: 2026-08-10T04:12:35.3364804Z
+Baseline: 724640bab000466b5d679810981b888971ecf8ed
+Modified: d65c69569c9776ef9a58ab8dcc8e72a3ba956778
+
+Features:
+  presentation-bound shortcut scopes with Owner/Target separation and app priority
+  fixed-row ScrollViewport: O(1) state, O(visible) draw for 1,000,000 rows
+  TextInput bounded cloned undo/redo, Ctrl-word deletion, explicit Clipboard port
+  showcase: scoped F1/Ctrl+Q, memory clipboard, visible virtual million-row log
+
+Validation:
+  go test -count=1 ./... : PASS
+  go test -race -shuffle=on -count=10 ./... : PASS
+  go vet ./... : PASS
+  go mod verify : all modules verified
+  TextInput fuzz 15s: 299946 executions, 56 new interesting, PASS
+  independent reviews: PASS, no remaining blocker
+
+Benchmarks, Windows amd64 i5-10400F Go 1.25.5:
+  hit 10/100/1000: 73.40/71.13/73.65 ns/op, 0 alloc
+  1M range rows 8/24/80: 5.03/12.01/44.96 ns/op, 0 alloc
+  TextInput 32B/1KiB/64KiB: 9.5us/318.7us/22.7ms, 0 alloc
+
+Cross-build hashes:
+  Linux amd64: 31F2A642AF665D44709180B6216BD6E6B9FABD7C8D7FA6D10650AE2C3766B828
+  Windows amd64: 5DF0E7019B1AEAD1C05B7058E3B61009DDD4E8140029288805261B9BDECBE2BC
+  Darwin arm64: 88A54FA66105DABDA8BE3F2949834CC3EC7327C2AD7EC616FD864FDFBE355B56
+
+Rollback:
+  powershell -NoProfile -ExecutionPolicy Bypass -File .verification/rollback-stage3.ps1
