@@ -134,7 +134,7 @@ LUX does not materialize one million IDs or strings.
 
 Wheel routing through nested viewports is 0 alloc/op and grows with nesting
 depth in its worst case, where every level is exhausted and the whole enclosure
-chain is walked: about 181 ns for 2 levels, 252 ns for 8, and 709 ns for 32 in
+chain is walked: about 173 ns for 2 levels, 242 ns for 8, and 516 ns for 32 in
 the same run. Real interfaces nest a few levels, so no parent index is justified
 yet.
 

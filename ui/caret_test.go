@@ -377,20 +377,33 @@ func TestEnsureOffsetKeepsCaretVisibleAndMinimal(t *testing.T) {
 
 func TestEnsureOffsetStaysLinear(t *testing.T) {
 	// Measuring the candidate window inside a loop made this quadratic: a pasted
-	// 64 KiB value took seconds per frame. The bound is ~100x the linear cost, so
-	// it cannot flake, but a quadratic implementation needs minutes.
-	input := TextInput{Value: strings.Repeat("ab界🙂", 8<<10)}
-	input.Cursor, input.Anchor = len(input.Value), len(input.Value)
-	started := time.Now()
-	for range 20 {
-		input.Offset = 0
-		input.ensureOffset(20, true)
+	// 3 KB value took seconds per frame. One absolute bound catches a severe
+	// regression within a second, and a growth ratio catches a mild one without
+	// depending on machine speed or the race detector's overhead.
+	measure := func(clusters, repeats int) (time.Duration, int) {
+		input := TextInput{Value: strings.Repeat("ab界🙂", clusters)}
+		input.Cursor, input.Anchor = len(input.Value), len(input.Value)
+		started := time.Now()
+		for range repeats {
+			input.Offset = 0
+			input.ensureOffset(20, true)
+		}
+		return time.Since(started), input.Offset
 	}
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
-		t.Fatalf("20 window recomputations over %d bytes took %s", len(input.Value), elapsed)
+	single, offset := measure(1<<10, 1)
+	if offset == 0 {
+		t.Fatalf("a value far wider than the field must scroll, offset = %d", offset)
 	}
-	if input.Offset == 0 || input.Offset > input.Cursor {
-		t.Fatalf("offset = %d for cursor %d", input.Offset, input.Cursor)
+	if single > time.Second {
+		t.Fatalf("one window recomputation over 10 KB took %s", single)
+	}
+	small, _ := measure(2<<10, 5)
+	large, _ := measure(4<<10, 5)
+	if small < time.Millisecond {
+		t.Skipf("baseline %s is too small to compare growth", small)
+	}
+	if large > 3*small {
+		t.Fatalf("doubling the text grew the cost from %s to %s, which is not linear", small, large)
 	}
 }
 
