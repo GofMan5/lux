@@ -1,6 +1,6 @@
 # Architecture
 
-Status snapshot: **2026-08-09**. This document distinguishes code present in
+Status snapshot: **2026-08-11**. This document distinguishes code present in
 the repository from intended boundaries; roadmap items are explicitly labeled.
 
 ## Design constraints
@@ -96,6 +96,13 @@ grapheme's trailing cell as a continuation. Canvas operations clip atomically:
 they do not leave half a wide glyph. Buffers support cloning, resizing,
 comparison, changed-cell extraction, and front/back lifecycle.
 
+A buffer also carries the caret the terminal cursor should occupy, because the
+cursor is part of the frame being presented rather than a second channel to the
+adapter. It is presentation state: cell equality and diffs ignore it, `Reset`
+hides it so every frame restates it, a resize invalidates it, and a caret on a
+wide grapheme's continuation cell snaps to the leading cell. `Canvas.SetCaret`
+converts local coordinates and drops a caret outside the active clip.
+
 ### Responsive layout
 
 `layout.Classify` combines width and height into `Tiny`, `Compact`, `Medium`, or
@@ -135,7 +142,9 @@ Shortcuts are value registrations committed with the same presented snapshot:
 focused bindings precede native control behavior, modal bindings suppress app
 bindings, and explicit priority app bindings are limited to lifecycle commands.
 `ScrollViewport` keeps only a row offset and returns a half-open visible range;
-one-million-row models therefore remain O(visible) at draw time. Text history
+one-million-row models therefore remain O(visible) at draw time. A viewport
+publishes whether it sits at a scroll boundary, which lets the router bubble the
+wheel to an enclosing viewport without a retained parent tree. Text history
 clones snapshots under a byte budget, and clipboard access is a hexagonal app
 port rather than a terminal escape sequence.
 
@@ -163,8 +172,17 @@ The current adapter provides:
 - bounded escape and paste buffers;
 - alternate-screen lifecycle and terminal restoration;
 - changed-run ANSI encoding and RGB → 256 → 16 → monochrome downgrade;
+- caret positioning with `DECTCEM` visibility transitions, emitted after the
+  cell runs that move the cursor;
 - opt-in synchronized output through `LUX_TUI_SYNC_OUTPUT`;
 - newline-delimited plain snapshots for redirected output or `TERM=dumb`.
+
+Encoder correctness is proved rather than asserted: a test-only VT interpreter
+covering exactly the sequences the encoder can emit replays real output into a
+grid seeded from the previous frame, then requires that grid to equal the source
+buffer under the active color depth, including the caret. It runs across the
+four color depths with synchronized output on and off, over successive diffs,
+and across a resize repaint.
 
 Capability detection is deliberately conservative but currently environment
 based. Active, bounded feature negotiation is roadmap work.

@@ -7,7 +7,11 @@ import (
 	"github.com/lux-tui/lux/render"
 )
 
-const resetStyle = "\x1b[0m"
+const (
+	resetStyle = "\x1b[0m"
+	showCaret  = "\x1b[?25h"
+	hideCaret  = "\x1b[?25l"
+)
 
 func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
 	width, height := frame.Size()
@@ -57,10 +61,26 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
 			}
 		}
 	}
-	if !wrote {
+	caretX, caretY, caretOn := frame.Caret()
+	oldX, oldY, caretWasOn := previous.Caret()
+	caretMoved := caretOn != caretWasOn || caretOn && (caretX != oldX || caretY != oldY)
+	if !wrote && !caretMoved {
 		return dst[:start]
 	}
-	dst = append(dst, resetStyle...)
+	if wrote {
+		dst = append(dst, resetStyle...)
+	}
+	switch {
+	case caretOn:
+		// Cell runs left the cursor wherever the last run ended, so the caret is
+		// repositioned whenever anything was written, not only when it moved.
+		dst = appendCursor(dst, caretY+1, caretX+1)
+		if !caretWasOn {
+			dst = append(dst, showCaret...)
+		}
+	case caretWasOn:
+		dst = append(dst, hideCaret...)
+	}
 	if synchronized {
 		payload := append([]byte("\x1b[?2026h"), dst[start:]...)
 		payload = append(payload, "\x1b[?2026l"...)

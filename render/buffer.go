@@ -7,11 +7,17 @@ type Change struct {
 	Cell Cell
 }
 
-// Buffer owns a rectangular, row-major grid of canonical cells.
+// Buffer owns a rectangular, row-major grid of canonical cells plus the caret
+// the terminal cursor should occupy. The caret is presentation state: cell
+// comparison, diffing, and equality ignore it.
 type Buffer struct {
 	width  int
 	height int
 	cells  []Cell
+
+	caretX      int
+	caretY      int
+	caretActive bool
 }
 
 // NewBuffer returns a blank buffer. Negative dimensions are treated as zero.
@@ -66,6 +72,39 @@ func (b *Buffer) CellAt(index int) Cell {
 	return b.cells[index]
 }
 
+// SetCaret asks the terminal to show its cursor at x, y. Coordinates outside
+// the buffer hide it instead; a wide grapheme's continuation cell snaps to the
+// leading cell, where a real terminal keeps its cursor.
+func (b *Buffer) SetCaret(x, y int) {
+	if b == nil {
+		return
+	}
+	cell, ok := b.CellOK(x, y)
+	if !ok {
+		b.caretActive = false
+		return
+	}
+	if cell.Width == 0 && x > 0 {
+		x--
+	}
+	b.caretX, b.caretY, b.caretActive = x, y, true
+}
+
+// HideCaret leaves the terminal cursor hidden for this frame.
+func (b *Buffer) HideCaret() {
+	if b != nil {
+		b.caretActive = false
+	}
+}
+
+// Caret returns the requested cursor cell and whether it should be shown.
+func (b *Buffer) Caret() (x, y int, visible bool) {
+	if b == nil {
+		return 0, 0, false
+	}
+	return b.caretX, b.caretY, b.caretActive
+}
+
 // EqualCell compares one coordinate in two buffers.
 func (b *Buffer) EqualCell(other *Buffer, x, y int) bool {
 	left, leftOK := b.CellOK(x, y)
@@ -102,7 +141,7 @@ func (b *Buffer) Clone() *Buffer {
 	if b == nil {
 		return nil
 	}
-	clone := &Buffer{width: b.width, height: b.height, cells: make([]Cell, len(b.cells))}
+	clone := &Buffer{width: b.width, height: b.height, cells: make([]Cell, len(b.cells)), caretX: b.caretX, caretY: b.caretY, caretActive: b.caretActive}
 	copy(clone.cells, b.cells)
 	return clone
 }
@@ -114,10 +153,12 @@ func (b *Buffer) CopyFrom(source *Buffer) {
 	}
 	if source == nil {
 		b.width, b.height, b.cells = 0, 0, nil
+		b.caretActive = false
 		return
 	}
 	b.width, b.height = source.width, source.height
 	b.cells = append(b.cells[:0], source.cells...)
+	b.caretX, b.caretY, b.caretActive = source.caretX, source.caretY, source.caretActive
 }
 
 // Resize changes the dimensions while preserving their overlapping top-left
@@ -140,12 +181,17 @@ func (b *Buffer) Resize(width, height int) bool {
 		copy(cells[y*width:y*width+copyWidth], b.cells[y*b.width:y*b.width+copyWidth])
 	}
 	b.width, b.height, b.cells = width, height, cells
+	b.caretActive = false
 	b.repair()
 	return true
 }
 
-// Reset clears b to default-style blanks without reallocating.
-func (b *Buffer) Reset() { b.Clear(Style{}) }
+// Reset clears b to default-style blanks and hides the caret without
+// reallocating. Each frame therefore restates its caret.
+func (b *Buffer) Reset() {
+	b.Clear(Style{})
+	b.HideCaret()
+}
 
 // Clear fills b with blank cells using style.
 func (b *Buffer) Clear(style Style) {

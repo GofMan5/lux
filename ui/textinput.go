@@ -194,6 +194,13 @@ func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *T
 	canvas.Fill(line, " ", base)
 	focused := c.Focused(id) && !style.ReadOnly && !style.Disabled
 	input.ensureOffset(line.W, focused)
+	if focused {
+		// The real terminal cursor follows the caret so IME and screen readers
+		// track it; a clipped or scrolled-out caret stays hidden.
+		if column := textCells(input.Value[input.Offset:input.Cursor]); column < line.W {
+			canvas.SetCaret(line.X+column, line.Y)
+		}
+	}
 
 	placeholder := style.Placeholder
 	if placeholder == (render.Style{}) {
@@ -428,14 +435,36 @@ func (t *TextInput) applyKey(key event.KeyEvent) {
 
 func (t *TextInput) applyMouse(action Action) {
 	mouse := action.Event.Mouse
-	if mouse.Action != event.MousePress || mouse.Button != event.MouseLeft {
+	if mouse.Button != event.MouseLeft {
 		return
 	}
-	target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W)
-	if mouse.Mod&event.ModShift != 0 {
-		t.Cursor = target
-	} else {
-		t.Cursor, t.Anchor = target, target
+	switch mouse.Action {
+	case event.MousePress:
+		target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W)
+		if mouse.Mod&event.ModShift != 0 {
+			t.Cursor = target
+		} else {
+			t.Cursor, t.Anchor = target, target
+		}
+	case event.MouseMove:
+		// A captured drag extends the selection and keeps the anchor; dragging
+		// past an edge walks one grapheme per event so a narrow field scrolls.
+		t.Cursor = t.dragTarget(action)
+	}
+}
+
+func (t *TextInput) dragTarget(action Action) int {
+	width := action.Bounds.W
+	switch {
+	case action.X < 0:
+		return previousBoundary(t.Value, min(t.Cursor, t.Offset))
+	case width > 0 && action.X >= width:
+		if inside := byteAtCell(t.Value, t.Offset, width-1, width); inside > t.Cursor {
+			return inside
+		}
+		return nextBoundary(t.Value, t.Cursor)
+	default:
+		return byteAtCell(t.Value, t.Offset, action.X, width)
 	}
 }
 
@@ -478,13 +507,14 @@ func (t *TextInput) remove(start, end int) {
 	t.Offset = floorBoundary(t.Value, min(t.Offset, t.Cursor))
 }
 
+// ensureOffset recomputes the horizontal window so the caret is visible. The
+// window is the shortest suffix of the text before the caret that still fits,
+// so one grapheme pass is enough; measuring the candidate window inside a loop
+// would be quadratic in the value length and stall a frame on a pasted field.
 func (t *TextInput) ensureOffset(width int, caret bool) {
 	if width <= 0 {
 		t.Offset = t.Cursor
 		return
-	}
-	if t.Offset > t.Cursor {
-		t.Offset = t.Cursor
 	}
 	needed := 0
 	if t.Cursor < len(t.Value) {
@@ -492,19 +522,28 @@ func (t *TextInput) ensureOffset(width int, caret bool) {
 	} else if caret {
 		needed = 1
 	}
-	for t.Offset < t.Cursor && textCells(t.Value[t.Offset:t.Cursor])+needed > width {
-		t.Offset = nextBoundary(t.Value, t.Offset)
-	}
-	if textCells(t.Value[t.Offset:t.Cursor])+needed > width {
+	budget := width - needed
+	if budget <= 0 {
 		t.Offset = t.Cursor
+		return
 	}
-	for t.Offset > 0 {
-		previous := previousBoundary(t.Value, t.Offset)
-		if textCells(t.Value[previous:t.Cursor])+needed > width {
-			break
+	head := t.Value[:t.Cursor]
+	total := textCells(head)
+	if total <= budget {
+		t.Offset = 0
+		return
+	}
+	used := 0
+	graphemes := uniseg.NewGraphemes(head)
+	for graphemes.Next() {
+		_, to := graphemes.Positions()
+		used += render.GraphemeWidth(graphemes.Str())
+		if total-used <= budget {
+			t.Offset = to
+			return
 		}
-		t.Offset = previous
 	}
+	t.Offset = t.Cursor
 }
 
 func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal, selection, caret render.Style, focused bool) {

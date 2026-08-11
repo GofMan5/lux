@@ -1,6 +1,6 @@
 # Performance contract
 
-Snapshot: **2026-08-09**. LUX TUI has microbenchmarks, but it has not published
+Snapshot: **2026-08-11**. LUX TUI has microbenchmarks, but it has not published
 cross-framework results. This document defines how claims must be earned.
 
 ## Current mechanisms, not benchmark claims
@@ -99,14 +99,19 @@ queues more output than the terminal can display.
 
 ## Planned performance work
 
-1. Add a test terminal that applies emitted VT operations to a reference grid.
-2. Make renderer output reusable without hidden per-frame allocations.
-3. Calibrate the implemented latest-state-wins adaptive scheduler under real
+1. Make renderer output reusable without hidden per-frame allocations.
+2. Calibrate the implemented latest-state-wins adaptive scheduler under real
    terminals and impaired transports.
-4. Add stronger writer-failure/full-repaint tests.
-5. Build equivalent competitor adapters and publish raw results.
-6. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
+3. Add stronger writer-failure/full-repaint tests.
+4. Build equivalent competitor adapters and publish raw results.
+5. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
    32 B/1 KiB/64 KiB before adding a spatial index or boundary cache.
+
+A test terminal that applies emitted VT operations to a reference grid now
+exists: `internal/terminal/vtgrid_test.go` replays real encoder output and
+requires the reconstructed grid, including the caret, to equal the source buffer
+across the four color depths, synchronized output on and off, successive diffs,
+and a resize repaint.
 
 Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
 show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
@@ -116,10 +121,22 @@ single-line editor is therefore tuned for ordinary form fields, not documents;
 a cached boundary table belongs in a future document editor rather than this
 small control.
 
+The editor's horizontal window is recomputed with one grapheme pass per frame.
+It was previously measured inside a loop, which is quadratic and made a pasted
+3 KB value take about 2.1 s per frame; fuzzing surfaced it as a worker timeout.
+The window is now linear in the value length, so a 64 KiB field costs about
+16 ms per recomputation — still a form-field budget, not a document one.
+
 The fixed-row virtual range for a declared one-million-row viewport remains
 O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and
 48 ns (80 rows), all 0 alloc/op. Applications draw only that returned range;
 LUX does not materialize one million IDs or strings.
+
+Wheel routing through nested viewports is 0 alloc/op and grows with nesting
+depth in its worst case, where every level is exhausted and the whole enclosure
+chain is walked: about 181 ns for 2 levels, 252 ns for 8, and 709 ns for 32 in
+the same run. Real interfaces nest a few levels, so no parent index is justified
+yet.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

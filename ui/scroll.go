@@ -96,9 +96,12 @@ func (s *ScrollState) EnsureVisible(index, content, rows int) {
 	s.Range(content, rows)
 }
 
-// ScrollStyle configures viewport interaction.
+// ScrollStyle configures viewport interaction. A Passive viewport routes the
+// wheel without joining Tab traversal, which is what a container whose children
+// own the keyboard needs.
 type ScrollStyle struct {
 	Disabled bool
+	Passive  bool
 }
 
 // ScrollViewport registers a fixed-row scrolling region and returns its
@@ -111,9 +114,16 @@ func (c *Context) ScrollViewport(id ID, canvas *render.Canvas, rect render.Rect,
 	_, rows := view.Size()
 	visible := state.Range(content, rows)
 	flags := Focusable | Scrollable
+	if style.Passive {
+		flags = Scrollable
+	}
 	if style.Disabled {
 		flags |= Disabled
 	}
-	c.RegionWithOptions(id, canvas, rect, flags, RegionOptions{ContentHeight: visible.Last - visible.First})
+	c.RegionWithOptions(id, canvas, rect, flags, RegionOptions{
+		ContentHeight: visible.Last - visible.First,
+		AtTop:         state.Offset <= 0,
+		AtBottom:      state.Offset >= max(max(content, 0)-max(rows, 0), 0),
+	})
 	return view
 }

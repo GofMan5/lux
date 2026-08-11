@@ -38,6 +38,7 @@ type showcase struct {
 	name          ui.TextInput
 	scenes        ui.ListState
 	logs          ui.ScrollState
+	controls      ui.ScrollState
 	showHelp      bool
 	observe       chan showcaseState
 	clipboard     memoryClipboard
@@ -46,6 +47,8 @@ type showcase struct {
 type showcaseState struct {
 	name     string
 	showHelp bool
+	controls int
+	logs     int
 }
 
 // memoryClipboard demonstrates the explicit port without touching the host
@@ -103,6 +106,8 @@ func (app *showcase) Update(next event.Event) lux.Command {
 			return lux.Quit()
 		case "logs":
 			app.logs.Apply(action, virtualLogCount, max(action.Bounds.H, 1))
+		case "controls":
+			app.controls.Apply(action, controlsContent, max(action.Bounds.H, 1))
 		}
 		return nil
 	}
@@ -172,7 +177,7 @@ func (app *showcase) View(frame *lux.Frame) {
 	}
 	if app.observe != nil {
 		select {
-		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp}:
+		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp, controls: app.controls.Offset, logs: app.logs.Offset}:
 		default:
 		}
 	}
@@ -181,6 +186,10 @@ func (app *showcase) View(frame *lux.Frame) {
 var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matrix", "Calm orbit"}
 
 const virtualLogCount = 1_000_000
+
+// controlsContent is the panel's natural row count: heading, editor, scene list,
+// nested log and the action row. The panel scrolls instead of dropping controls.
+const controlsContent = 19
 
 func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
 	buttonWidth := min(14, max(area.W/3, 6))
@@ -210,42 +219,31 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 		return
 	}
 	canvas.Text(inner.X, inner.Y, "INTERACTION LAB", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
-	y := inner.Y + 2
-	if y < inner.Bottom() {
-		canvas.Text(inner.X, y, "Project name", render.Style{Foreground: muted, Background: panel})
-		y++
-		app.ui.Input("name", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: 1}, &app.name, inputStyle())
-		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}, Owner: "name", Target: "name-copy", Kind: ui.Activate, Scope: ui.ScopeFocused})
-		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Mod: event.ModCtrl}, Owner: "name", Target: "name-cut", Kind: ui.Activate, Scope: ui.ScopeFocused})
-		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'v', Mod: event.ModCtrl}, Owner: "name", Target: "name-paste", Kind: ui.Activate, Scope: ui.ScopeFocused})
-		y += 2
+	body := render.Rect{X: inner.X, Y: inner.Y + 2, W: inner.W, H: max(inner.Bottom()-inner.Y-2, 0)}
+	if body.Empty() {
+		return
 	}
-	available := max(inner.Bottom()-y, 0)
-	// Reserve the virtual viewport and primary actions before letting the small
-	// scene list consume remaining height.
-	reserved := 0
-	if available >= 10 {
-		reserved = 8
-	}
-	listHeight := min(max(available-reserved-1, 0), 5)
-	if listHeight > 0 {
-		canvas.Text(inner.X, y, "Scene", render.Style{Foreground: muted, Background: panel})
-		y++
-		app.ui.List("scenes", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: listHeight}, &app.scenes, sceneNames, listStyle())
-		y += listHeight + 1
-	}
-	logHeight := min(max(inner.Bottom()-y-4, 0), 4)
-	if logHeight > 0 {
-		canvas.Text(inner.X, y, "Virtual log (1M)", render.Style{Foreground: muted, Background: panel})
-		y++
-		app.drawVirtualLog(canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: logHeight})
-		y += logHeight + 1
-	}
-	if y+2 < inner.Bottom() {
-		app.ui.Button("pause", canvas, render.Rect{X: inner.X, Y: y, W: min(inner.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
-		if inner.W >= 24 {
-			app.ui.Button("help", canvas, render.Rect{X: inner.Right() - 8, Y: y, W: 8, H: 3}, "Help", buttonStyle())
-		}
+	// The panel scrolls as one document, so a short terminal hides nothing, and
+	// the nested log viewport hands the wheel back once it reaches its own end.
+	view := app.ui.ScrollViewport("controls", canvas, body, &app.controls, controlsContent, ui.ScrollStyle{Passive: true})
+	top := -app.controls.Offset
+	label := render.Style{Foreground: muted, Background: panel}
+
+	view.Text(0, top, "Project name", label)
+	app.ui.Input("name", view, render.Rect{Y: top + 1, W: body.W, H: 1}, &app.name, inputStyle())
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}, Owner: "name", Target: "name-copy", Kind: ui.Activate, Scope: ui.ScopeFocused})
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Mod: event.ModCtrl}, Owner: "name", Target: "name-cut", Kind: ui.Activate, Scope: ui.ScopeFocused})
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'v', Mod: event.ModCtrl}, Owner: "name", Target: "name-paste", Kind: ui.Activate, Scope: ui.ScopeFocused})
+
+	view.Text(0, top+3, "Scene", label)
+	app.ui.List("scenes", view, render.Rect{Y: top + 4, W: body.W, H: 5}, &app.scenes, sceneNames, listStyle())
+
+	view.Text(0, top+10, "Virtual log (1M)", label)
+	app.drawVirtualLog(view, render.Rect{Y: top + 11, W: body.W, H: 4})
+
+	app.ui.Button("pause", view, render.Rect{Y: top + 16, W: min(body.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
+	if body.W >= 24 {
+		app.ui.Button("help", view, render.Rect{X: body.W - 8, Y: top + 16, W: 8, H: 3}, "Help", buttonStyle())
 	}
 	_ = frame
 }

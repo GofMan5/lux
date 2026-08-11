@@ -287,7 +287,7 @@ func FuzzTextInputInvariants(f *testing.F) {
 	f.Fuzz(func(t *testing.T, raw []byte, cursor, anchor, limit, operation uint8) {
 		input := TextInput{Value: string(raw), Cursor: int(cursor), Anchor: int(anchor), Offset: int(anchor), MaxBytes: int(limit)}
 		action := inputAction(event.KeyPress(event.KeyLeft, event.ModShift))
-		switch operation % 6 {
+		switch operation % 7 {
 		case 0:
 			action.Event = event.KeyPress(event.KeyBackspace, 0)
 		case 1:
@@ -301,6 +301,11 @@ func FuzzTextInputInvariants(f *testing.F) {
 		case 5:
 			action.Event = event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}}
 			action.X, action.Bounds.W = int(cursor%16), int(anchor%16)
+		case 6:
+			// A captured drag reaches the same invariants from arbitrary offsets,
+			// including coordinates outside the field.
+			action.Event = event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseMove, Button: event.MouseLeft}}
+			action.X, action.Bounds.W = int(cursor%32)-8, int(anchor%16)
 		}
 		input.Apply(action)
 		buffer := render.NewBuffer(int(anchor%16), 1)

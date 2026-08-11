@@ -25,8 +25,9 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
 	if canvas == nil || bounds.Empty() {
 		return
 	}
-	bounds = bounds.Intersect(canvas.Bounds())
-	if bounds.Empty() {
+	// Draw against the logical rectangle and let the canvas clip it, so a button
+	// inside a scrolled container keeps its geometry instead of sliding.
+	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
 	flags := Focusable | Activatable
@@ -155,17 +156,22 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
 	}
-	bounds = bounds.Intersect(canvas.Bounds())
-	if bounds.Empty() {
+	// Rows are addressed in the list's own coordinates; clipping is the canvas's
+	// job, which keeps a partially scrolled list aligned with its content.
+	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
 	flags := Focusable | Scrollable | Activatable
 	if style.Disabled {
 		flags |= Disabled
 	}
-	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{ContentHeight: min(bounds.H, max(len(items)-state.Offset, 0))})
 	state.Selected = min(max(state.Selected, 0), max(len(items)-1, 0))
 	state.ensureVisible(len(items), bounds.H)
+	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{
+		ContentHeight: min(bounds.H, max(len(items)-state.Offset, 0)),
+		AtTop:         state.Selected <= 0,
+		AtBottom:      state.Selected >= len(items)-1,
+	})
 	canvas = canvas.Clip(bounds)
 	canvas.Fill(bounds, " ", style.Normal)
 	marker := style.Marker

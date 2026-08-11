@@ -25,11 +25,15 @@ const (
 
 // RegionOptions customizes event-local coordinates without changing visual
 // hit bounds. ContentHeight is useful for lists whose blank tail still accepts
-// wheel scrolling but must not select a nonexistent row.
+// wheel scrolling but must not select a nonexistent row. AtTop and AtBottom
+// declare an exhausted scroll boundary so the wheel bubbles to an enclosing
+// scrollable region; their zero value keeps a region always eligible.
 type RegionOptions struct {
 	// ContentHeight limits press/click rows while preserving wheel routing.
 	// Zero means no pressable content; Region uses -1 for the full bounds.
 	ContentHeight int
+	AtTop         bool
+	AtBottom      bool
 }
 
 // ActionKind describes a routed interaction.
@@ -63,6 +67,8 @@ type region struct {
 	flags         Flags
 	modal         ID
 	contentHeight int
+	atTop         bool
+	atBottom      bool
 }
 
 type modal struct {
@@ -166,7 +172,7 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
 		// Preserve local row coordinates when the region is clipped at its top.
 		contentHeight = min(contentHeight, max(absolute.Bottom()-originY, 0))
 	}
-	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
+	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight, atTop: options.AtTop, atBottom: options.AtBottom}
 	c.building = append(c.building, next)
 	if c.viewFocus == "" && focusable(next, c.currentModal) {
 		c.viewFocus = id
@@ -357,7 +363,7 @@ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
 	}
 
 	if mouse.Action == event.MouseWheel {
-		if scrollTarget, ok := hit(c.committed, mouse.X, mouse.Y, Scrollable); ok {
+		if scrollTarget, ok := wheelTarget(c.committed, mouse); ok {
 			return actionFor(scrollTarget, Scroll, next), true
 		}
 		return Action{}, c.committed.modal.id != ""
@@ -408,7 +414,68 @@ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
 		return Action{}, captured != "" || c.committed.modal.id != ""
 	}
 
+	if mouse.Action == event.MouseMove && c.captureLeft && c.captured != "" {
+		// Capture keeps delivering to the pressed control even once the pointer
+		// leaves it, which is what turns a press into a drag.
+		if target, ok := regionByID(c.committed, c.captured); ok && target.flags&Editable != 0 {
+			return actionFor(target, Input, next), true
+		}
+		return Action{}, true
+	}
+
 	return Action{}, found || c.captured != "" || c.committed.modal.id != ""
+}
+
+// wheelTarget resolves the topmost scrollable region under the pointer that can
+// still move, then bubbles outward through regions that geometrically enclose
+// it. Registration order alone cannot express nesting, so enclosure is what
+// separates a real parent from an overlapping sibling underneath.
+func wheelTarget(state snapshot, mouse event.MouseEvent) (region, bool) {
+	var child region
+	found := false
+	for index := len(state.regions) - 1; index >= 0; index-- {
+		item := state.regions[index]
+		if state.modal.id != "" && item.modal != state.modal.id {
+			continue
+		}
+		if !item.bounds.Contains(mouse.X, mouse.Y) {
+			continue
+		}
+		if item.flags&Disabled != 0 {
+			if found {
+				break
+			}
+			return region{}, false
+		}
+		if item.flags&Scrollable == 0 {
+			continue
+		}
+		if found && !encloses(item.bounds, child.bounds) {
+			continue
+		}
+		if canScroll(item, mouse.Button) {
+			return item, true
+		}
+		if !found {
+			child, found = item, true
+		}
+	}
+	return child, found
+}
+
+func canScroll(item region, button event.MouseButton) bool {
+	switch button {
+	case event.MouseWheelUp:
+		return !item.atTop
+	case event.MouseWheelDown:
+		return !item.atBottom
+	default:
+		return true
+	}
+}
+
+func encloses(outer, inner render.Rect) bool {
+	return outer.X <= inner.X && outer.Y <= inner.Y && outer.Right() >= inner.Right() && outer.Bottom() >= inner.Bottom()
 }
 
 func (c *Context) commit(generation, sequence uint64, next snapshot) {

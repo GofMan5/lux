@@ -35,14 +35,14 @@ comparative claims require reproducible results.
 | Package | Implemented now |
 |---|---|
 | [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
-| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering |
+| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, caret placement |
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
 | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
-| [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, small lists, virtual scroll viewports, modal panels, and an explicit clipboard port |
+| [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, color downgrade, and plain-output fallback |
+| `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -126,16 +126,22 @@ scopes trap and restore focus, and lists support arrows/pages/wheel/click.
 
 `ui.TextInput` edits extended grapheme clusters rather than runes. Its byte
 offsets remain grapheme boundaries across typing, bounded paste, selection,
-navigation, deletion, wide-cell mouse placement, and horizontal scrolling.
+navigation, deletion, wide-cell mouse placement, drag selection, and horizontal
+scrolling. The focused field also owns the real terminal cursor, so IME
+candidate windows and screen readers follow the caret instead of a painted cell.
 It includes byte-bounded undo/redo and an application-supplied clipboard port,
 but remains intentionally single-line; password hardening, multiline editing,
 RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
 
+Nested viewports need no widget tree: a scrollable region publishes whether it
+sits at a boundary, and the router bubbles the wheel to the enclosing region
+that can still move.
+
 ## Direction
 
-Next slices are variable-height virtualization, automatic nested scrolling,
-drag selection, semantic bridges, and modern keyboard negotiation. Graphics
-protocols follow only after these paths are measurable.
+Next slices are variable-height virtualization, keyboard scroll bubbling,
+double-click word selection, semantic bridges, and modern keyboard negotiation.
+Graphics protocols follow only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

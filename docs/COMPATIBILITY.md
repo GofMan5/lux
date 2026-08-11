@@ -1,6 +1,6 @@
 # Compatibility
 
-Snapshot: **2026-08-09**. Entries describe the code currently present, not a
+Snapshot: **2026-08-11**. Entries describe the code currently present, not a
 release certification. Automated tests cover pure rendering and parser logic;
 the real-terminal matrix below remains to be executed and published.
 
@@ -53,6 +53,8 @@ hyperlinks, and graphics. Today:
 - a `TERM` containing `256color` selects the 256-color palette;
 - otherwise an interactive VT uses ANSI 16 colors;
 - graphics remain cell-based;
+- the terminal cursor stays hidden unless a frame requests a caret, and the
+  plain profile ignores caret requests entirely;
 - synchronized output is opt-in with `LUX_TUI_SYNC_OUTPUT=1` (also accepts
   `true`, `yes`, or `on`).
 

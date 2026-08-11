@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -62,6 +63,8 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 type interactiveBackend struct {
 	events chan event.Event
 	frames chan *render.Buffer
+	width  int
+	height int
 	once   sync.Once
 }
 
@@ -83,8 +86,13 @@ func (b *interactiveBackend) Present(_ context.Context, frame *render.Buffer) er
 	}
 	return nil
 }
-func (*interactiveBackend) Size() (int, int, error) { return 120, 36, nil }
-func (*interactiveBackend) Close() error            { return nil }
+func (b *interactiveBackend) Size() (int, int, error) {
+	if b.width == 0 || b.height == 0 {
+		return 120, 36, nil
+	}
+	return b.width, b.height, nil
+}
+func (*interactiveBackend) Close() error { return nil }
 
 func TestShowcaseEndToEndInputAndModal(t *testing.T) {
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
@@ -102,9 +110,8 @@ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
 	}
 	backend.events <- event.KeyPress(event.KeyF1, 0)
 	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.showHelp })
-	waitFrame(t, backend.frames)
 	// Wait until the modal hit/focus snapshot, not merely its pixels, is live.
-	time.Sleep(10 * time.Millisecond)
+	settle(t, backend.frames)
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	waitStateWhere(t, app.observe, func(state showcaseState) bool { return !state.showHelp })
 	backend.events <- event.RuneKey('q', event.ModCtrl)
@@ -116,6 +123,129 @@ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("showcase did not quit")
 	}
+}
+
+func TestShowcaseFrameCarriesEditorCaret(t *testing.T) {
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newShowcase()
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case frame := <-backend.frames:
+			x, y, visible := frame.Caret()
+			if !visible {
+				continue
+			}
+			// The editor owns the terminal cursor: panel column plus the caret's
+			// cell offset inside "LUX explorer", on the field's row.
+			if x != 3+12 || y != controlsBodyTop+1 {
+				t.Fatalf("caret = (%d,%d), want (%d,%d)", x, y, 15, controlsBodyTop+1)
+			}
+			backend.events <- event.RuneKey('q', event.ModCtrl)
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("showcase did not quit")
+			}
+			return
+		case <-deadline:
+			t.Fatal("no frame requested the terminal caret")
+		}
+	}
+}
+
+func TestShowcaseNestedWheelBubblesToControlsPanel(t *testing.T) {
+	// A short terminal makes the panel taller than its viewport, which is the
+	// only case where nesting is observable.
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32), width: 120, height: 24}
+	app := newShowcase()
+	app.observe = make(chan showcaseState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	defer func() {
+		backend.events <- event.RuneKey('q', event.ModCtrl)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Error("showcase did not quit")
+		}
+	}()
+	waitFrame(t, backend.frames)
+	// The hit snapshot commits on the presented frame, so wait for it.
+	settle(t, backend.frames)
+
+	// Scrolling over the panel body moves the panel itself.
+	backend.events <- wheelAt(5, 8, false)
+	scrolled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls > 0 })
+	painted := settle(t, backend.frames)
+
+	logRow := controlsBodyTop + 12 - scrolled.controls
+	if text := rowText(painted, logRow); !strings.Contains(text, "event ready") {
+		t.Fatalf("row %d is not the nested log: %q", logRow, text)
+	}
+	// The nested log can still scroll down, so it keeps the wheel.
+	backend.events <- wheelAt(5, logRow, false)
+	inner := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.logs > 0 })
+	if inner.controls != scrolled.controls {
+		t.Fatalf("panel moved while the log scrolled: %#v -> %#v", scrolled, inner)
+	}
+	settle(t, backend.frames)
+
+	// At the log's top boundary the same wheel reaches the enclosing panel.
+	backend.events <- wheelAt(5, logRow, true)
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.logs == 0 })
+	settle(t, backend.frames)
+	backend.events <- wheelAt(5, logRow, true)
+	bubbled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls < inner.controls })
+	if bubbled.logs != 0 {
+		t.Fatalf("log moved past its boundary: %#v", bubbled)
+	}
+}
+
+// settle waits until the interaction snapshot of a freshly painted frame is
+// committed. ui.Context commits through Frame.OnPresented, which the runtime
+// runs immediately after a successful Present, so a following frame proves the
+// previous commit already ran. It returns the last frame it observed.
+func settle(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
+	t.Helper()
+	for {
+		select {
+		case <-frames:
+		default:
+			waitFrame(t, frames)
+			return waitFrame(t, frames)
+		}
+	}
+}
+
+func rowText(buffer *render.Buffer, y int) string {
+	width, _ := buffer.Size()
+	var row strings.Builder
+	for x := 0; x < width; x++ {
+		row.WriteString(buffer.Cell(x, y).Grapheme)
+	}
+	return row.String()
+}
+
+// controlsBodyTop is the first scrollable row of the controls panel: three header
+// rows, one panel border row, and one heading row plus its blank separator.
+const controlsBodyTop = 6
+
+func wheelAt(x, y int, up bool) event.Event {
+	button := event.MouseWheelDown
+	if up {
+		button = event.MouseWheelUp
+	}
+	return event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: x, Y: y, Action: event.MouseWheel, Button: button}}
 }
 
 func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
@@ -145,11 +275,13 @@ func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showca
 	}
 }
 
-func waitFrame(t *testing.T, frames <-chan *render.Buffer) {
+func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	t.Helper()
 	select {
-	case <-frames:
+	case frame := <-frames:
+		return frame
 	case <-time.After(2 * time.Second):
 		t.Fatal("frame timeout")
+		return nil
 	}
 }

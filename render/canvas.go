@@ -86,6 +86,20 @@ func (c *Canvas) GlobalPoint(x, y int) (int, int) {
 	return c.originX + x, c.originY + y
 }
 
+// SetCaret asks the terminal to show its cursor at a local cell. A caret
+// outside the canvas or its clip leaves the cursor hidden, so a scrolled-out
+// control never steals the visible cursor.
+func (c *Canvas) SetCaret(x, y int) {
+	if c == nil || c.buffer == nil {
+		return
+	}
+	spot := c.GlobalRect(Rect{X: x, Y: y, W: 1, H: 1})
+	if spot.Empty() {
+		return
+	}
+	c.buffer.SetCaret(spot.X, spot.Y)
+}
+
 // Subview returns a canvas whose origin is rect's clipped top-left corner.
 func (c *Canvas) Subview(rect Rect) *Canvas {
 	if c == nil {
