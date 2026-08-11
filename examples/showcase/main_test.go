@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -43,20 +42,17 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 
 	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(120, 36)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
 	app.View(frame)
-	// The standard medium/wide layout must expose the million-row viewport.
-	app.ui.Focus("logs") // not committed yet; registration is inspected below.
-	found := false
-	// Registration is private to package ui, so prove the visible heading/rows.
-	for y := 0; y < 36; y++ {
-		for x := 0; x < 120; x++ {
-			if frame.Canvas.Buffer().Cell(x, y).Grapheme == "V" {
-				found = true
-				break
-			}
+	// The standard medium/wide layout must expose the million-row viewport and the
+	// runtime's own telemetry, both of which live in the scrolling panel.
+	painted := frame.Canvas.Buffer()
+	for _, want := range []string{"Virtual log (1M)", "FRAME TELEMETRY", "renderer"} {
+		found := false
+		for y := 0; y < 36 && !found; y++ {
+			found = strings.Contains(rowText(painted, y), want)
 		}
-	}
-	if !found {
-		t.Fatal("virtual log was not rendered at 120x36")
+		if !found {
+			t.Fatalf("%q was not rendered at 120x36", want)
+		}
 	}
 }
 
@@ -65,7 +61,6 @@ type interactiveBackend struct {
 	frames chan *render.Buffer
 	width  int
 	height int
-	once   sync.Once
 }
 
 func (b *interactiveBackend) Open(context.Context) (capability.Set, error) {

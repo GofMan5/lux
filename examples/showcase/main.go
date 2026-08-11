@@ -188,8 +188,9 @@ var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matr
 const virtualLogCount = 1_000_000
 
 // controlsContent is the panel's natural row count: heading, editor, scene list,
-// nested log and the action row. The panel scrolls instead of dropping controls.
-const controlsContent = 19
+// nested log, the action row and frame telemetry. The panel scrolls instead of
+// dropping controls.
+const controlsContent = 27
 
 func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
 	buttonWidth := min(14, max(area.W/3, 6))
@@ -245,7 +246,30 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 	if body.W >= 24 {
 		app.ui.Button("help", view, render.Rect{X: body.W - 8, Y: top + 16, W: 8, H: 3}, "Help", buttonStyle())
 	}
-	_ = frame
+
+	view.Text(0, top+20, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	app.drawTelemetry(view, render.Rect{Y: top + 21, W: body.W, H: 6}, frame)
+}
+
+// drawTelemetry lists the runtime's own presentation metrics, which is the only
+// way an application sees the adaptive pacing decisions it is subject to.
+func (app *showcase) drawTelemetry(canvas *render.Canvas, area render.Rect, frame *lux.Frame) {
+	rows := []struct{ label, value string }{
+		{"viewport", fmt.Sprintf("%d x %d", app.width, app.height)},
+		{"target", fmt.Sprintf("%d FPS", frame.Metrics.TargetFPS)},
+		{"present", frame.Metrics.PresentTime.Round(100 * time.Microsecond).String()},
+		{"dropped", fmt.Sprint(frame.Metrics.DroppedFrames)},
+		{"color", colorName(frame.Capabilities.Color)},
+		{"renderer", "CPU / half-block"},
+	}
+	for index, row := range rows {
+		if index >= area.H {
+			break
+		}
+		y := area.Y + index
+		canvas.Text(area.X, y, row.label, render.Style{Foreground: muted, Background: panel})
+		canvas.Text(area.X+min(11, max(area.W-1, 0)), y, row.value, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
+	}
 }
 
 func (app *showcase) drawHelp(canvas *render.Canvas, area render.Rect) {
@@ -303,29 +327,6 @@ func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect, unicode
 	if area.W > 55 {
 		status := "* LIVE / CELL ENGINE"
 		canvas.Text(area.W-22, area.Y, status, render.Style{Foreground: cyan, Attrs: render.AttrBold})
-	}
-}
-
-func (app *showcase) drawInfo(canvas *render.Canvas, area render.Rect, frame *lux.Frame) {
-	canvas.Fill(area, " ", render.Style{Background: panel})
-	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
-	inner := area.Inset(2, 1)
-	canvas.Text(inner.X, inner.Y, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
-	rows := []struct{ label, value string }{
-		{"viewport", fmt.Sprintf("%d × %d", app.width, app.height)},
-		{"target", fmt.Sprintf("%d FPS", frame.Metrics.TargetFPS)},
-		{"present", frame.Metrics.PresentTime.Round(100 * time.Microsecond).String()},
-		{"dropped", fmt.Sprint(frame.Metrics.DroppedFrames)},
-		{"color", colorName(frame.Capabilities.Color)},
-		{"renderer", "CPU / half-block"},
-	}
-	for index, row := range rows {
-		y := inner.Y + 2 + index*2
-		if y >= inner.Bottom() {
-			break
-		}
-		canvas.Text(inner.X, y, row.label, render.Style{Foreground: muted, Background: panel})
-		canvas.Text(min(inner.X+11, inner.Right()-1), y, row.value, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
 	}
 }
 

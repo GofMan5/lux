@@ -31,10 +31,7 @@ func duplicateFile(file *os.File, name string) (*os.File, error) {
 	if file == nil {
 		return nil, nil
 	}
-	process, err := windows.GetCurrentProcess()
-	if err != nil {
-		return nil, err
-	}
+	process := windows.CurrentProcess()
 	var duplicate windows.Handle
 	if err := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
 		return nil, err
