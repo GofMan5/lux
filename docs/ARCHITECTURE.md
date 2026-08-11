@@ -144,7 +144,9 @@ bindings, and explicit priority app bindings are limited to lifecycle commands.
 `ScrollViewport` keeps only a row offset and returns a half-open visible range;
 one-million-row models therefore remain O(visible) at draw time. A viewport
 publishes whether it sits at a scroll boundary, which lets the router bubble the
-wheel to an enclosing viewport without a retained parent tree. Text history
+wheel or a scroll key to an enclosing viewport without a retained parent tree,
+and every region records the canvas clip it was drawn through so a container can
+recognise and reveal its own scrolled-out children. Text history
 clones snapshots under a byte budget, and clipboard access is a hexagonal app
 port rather than a terminal escape sequence.
 

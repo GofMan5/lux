@@ -181,7 +181,9 @@ func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *T
 	if style.Disabled {
 		flags |= Disabled
 	}
-	c.Region(id, canvas, line, flags)
+	// The field's own rectangle is registered, not the visible remainder, so a
+	// container that scrolled it out of view can still reach and reveal it.
+	c.Region(id, canvas, rect, flags)
 	if line.Empty() {
 		input.Offset = input.Cursor
 		return

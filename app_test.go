@@ -13,6 +13,11 @@ import (
 	"github.com/lux-tui/lux/render"
 )
 
+// hangTimeout only bounds a test that would otherwise hang forever. Making it
+// generous costs a passing run nothing and stops a loaded CI machine from
+// reporting a stall as a logic failure.
+const hangTimeout = 10 * time.Second
+
 type fakeBackend struct {
 	mu         sync.Mutex
 	events     chan event.Event
@@ -115,7 +120,7 @@ func TestRunRendersAndRestores(t *testing.T) {
 		if width, height := frame.Size(); width != 20 || height != 5 {
 			t.Fatalf("frame size = %dx%d", width, height)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("initial frame timeout")
 	}
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
@@ -280,7 +285,7 @@ func TestRunCancellationDoesNotWaitForBlockedPresent(t *testing.T) {
 	go func() { done <- Run(ctx, &testModel{}, WithBackend(backend)) }()
 	select {
 	case <-backend.started:
-	case <-time.After(time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("present did not start")
 	}
 	cancel()
@@ -289,7 +294,7 @@ func TestRunCancellationDoesNotWaitForBlockedPresent(t *testing.T) {
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("error = %v", err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("Run remained blocked in Present")
 	}
 }
@@ -310,7 +315,7 @@ func TestRunPlainBackendRendersOnceAndReturns(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("plain renderer did not return after its snapshot")
 	}
 	model.mu.Lock()

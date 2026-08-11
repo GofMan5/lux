@@ -26,15 +26,17 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
 		return
 	}
 	// Draw against the logical rectangle and let the canvas clip it, so a button
-	// inside a scrolled container keeps its geometry instead of sliding.
-	if bounds.Intersect(canvas.Bounds()).Empty() {
-		return
-	}
+	// inside a scrolled container keeps its geometry instead of sliding. Register
+	// before deciding what is visible: a control a container scrolled out of view
+	// keeps its identity so Tab can still reach it.
 	flags := Focusable | Activatable
 	if style.Disabled {
 		flags |= Disabled
 	}
 	c.Region(id, canvas, bounds, flags)
+	if bounds.Intersect(canvas.Bounds()).Empty() {
+		return
+	}
 	visual := style.Normal
 	switch {
 	case style.Disabled:
@@ -158,9 +160,6 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	}
 	// Rows are addressed in the list's own coordinates; clipping is the canvas's
 	// job, which keeps a partially scrolled list aligned with its content.
-	if bounds.Intersect(canvas.Bounds()).Empty() {
-		return
-	}
 	flags := Focusable | Scrollable | Activatable
 	if style.Disabled {
 		flags |= Disabled
@@ -172,6 +171,9 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		AtTop:         state.Selected <= 0,
 		AtBottom:      state.Selected >= len(items)-1,
 	})
+	if bounds.Intersect(canvas.Bounds()).Empty() {
+		return
+	}
 	canvas = canvas.Clip(bounds)
 	canvas.Fill(bounds, " ", style.Normal)
 	marker := style.Marker

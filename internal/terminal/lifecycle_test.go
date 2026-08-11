@@ -12,6 +12,10 @@ import (
 	"github.com/lux-tui/lux/render"
 )
 
+// hangTimeout only bounds a test that would otherwise hang forever, so a loaded
+// machine cannot turn a stall into a reported logic failure.
+const hangTimeout = 10 * time.Second
+
 type gatedWriter struct {
 	mu      sync.Mutex
 	started chan struct{}
@@ -83,7 +87,7 @@ func TestGatedWriterFixture(t *testing.T) {
 	go func() { done <- writeAllContext(context.Background(), writer, []byte("frame")) }()
 	select {
 	case <-writer.started:
-	case <-time.After(time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("writer did not start")
 	}
 	close(writer.release)

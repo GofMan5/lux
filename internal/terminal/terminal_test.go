@@ -100,7 +100,7 @@ func TestReadLoopClosesCapturedDoneChannel(t *testing.T) {
 	}
 	select {
 	case <-done:
-	case <-time.After(time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("read loop did not close its captured generation channel")
 	}
 }

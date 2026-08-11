@@ -100,6 +100,16 @@ func (c *Canvas) SetCaret(x, y int) {
 	c.buffer.SetCaret(spot.X, spot.Y)
 }
 
+// ClipRect returns the canvas's active clip in terminal-buffer coordinates.
+// Controls drawn through the same canvas share it, which is what lets an
+// interaction layer tell a container's own children from its neighbours.
+func (c *Canvas) ClipRect() Rect {
+	if c == nil || c.buffer == nil {
+		return Rect{}
+	}
+	return c.clip.Intersect(c.buffer.Bounds())
+}
+
 // Subview returns a canvas whose origin is rect's clipped top-left corner.
 func (c *Canvas) Subview(rect Rect) *Canvas {
 	if c == nil {

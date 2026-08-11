@@ -134,13 +134,14 @@ but remains intentionally single-line; password hardening, multiline editing,
 RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
 
 Nested viewports need no widget tree: a scrollable region publishes whether it
-sits at a boundary, and the router bubbles the wheel to the enclosing region
-that can still move.
+sits at a boundary, and the router bubbles the wheel or a scroll key to the
+enclosing region that can still move. Tab also reaches a control a container has
+scrolled out of view, and the container scrolls it back into sight.
 
 ## Direction
 
-Next slices are variable-height virtualization, keyboard scroll bubbling,
-double-click word selection, semantic bridges, and modern keyboard negotiation.
+Next slices are active capability negotiation, modern keyboard protocols,
+variable-height virtualization, and semantic accessibility bridges.
 Graphics protocols follow only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.

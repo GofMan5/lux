@@ -13,6 +13,11 @@ import (
 	"github.com/lux-tui/lux/ui"
 )
 
+// hangTimeout only bounds a test that would otherwise wait forever. Making it
+// generous costs a passing run nothing and stops a loaded machine from
+// reporting a stall as a logic failure.
+const hangTimeout = 10 * time.Second
+
 func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
 	app := newShowcase()
 	app.name.Apply(ui.Action{Kind: ui.Input, Event: event.RuneKey('!', 0)})
@@ -115,8 +120,42 @@ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("showcase did not quit")
+	}
+}
+
+func TestShowcaseTabRevealsScrolledOutControl(t *testing.T) {
+	// The panel is taller than its viewport at this size, so the action row and
+	// telemetry start out of view.
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32), width: 120, height: 24}
+	app := newShowcase()
+	app.observe = make(chan showcaseState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	defer func() {
+		backend.events <- event.RuneKey('q', event.ModCtrl)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(hangTimeout):
+			t.Error("showcase did not quit")
+		}
+	}()
+	waitFrame(t, backend.frames)
+	settle(t, backend.frames)
+
+	// Walk focus past the visible controls; the panel must follow rather than
+	// leave focus somewhere invisible.
+	for range 4 {
+		backend.events <- event.KeyPress(event.KeyTab, 0)
+		settle(t, backend.frames)
+	}
+	revealed := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls > 0 })
+	if revealed.logs != 0 {
+		t.Fatalf("revealing a control scrolled the nested log: %#v", revealed)
 	}
 }
 
@@ -126,7 +165,7 @@ func TestShowcaseFrameCarriesEditorCaret(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(hangTimeout)
 	for {
 		select {
 		case frame := <-backend.frames:
@@ -145,7 +184,7 @@ func TestShowcaseFrameCarriesEditorCaret(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(2 * time.Second):
+			case <-time.After(hangTimeout):
 				t.Fatal("showcase did not quit")
 			}
 			return
@@ -170,7 +209,7 @@ func TestShowcaseNestedWheelBubblesToControlsPanel(t *testing.T) {
 			if err != nil {
 				t.Error(err)
 			}
-		case <-time.After(2 * time.Second):
+		case <-time.After(hangTimeout):
 			t.Error("showcase did not quit")
 		}
 	}()
@@ -248,7 +287,7 @@ func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
 	select {
 	case state := <-states:
 		return state
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("state timeout")
 		return showcaseState{}
 	}
@@ -256,7 +295,7 @@ func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
 
 func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showcaseState) bool) showcaseState {
 	t.Helper()
-	deadline := time.After(2 * time.Second)
+	deadline := time.After(hangTimeout)
 	for {
 		select {
 		case state := <-states:
@@ -275,7 +314,7 @@ func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	select {
 	case frame := <-frames:
 		return frame
-	case <-time.After(2 * time.Second):
+	case <-time.After(hangTimeout):
 		t.Fatal("frame timeout")
 		return nil
 	}

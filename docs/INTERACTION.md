@@ -50,7 +50,11 @@ dropped or stale frame cannot steal input.
   IME candidate windows and screen readers track. A caret outside its canvas or
   clip leaves the cursor hidden, so a scrolled-out field cannot claim it;
 - wheel scrolling resolves the topmost scrollable region that can still move
-  and otherwise bubbles outward through regions that enclose it;
+  and otherwise bubbles outward through regions that enclose it; arrows, Page
+  keys, Home and End bubble the same way from the focused viewport;
+- a control a container has scrolled out of view keeps its identity, so Tab
+  still reaches it and the container scrolls it back into view before the next
+  frame; it registers no hit area, so it cannot be clicked while hidden;
 - resize generations invalidate coordinates before a new frame is presented.
 
 The registry is a linear slice. That is the correct cost for normal terminal
@@ -59,21 +63,29 @@ control counts; add a spatial index only after a profile demonstrates a problem.
 ## Nesting without a widget tree
 
 An immediate-mode registry has no parent pointers, so nesting is derived from
-geometry: a region bubbles the wheel only to a scrollable region that fully
-encloses it. Registration order alone cannot express nesting, because a region
-painted underneath is indistinguishable from a container by order.
+two facts the frame already carries. Bubbling uses geometry: a region hands the
+wheel or a scroll key only to a scrollable region that fully encloses it.
+Registration order alone cannot express nesting, because a region painted
+underneath is indistinguishable from a container by order.
 
 The consequence is deliberate: a region that fully contains another and is
 painted below it is treated as its parent, which is also the intuitive result.
 Partially overlapping neighbours are never treated as parents.
 
+Revealing a focused control uses ownership instead, because geometry cannot
+answer it: a control scrolled out of view has no visible rectangle at all, and a
+neighbour drawn just below a viewport occupies the same columns as its children.
+Every region therefore records the canvas clip it was drawn through, and a
+container owns exactly the regions whose clip it contains. `Context.FocusDelta`
+reports the rows a container must move; `ScrollViewport` applies it itself, once
+per focus change, so scrolling a container away from the focused control is not
+undone by the next event.
+
 Controls draw in their own coordinates and let the canvas clip them, so a
 control scrolled halfway out of a container stays aligned with its content
 instead of sliding to the clip edge. A container that exists only to scroll its
 children registers with `ScrollStyle{Passive: true}`: it accepts the wheel but
-stays out of Tab traversal, leaving the keyboard to its children. Keyboard
-scrolling still does not bubble; an application that wants it can offer the same
-action to a parent when `ScrollState.Apply` reports no movement.
+stays out of Tab traversal, leaving the keyboard to its children.
 
 ## Security and platform limits
 
@@ -103,17 +115,19 @@ Implemented follow-up slices:
 - an app-supplied synchronous `Clipboard` port. Core ships no OS or OSC 52
   adapter; Copy/Cut/Paste errors remain visible and failed Cut preserves text;
 - a hardware caret bound to the presented frame, left-button drag selection,
-  and automatic wheel bubbling between enclosing scrollable regions.
+  and automatic wheel bubbling between enclosing scrollable regions;
+- scroll keys bubbling the same way as the wheel, and focus-driven reveal so Tab
+  reaches a control its container has scrolled out of view.
 
 Still deferred by evidence:
 
-1. variable-height rows and keyboard scroll bubbling;
+1. variable-height rows;
 2. double-click word selection and coalesced edit history;
 3. Kitty associated-text/keyboard negotiation and restoration;
-4. nested parent capture/bubble for non-wheel input and a semantic
-   accessibility bridge;
-5. focus-driven auto-scroll: Tab reaches the controls a container currently
-   shows, because a clipped region registers no hit geometry at all.
+4. nested parent capture and bubbling for pointer input other than the wheel,
+   and a semantic accessibility bridge;
+5. active capability negotiation: colour depth, synchronized output and Unicode
+   behaviour are still inferred from the environment rather than queried.
 
 ## Sources
 

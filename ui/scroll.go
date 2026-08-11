@@ -112,6 +112,9 @@ func (c *Context) ScrollViewport(id ID, canvas *render.Canvas, rect render.Rect,
 	}
 	view := canvas.Subview(rect)
 	_, rows := view.Size()
+	// Tab can move focus to a control this viewport has scrolled out of view, so
+	// reveal it before the visible range is measured.
+	state.Offset += c.revealDelta(id)
 	visible := state.Range(content, rows)
 	flags := Focusable | Scrollable
 	if style.Passive {

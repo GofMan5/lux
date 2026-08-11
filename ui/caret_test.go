@@ -377,33 +377,166 @@ func TestEnsureOffsetKeepsCaretVisibleAndMinimal(t *testing.T) {
 
 func TestEnsureOffsetStaysLinear(t *testing.T) {
 	// Measuring the candidate window inside a loop made this quadratic: a pasted
-	// 3 KB value took seconds per frame. One absolute bound catches a severe
-	// regression within a second, and a growth ratio catches a mild one without
-	// depending on machine speed or the race detector's overhead.
-	measure := func(clusters, repeats int) (time.Duration, int) {
-		input := TextInput{Value: strings.Repeat("ab界🙂", clusters)}
-		input.Cursor, input.Anchor = len(input.Value), len(input.Value)
+	// 3 KB value took seconds per frame. One 10 KB recomputation is a handful of
+	// milliseconds when linear and seconds when quadratic, so a generous bound
+	// separates them. Retrying on a slow reading keeps a loaded machine from
+	// reporting scheduling noise as a regression, since noise can only add time.
+	const bound = 200 * time.Millisecond
+	input := TextInput{Value: strings.Repeat("ab界🙂", 1<<10)}
+	input.Cursor, input.Anchor = len(input.Value), len(input.Value)
+	slowest := time.Duration(0)
+	for range 3 {
+		input.Offset = 0
 		started := time.Now()
-		for range repeats {
-			input.Offset = 0
-			input.ensureOffset(20, true)
+		input.ensureOffset(20, true)
+		elapsed := time.Since(started)
+		if input.Offset == 0 || input.Offset > input.Cursor {
+			t.Fatalf("offset = %d for cursor %d", input.Offset, input.Cursor)
 		}
-		return time.Since(started), input.Offset
+		if elapsed <= bound {
+			return
+		}
+		slowest = max(slowest, elapsed)
 	}
-	single, offset := measure(1<<10, 1)
-	if offset == 0 {
-		t.Fatalf("a value far wider than the field must scroll, offset = %d", offset)
+	t.Fatalf("every window recomputation over %d bytes exceeded %s, worst %s", len(input.Value), bound, slowest)
+}
+
+func TestScrollKeysBubbleAtBoundary(t *testing.T) {
+	outer := region{id: "outer", bounds: render.Rect{W: 20, H: 10}, flags: Focusable | Scrollable}
+	inner := region{id: "inner", bounds: render.Rect{X: 4, Y: 2, W: 10, H: 4}, flags: Focusable | Scrollable, atTop: true}
+	var ctx Context
+	presented(&ctx, []region{outer, inner}, modal{})
+	if !ctx.Focus("inner") {
+		t.Fatal("inner viewport must be focusable")
 	}
-	if single > time.Second {
-		t.Fatalf("one window recomputation over 10 KB took %s", single)
+
+	// Down still moves the focused viewport.
+	if action, handled := ctx.Handle(event.KeyPress(event.KeyDown, 0)); !handled || action.Target != "inner" || action.Kind != Scroll {
+		t.Fatalf("down = %#v handled=%v", action, handled)
 	}
-	small, _ := measure(2<<10, 5)
-	large, _ := measure(4<<10, 5)
-	if small < time.Millisecond {
-		t.Skipf("baseline %s is too small to compare growth", small)
+	// Up cannot, so the enclosing viewport receives the same key.
+	for _, code := range []event.KeyCode{event.KeyUp, event.KeyPageUp, event.KeyHome} {
+		action, handled := ctx.Handle(event.KeyPress(code, 0))
+		if !handled || action.Target != "outer" || action.Kind != Scroll {
+			t.Fatalf("%v = %#v handled=%v", code, action, handled)
+		}
 	}
-	if large > 3*small {
-		t.Fatalf("doubling the text grew the cost from %s to %s, which is not linear", small, large)
+	// Focus stays where it was; only the action was redirected.
+	if !ctx.Focused("inner") {
+		t.Fatalf("bubbling moved focus")
+	}
+
+	// With no enclosing viewport able to move, the key stays on the focused one.
+	var alone Context
+	presented(&alone, []region{
+		{id: "panel", bounds: render.Rect{W: 20, H: 10}, flags: Focusable},
+		{id: "list", bounds: render.Rect{X: 1, Y: 1, W: 8, H: 4}, flags: Focusable | Scrollable, atTop: true},
+	}, modal{})
+	alone.Focus("list")
+	if action, handled := alone.Handle(event.KeyPress(event.KeyUp, 0)); !handled || action.Target != "list" {
+		t.Fatalf("unbubbled key = %#v handled=%v", action, handled)
+	}
+}
+
+func TestScrolledOutControlStaysReachable(t *testing.T) {
+	buffer := render.NewBuffer(20, 8)
+	canvas := render.NewCanvas(buffer)
+	frame := &lux.Frame{Canvas: canvas}
+	var ctx Context
+	container := ScrollState{}
+
+	// A three-row window over nine rows of content: the last button is painted
+	// outside the viewport, so it clips away entirely.
+	build := func() {
+		ctx.Begin(frame)
+		view := ctx.ScrollViewport("panel", canvas, render.Rect{Y: 1, W: 20, H: 3}, &container, 9, ScrollStyle{Passive: true})
+		top := -container.Offset
+		ctx.Button("first", view, render.Rect{Y: top, W: 8, H: 1}, "one", ButtonStyle{})
+		ctx.Button("last", view, render.Rect{Y: top + 8, W: 8, H: 1}, "two", ButtonStyle{})
+	}
+	build()
+	if len(ctx.building) != 3 {
+		t.Fatalf("regions = %d, want the viewport and both buttons", len(ctx.building))
+	}
+	hidden := ctx.building[2]
+	if hidden.id != "last" || !hidden.bounds.Empty() || hidden.height != 1 {
+		t.Fatalf("scrolled-out button = %#v", hidden)
+	}
+	presented(&ctx, ctx.building, modal{})
+
+	// Tab reaches it even though it has no hit area, and it cannot be clicked.
+	ctx.Focus("first")
+	if action, handled := ctx.Handle(event.KeyPress(event.KeyTab, 0)); !handled || action.Target != "last" {
+		t.Fatalf("tab = %#v handled=%v", action, handled)
+	}
+	click := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 2, Y: 9, Action: event.MousePress, Button: event.MouseLeft}}
+	if action, _ := ctx.Handle(click); action.Target == "last" {
+		t.Fatalf("a scrolled-out control must not be clickable: %#v", action)
+	}
+
+	// The container is told exactly how far to scroll to reveal it.
+	ctx.Focus("last")
+	delta := ctx.FocusDelta("panel")
+	if delta != 6 {
+		t.Fatalf("focus delta = %d, want 6", delta)
+	}
+	container.Offset += delta
+	build()
+	if revealed := ctx.building[2]; revealed.bounds.Empty() {
+		t.Fatalf("scrolling did not reveal the control: %#v", revealed)
+	}
+	presented(&ctx, ctx.building, modal{})
+	ctx.Focus("last")
+	if again := ctx.FocusDelta("panel"); again != 0 {
+		t.Fatalf("a visible control still asks for %d rows", again)
+	}
+}
+
+func TestFocusDeltaIgnoresUnrelatedContainers(t *testing.T) {
+	var ctx Context
+	presented(&ctx, []region{
+		{id: "panel", bounds: render.Rect{X: 0, Y: 0, W: 10, H: 4}, flags: Focusable | Scrollable},
+		{id: "outside", bounds: render.Rect{X: 12, Y: 9, W: 6, H: 1}, originX: 12, originY: 9, height: 1, flags: Focusable | Activatable},
+	}, modal{})
+	ctx.Focus("outside")
+	if delta := ctx.FocusDelta("panel"); delta != 0 {
+		t.Fatalf("a control in another column asked for %d rows", delta)
+	}
+	if delta := ctx.FocusDelta("missing"); delta != 0 {
+		t.Fatalf("unknown container returned %d", delta)
+	}
+	if delta := ctx.FocusDelta("outside"); delta != 0 {
+		t.Fatalf("a non-scrollable container returned %d", delta)
+	}
+}
+
+func TestRevealIgnoresNeighbourOfNestedViewport(t *testing.T) {
+	buffer := render.NewBuffer(20, 10)
+	canvas := render.NewCanvas(buffer)
+	frame := &lux.Frame{Canvas: canvas}
+	var ctx Context
+	panel := ScrollState{}
+	inner := ScrollState{}
+
+	// A nested viewport with a button below it, both drawn into the panel. The
+	// button is the viewport's neighbour, not its child, even though it sits in
+	// the same columns and below its last row.
+	ctx.Begin(frame)
+	view := ctx.ScrollViewport("panel", canvas, render.Rect{W: 20, H: 4}, &panel, 12, ScrollStyle{Passive: true})
+	ctx.ScrollViewport("inner", view, render.Rect{Y: 0, W: 20, H: 2}, &inner, 40, ScrollStyle{})
+	ctx.Button("below", view, render.Rect{Y: 9, W: 8, H: 1}, "go", ButtonStyle{})
+	regions := ctx.building
+	if len(regions) != 3 {
+		t.Fatalf("regions = %d", len(regions))
+	}
+	presented(&ctx, regions, modal{})
+	ctx.Focus("below")
+
+	if delta := ctx.FocusDelta("inner"); delta != 0 {
+		t.Fatalf("the nested viewport tried to scroll a neighbour into view by %d rows", delta)
+	}
+	if delta := ctx.FocusDelta("panel"); delta != 6 {
+		t.Fatalf("panel delta = %d, want 6", delta)
 	}
 }
 

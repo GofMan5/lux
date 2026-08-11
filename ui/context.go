@@ -60,10 +60,17 @@ type Action struct {
 }
 
 type region struct {
-	id            ID
-	bounds        render.Rect
-	originX       int
-	originY       int
+	id     ID
+	bounds render.Rect
+	// originX, originY and height describe the control's own rectangle before
+	// clipping, which is what tells a container how far to scroll to reveal it.
+	originX int
+	originY int
+	height  int
+	// clip is the canvas clip the control was drawn through. A container's own
+	// children share its clip, which distinguishes them from its neighbours even
+	// when a child is scrolled entirely out of view.
+	clip          render.Rect
 	flags         Flags
 	modal         ID
 	contentHeight int
@@ -111,6 +118,7 @@ type Context struct {
 	captured     ID
 	captureLeft  bool
 	restoreFocus ID
+	revealed     ID
 
 	pointerKnown bool
 	pointerX     int
@@ -151,13 +159,22 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
 		return
 	}
 	absolute := canvas.GlobalRect(bounds)
-	if absolute.Empty() {
-		return
-	}
+	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
+	own := render.Rect{X: originX, Y: originY, W: max(bounds.W, 0), H: max(bounds.H, 0)}
+	clip := canvas.ClipRect()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.begun {
 		return
+	}
+	if absolute.Empty() {
+		// A control a container has scrolled out of view keeps its identity so
+		// Tab can still reach it; it registers no hit area, and the container
+		// reveals it. Without such a container there is nothing that could bring
+		// it back, so it is dropped as before.
+		if own.Empty() || !scrolledOut(c.building, clip, c.currentModal) {
+			return
+		}
 	}
 	for _, existing := range c.building {
 		if existing.id == id {
@@ -165,18 +182,94 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
 		}
 	}
 	contentHeight := options.ContentHeight
-	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
 	if contentHeight < 0 {
 		contentHeight = -1
 	} else {
 		// Preserve local row coordinates when the region is clipped at its top.
 		contentHeight = min(contentHeight, max(absolute.Bottom()-originY, 0))
 	}
-	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight, atTop: options.AtTop, atBottom: options.AtBottom}
+	next := region{id: id, bounds: absolute, originX: originX, originY: originY, height: own.H, clip: clip, flags: flags, modal: c.currentModal, contentHeight: contentHeight, atTop: options.AtTop, atBottom: options.AtBottom}
 	c.building = append(c.building, next)
 	if c.viewFocus == "" && focusable(next, c.currentModal) {
 		c.viewFocus = id
 	}
+}
+
+// FocusDelta returns the number of rows a scrollable container must move for the
+// focused control to be fully visible, and zero when nothing is needed.
+// ScrollViewport applies this itself; a hand-rolled container adds the result to
+// its own offset.
+func (c *Context) FocusDelta(container ID) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.focusDeltaLocked(container)
+}
+
+// revealDelta answers only while focus has moved since the last presented frame,
+// so scrolling a container away from the focused control is not undone on the
+// next event.
+func (c *Context) revealDelta(container ID) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.focused == c.revealed {
+		return 0
+	}
+	return c.focusDeltaLocked(container)
+}
+
+func (c *Context) focusDeltaLocked(container ID) int {
+	holder, ok := regionByID(c.committed, container)
+	if !ok || holder.flags&Scrollable == 0 || holder.bounds.Empty() {
+		return 0
+	}
+	target, ok := regionByID(c.committed, c.focused)
+	if !ok || target.id == container || target.height <= 0 {
+		return 0
+	}
+	own := render.Rect{X: target.originX, Y: target.originY, W: max(target.bounds.W, 1), H: target.height}
+	if !holdsChild(holder, target) {
+		return 0
+	}
+	if above := own.Y - holder.bounds.Y; above < 0 {
+		return above
+	}
+	if below := own.Bottom() - holder.bounds.Bottom(); below > 0 {
+		return below
+	}
+	return 0
+}
+
+// scrolledOut reports whether an already-registered scrollable region owns the
+// clip a control was drawn through, which is what distinguishes a scrolled-out
+// child from a control that simply does not fit on screen.
+func scrolledOut(building []region, clip render.Rect, activeModal ID) bool {
+	for index := len(building) - 1; index >= 0; index-- {
+		item := building[index]
+		if item.flags&Scrollable == 0 || item.flags&Disabled != 0 {
+			continue
+		}
+		if activeModal != "" && item.modal != activeModal {
+			continue
+		}
+		if containsRect(item.bounds, clip) {
+			return true
+		}
+	}
+	return false
+}
+
+// holdsChild reports whether target was drawn inside holder rather than beside
+// it. Comparing rectangles cannot answer this once a child is scrolled out of
+// view, but the clip a control was drawn through still identifies its container.
+func holdsChild(holder, target region) bool {
+	return containsRect(holder.bounds, target.clip)
+}
+
+func containsRect(outer, inner render.Rect) bool {
+	if outer.Empty() || inner.Empty() {
+		return false
+	}
+	return outer.X <= inner.X && outer.Y <= inner.Y && outer.Right() >= inner.Right() && outer.Bottom() >= inner.Bottom()
 }
 
 // End binds the registered geometry to this exact presented frame. Dropped,
@@ -203,6 +296,9 @@ func (c *Context) End(frame *lux.Frame) {
 	}
 	c.currentModal = ""
 	c.begun = false
+	// Every container in this frame has had its chance to reveal the focused
+	// control, so the move is accounted for whether or not one was needed.
+	c.revealed = c.focused
 	c.mu.Unlock()
 
 	frame.OnPresented(func() { c.commit(generation, sequence, next) })
@@ -340,6 +436,9 @@ func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
 			return actionFor(target, Input, next), true
 		}
 		if target.flags&Scrollable != 0 && scrollKey(key.Code) {
+			if scrollTarget, ok := keyScrollTarget(c.committed, target, key.Code); ok {
+				return actionFor(scrollTarget, Scroll, next), true
+			}
 			return actionFor(target, Scroll, next), true
 		}
 	}
@@ -466,11 +565,56 @@ func wheelTarget(state snapshot, mouse event.MouseEvent) (region, bool) {
 func canScroll(item region, button event.MouseButton) bool {
 	switch button {
 	case event.MouseWheelUp:
-		return !item.atTop
+		return canScrollUp(item, true)
 	case event.MouseWheelDown:
-		return !item.atBottom
+		return canScrollUp(item, false)
 	default:
 		return true
+	}
+}
+
+func canScrollUp(item region, up bool) bool {
+	if up {
+		return !item.atTop
+	}
+	return !item.atBottom
+}
+
+// keyScrollTarget bubbles a scroll key the same way the wheel bubbles: the
+// focused viewport keeps it while it can still move, and otherwise the enclosing
+// viewport that can move receives it. A focused region the container has already
+// scrolled out of view keeps the key, because FocusDelta will reveal it first.
+func keyScrollTarget(state snapshot, focused region, code event.KeyCode) (region, bool) {
+	up, ok := scrollKeyUp(code)
+	if !ok || focused.bounds.Empty() || canScrollUp(focused, up) {
+		return focused, true
+	}
+	for index := len(state.regions) - 1; index >= 0; index-- {
+		item := state.regions[index]
+		if item.id == focused.id || item.flags&Scrollable == 0 || item.flags&Disabled != 0 {
+			continue
+		}
+		if state.modal.id != "" && item.modal != state.modal.id {
+			continue
+		}
+		if !encloses(item.bounds, focused.bounds) {
+			continue
+		}
+		if canScrollUp(item, up) {
+			return item, true
+		}
+	}
+	return focused, true
+}
+
+func scrollKeyUp(code event.KeyCode) (up bool, ok bool) {
+	switch code {
+	case event.KeyUp, event.KeyPageUp, event.KeyHome:
+		return true, true
+	case event.KeyDown, event.KeyPageDown, event.KeyEnd:
+		return false, true
+	default:
+		return false, false
 	}
 }
 
