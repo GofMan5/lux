@@ -1,0 +1,89 @@
+LUX TUI stage 4 verification
+UTC: 2026-08-11T18:40:00Z
+Baseline: 3d362f31a43f79cbbca06ad2454b7af5795139dc
+Modified: 5a6b752a8f25cc14b8fc4fbf9dbd855f0a8d2a0f
+
+Features:
+  real terminal caret: render.Buffer carries the frame's caret, Canvas.SetCaret
+    maps local coordinates through the active clip, and the VT adapter emits CUP
+    plus DECTCEM transitions after the cell runs that move the cursor
+  left-button drag selection in ui.TextInput, including one-grapheme autoscroll
+    past either edge, with no undo history recorded for a selection
+  automatic wheel bubbling from an exhausted scrollable region to the region
+    that geometrically encloses it, with ScrollStyle.Passive for containers
+  Button and List draw in their own coordinates and rely on canvas clipping, so
+    a half-scrolled control stays aligned with its content
+  showcase: the controls panel is a passive viewport holding the nested
+    million-row log and the frame telemetry, so nothing is dropped when the
+    terminal is short
+  VT reference-grid conformance test for the encoder
+  one-pass horizontal window in the editor, replacing a quadratic search
+
+Validation:
+  gofmt -l . : clean
+  go vet ./... : PASS
+  golangci-lint run ./... : 0 issues (it reported 4 issues at the baseline; all
+    four are fixed here)
+  go mod verify : all modules verified
+  go test -count=1 ./... : PASS
+  go test -race -shuffle=on -count=10 ./... : PASS
+  TextInput fuzz 60s at this revision: 2,202,135 executions, 92 new interesting,
+    PASS. An earlier 90s run failed by worker timeout and wrote three inputs to
+    ui/testdata/fuzz; each took 2.1-2.4 s to execute. Root cause was a quadratic
+    horizontal-window search in ensureOffset, now one grapheme pass; the same
+    inputs run in 0.01 s and are kept as seed corpus.
+  showcase stress: 24 concurrent processes x -test.count=2 -test.run TestShowcase
+    : 24/24 PASS. The wheel test previously flaked about 12% of the time under
+    that load because it slept 10 ms waiting for the OnPresented commit; it now
+    waits for the following presented frame instead.
+  rollback: .verification/rollback-stage4.ps1 was executed. It reset the tree to
+    3d362f3, render/buffer.go no longer contained SetCaret, and go test passed at
+    the baseline; stage 4 was then restored to this revision.
+
+Mutation evidence (each mutation applied, tested, then reverted):
+  caret repositioned only when it moved -> CAUGHT by the grid subtests
+  blank cells skipped in the changed-run diff -> CAUGHT by the grid subtests
+  monochrome profile emitting color -> CAUGHT by the monochrome subtest
+  quadratic window search restored -> CAUGHT in 5 s by TestEnsureOffsetStaysLinear
+  An independent review ran about 30 further mutations and confirmed these are
+  caught: dropped style reset, caret emitted before the cell runs, corrupted
+  rgb16 downgrade, grid advancing by 1 instead of grapheme width, Reset not
+  hiding the caret, Resize not invalidating it, continuation-cell snapping
+  removed, Canvas.SetCaret ignoring the clip, drag moving the anchor, MouseMove
+  routed to a non-editable captured region, bubbling disabled, the enclosure
+  check removed, ScrollStyle.Passive ignored, the ScrollViewport atBottom
+  formula broken, the panel body shifted one row, the nested log moved two rows.
+
+Benchmarks, Windows amd64 i5-10400F Go 1.25.5, measured at 3570c2b on an idle
+machine. The only later change is the showcase panel and one Windows handle
+call, neither of which is on these paths. A re-measurement at 5a6b752 ran while
+the machine was fully loaded and read 2-4x slower across every benchmark,
+including untouched ones, so it is not reported here.
+  hit 10/100/1000: 100.5/93.2/93.0 ns/op, 0 alloc
+  wheel bubbling, every level exhausted, depth 2/8/32: 172.9/242.1/515.5 ns/op,
+    0 alloc
+  1M range rows 8/24/80: 5.7/13.5/47.1 ns/op, 0 alloc
+  TextInput Ctrl-word 32B/1KiB/64KiB: 10.2us/346us/23.2ms, 0 alloc
+
+Cross-build hashes at this revision (go build -trimpath, CGO_ENABLED=0):
+  Linux amd64: 9F2448743BAD8D64161DCDFD81BF0317E3D552D7984D6AB7108ED4097F300C66
+  Windows amd64: 687AFA87130D2517F29086ACEC78F962295F9BD77663BB3E3A29FC8F97BCD204
+  Darwin arm64: 627704FED3FF916E3A0D738A4D6D7B59D1F6A8B407800A91B5C0AD415E603116
+
+Review status:
+  One adversarial pass delivered: a test-quality review that ran a mutation
+  campaign and reported nine surviving mutants. All nine were fixed, and each
+  fix was re-checked against the mutation it was meant to catch.
+  A second pass aimed at implementation correctness in the caret, drag, and
+  nesting paths did not deliver: its agents stalled and retried without ever
+  producing output, so it is NOT part of this evidence set. The code-level
+  checks above are self-review, the mutation results, and the gate.
+
+Known limits, deliberately not addressed here:
+  keyboard scrolling does not bubble between nested viewports
+  Tab reaches only the controls a container currently shows, because a clipped
+    region registers no hit geometry
+  a 64 KiB single-line field still costs tens of milliseconds per edit
+
+Rollback:
+  powershell -NoProfile -ExecutionPolicy Bypass -File .verification/rollback-stage4.ps1

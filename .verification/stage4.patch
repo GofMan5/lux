@@ -1,0 +1,2189 @@
+diff --git a/.gitattributes b/.gitattributes
+index d85a7e2..19bc1ea 100644
+--- a/.gitattributes
++++ b/.gitattributes
+@@ -5,6 +5,7 @@
+ *.yaml text eol=lf
+ *.patch text eol=lf
+ *.ps1 text eol=lf
++testdata/fuzz/** text eol=lf
+ go.mod text eol=lf
+ go.sum text eol=lf
+ LICENSE-* text eol=lf
+diff --git a/README.md b/README.md
+index 3520a44..68a766a 100644
+--- a/README.md
++++ b/README.md
+@@ -35,14 +35,14 @@ comparative claims require reproducible results.
+ | Package | Implemented now |
+ |---|---|
+ | [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
+-| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering |
++| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, caret placement |
+ | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
+ | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
+ | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
+-| [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, small lists, virtual scroll viewports, modal panels, and an explicit clipboard port |
++| [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
+ | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
+ | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
+-| `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, color downgrade, and plain-output fallback |
++| `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+ 
+ The concrete terminal adapter stays internal; applications use `lux.Run` or
+ provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
+@@ -126,16 +126,22 @@ scopes trap and restore focus, and lists support arrows/pages/wheel/click.
+ 
+ `ui.TextInput` edits extended grapheme clusters rather than runes. Its byte
+ offsets remain grapheme boundaries across typing, bounded paste, selection,
+-navigation, deletion, wide-cell mouse placement, and horizontal scrolling.
++navigation, deletion, wide-cell mouse placement, drag selection, and horizontal
++scrolling. The focused field also owns the real terminal cursor, so IME
++candidate windows and screen readers follow the caret instead of a painted cell.
+ It includes byte-bounded undo/redo and an application-supplied clipboard port,
+ but remains intentionally single-line; password hardening, multiline editing,
+ RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
+ 
++Nested viewports need no widget tree: a scrollable region publishes whether it
++sits at a boundary, and the router bubbles the wheel to the enclosing region
++that can still move.
++
+ ## Direction
+ 
+-Next slices are variable-height virtualization, automatic nested scrolling,
+-drag selection, semantic bridges, and modern keyboard negotiation. Graphics
+-protocols follow only after these paths are measurable.
++Next slices are variable-height virtualization, keyboard scroll bubbling,
++double-click word selection, semantic bridges, and modern keyboard negotiation.
++Graphics protocols follow only after these paths are measurable.
+ The existing CPU `scene3d` package proves the cell-rendering path; it is not a
+ GPU engine.
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 5bf68fc..f270980 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -1,6 +1,6 @@
+ # Architecture
+ 
+-Status snapshot: **2026-08-09**. This document distinguishes code present in
++Status snapshot: **2026-08-11**. This document distinguishes code present in
+ the repository from intended boundaries; roadmap items are explicitly labeled.
+ 
+ ## Design constraints
+@@ -96,6 +96,13 @@ grapheme's trailing cell as a continuation. Canvas operations clip atomically:
+ they do not leave half a wide glyph. Buffers support cloning, resizing,
+ comparison, changed-cell extraction, and front/back lifecycle.
+ 
++A buffer also carries the caret the terminal cursor should occupy, because the
++cursor is part of the frame being presented rather than a second channel to the
++adapter. It is presentation state: cell equality and diffs ignore it, `Reset`
++hides it so every frame restates it, a resize invalidates it, and a caret on a
++wide grapheme's continuation cell snaps to the leading cell. `Canvas.SetCaret`
++converts local coordinates and drops a caret outside the active clip.
++
+ ### Responsive layout
+ 
+ `layout.Classify` combines width and height into `Tiny`, `Compact`, `Medium`, or
+@@ -135,7 +142,9 @@ Shortcuts are value registrations committed with the same presented snapshot:
+ focused bindings precede native control behavior, modal bindings suppress app
+ bindings, and explicit priority app bindings are limited to lifecycle commands.
+ `ScrollViewport` keeps only a row offset and returns a half-open visible range;
+-one-million-row models therefore remain O(visible) at draw time. Text history
++one-million-row models therefore remain O(visible) at draw time. A viewport
++publishes whether it sits at a scroll boundary, which lets the router bubble the
++wheel to an enclosing viewport without a retained parent tree. Text history
+ clones snapshots under a byte budget, and clipboard access is a hexagonal app
+ port rather than a terminal escape sequence.
+ 
+@@ -163,9 +172,18 @@ The current adapter provides:
+ - bounded escape and paste buffers;
+ - alternate-screen lifecycle and terminal restoration;
+ - changed-run ANSI encoding and RGB → 256 → 16 → monochrome downgrade;
++- caret positioning with `DECTCEM` visibility transitions, emitted after the
++  cell runs that move the cursor;
+ - opt-in synchronized output through `LUX_TUI_SYNC_OUTPUT`;
+ - newline-delimited plain snapshots for redirected output or `TERM=dumb`.
+ 
++Encoder correctness is proved rather than asserted: a test-only VT interpreter
++covering exactly the sequences the encoder can emit replays real output into a
++grid seeded from the previous frame, then requires that grid to equal the source
++buffer under the active color depth, including the caret. It runs across the
++four color depths with synchronized output on and off, over successive diffs,
++and across a resize repaint.
++
+ Capability detection is deliberately conservative but currently environment
+ based. Active, bounded feature negotiation is roadmap work.
+ 
+diff --git a/docs/COMPATIBILITY.md b/docs/COMPATIBILITY.md
+index e18b2b0..767e02e 100644
+--- a/docs/COMPATIBILITY.md
++++ b/docs/COMPATIBILITY.md
+@@ -1,6 +1,6 @@
+ # Compatibility
+ 
+-Snapshot: **2026-08-09**. Entries describe the code currently present, not a
++Snapshot: **2026-08-11**. Entries describe the code currently present, not a
+ release certification. Automated tests cover pure rendering and parser logic;
+ the real-terminal matrix below remains to be executed and published.
+ 
+@@ -53,6 +53,8 @@ hyperlinks, and graphics. Today:
+ - a `TERM` containing `256color` selects the 256-color palette;
+ - otherwise an interactive VT uses ANSI 16 colors;
+ - graphics remain cell-based;
++- the terminal cursor stays hidden unless a frame requests a caret, and the
++  plain profile ignores caret requests entirely;
+ - synchronized output is opt-in with `LUX_TUI_SYNC_OUTPUT=1` (also accepts
+   `true`, `yes`, or `on`).
+ 
+diff --git a/docs/INTERACTION.md b/docs/INTERACTION.md
+index d7ed45d..8359744 100644
+--- a/docs/INTERACTION.md
++++ b/docs/INTERACTION.md
+@@ -1,6 +1,6 @@
+ # Interaction model
+ 
+-Snapshot: **2026-08-09**. LUX TUI implements its own immediate-mode interaction
++Snapshot: **2026-08-11**. LUX TUI implements its own immediate-mode interaction
+ layer; it does not wrap Bubble Tea, tcell, tview, Ratatui, Textual, Ink,
+ OpenTUI, or another widget framework.
+ 
+@@ -43,11 +43,38 @@ dropped or stale frame cannot steal input.
+   restoration;
+ - grapheme-safe single-line editing, selection, mouse placement, bounded
+   paste, horizontal viewport, placeholder, painted caret, read-only/disabled;
++- left-button drag selection: the press sets the anchor, captured motion moves
++  only the caret, and a drag past either edge walks one grapheme per event so a
++  narrow field scrolls. Selecting is not editing, so no undo step is recorded;
++- the real terminal cursor follows the focused editable caret, which is what
++  IME candidate windows and screen readers track. A caret outside its canvas or
++  clip leaves the cursor hidden, so a scrolled-out field cannot claim it;
++- wheel scrolling resolves the topmost scrollable region that can still move
++  and otherwise bubbles outward through regions that enclose it;
+ - resize generations invalidate coordinates before a new frame is presented.
+ 
+ The registry is a linear slice. That is the correct cost for normal terminal
+ control counts; add a spatial index only after a profile demonstrates a problem.
+ 
++## Nesting without a widget tree
++
++An immediate-mode registry has no parent pointers, so nesting is derived from
++geometry: a region bubbles the wheel only to a scrollable region that fully
++encloses it. Registration order alone cannot express nesting, because a region
++painted underneath is indistinguishable from a container by order.
++
++The consequence is deliberate: a region that fully contains another and is
++painted below it is treated as its parent, which is also the intuitive result.
++Partially overlapping neighbours are never treated as parents.
++
++Controls draw in their own coordinates and let the canvas clip them, so a
++control scrolled halfway out of a container stays aligned with its content
++instead of sliding to the clip edge. A container that exists only to scroll its
++children registers with `ScrollStyle{Passive: true}`: it accepts the wheel but
++stays out of Tab traversal, leaving the keyboard to its children. Keyboard
++scrolling still does not bubble; an application that wants it can offer the same
++action to a parent when `ScrollState.Apply` reports no movement.
++
+ ## Security and platform limits
+ 
+ Paste is untrusted input. The backend caps bracketed paste at 1 MiB; TextInput
+@@ -57,8 +84,10 @@ commands. Password editing is omitted because immutable Go strings cannot offer
+ reliable erasure and cursor/word operations can leak structure.
+ 
+ Legacy VT exposes committed text but not a portable compositionstart/update/end
+-or candidate rectangle. IME preedit remains emulator-owned. Bidirectional text
+-is stored and edited logically; visual UAX #9 cursor behavior is not claimed.
++or candidate rectangle. IME preedit remains emulator-owned, but the terminal
++cursor now sits on the caret, which is the position emulators use to place a
++candidate window. Bidirectional text is stored and edited logically; visual
++UAX #9 cursor behavior is not claimed.
+ 
+ ## Deferred by evidence
+ 
+@@ -72,14 +101,19 @@ Implemented follow-up slices:
+   cannot move at its boundary;
+ - TextInput Ctrl-word deletion and byte-bounded cloned undo/redo history;
+ - an app-supplied synchronous `Clipboard` port. Core ships no OS or OSC 52
+-  adapter; Copy/Cut/Paste errors remain visible and failed Cut preserves text.
++  adapter; Copy/Cut/Paste errors remain visible and failed Cut preserves text;
++- a hardware caret bound to the presented frame, left-button drag selection,
++  and automatic wheel bubbling between enclosing scrollable regions.
+ 
+ Still deferred by evidence:
+ 
+-1. variable-height rows and automatic nested wheel bubbling;
+-2. drag selection and coalesced edit history;
++1. variable-height rows and keyboard scroll bubbling;
++2. double-click word selection and coalesced edit history;
+ 3. Kitty associated-text/keyboard negotiation and restoration;
+-4. nested parent capture/bubble and a semantic accessibility bridge.
++4. nested parent capture/bubble for non-wheel input and a semantic
++   accessibility bridge;
++5. focus-driven auto-scroll: Tab reaches the controls a container currently
++   shows, because a clipped region registers no hit geometry at all.
+ 
+ ## Sources
+ 
+diff --git a/docs/PERFORMANCE.md b/docs/PERFORMANCE.md
+index a337bc4..04293e8 100644
+--- a/docs/PERFORMANCE.md
++++ b/docs/PERFORMANCE.md
+@@ -1,6 +1,6 @@
+ # Performance contract
+ 
+-Snapshot: **2026-08-09**. LUX TUI has microbenchmarks, but it has not published
++Snapshot: **2026-08-11**. LUX TUI has microbenchmarks, but it has not published
+ cross-framework results. This document defines how claims must be earned.
+ 
+ ## Current mechanisms, not benchmark claims
+@@ -99,15 +99,20 @@ queues more output than the terminal can display.
+ 
+ ## Planned performance work
+ 
+-1. Add a test terminal that applies emitted VT operations to a reference grid.
+-2. Make renderer output reusable without hidden per-frame allocations.
+-3. Calibrate the implemented latest-state-wins adaptive scheduler under real
++1. Make renderer output reusable without hidden per-frame allocations.
++2. Calibrate the implemented latest-state-wins adaptive scheduler under real
+    terminals and impaired transports.
+-4. Add stronger writer-failure/full-repaint tests.
+-5. Build equivalent competitor adapters and publish raw results.
+-6. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
++3. Add stronger writer-failure/full-repaint tests.
++4. Build equivalent competitor adapters and publish raw results.
++5. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
+    32 B/1 KiB/64 KiB before adding a spatial index or boundary cache.
+ 
++A test terminal that applies emitted VT operations to a reference grid now
++exists: `internal/terminal/vtgrid_test.go` replays real encoder output and
++requires the reconstructed grid, including the caret, to equal the source buffer
++across the four color depths, synchronized output on and off, successive diffs,
++and a resize repaint.
++
+ Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
+ show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
+ with 0 alloc/op. Ctrl-word movement is 0 alloc/op but linear in text length:
+@@ -116,10 +121,22 @@ single-line editor is therefore tuned for ordinary form fields, not documents;
+ a cached boundary table belongs in a future document editor rather than this
+ small control.
+ 
++The editor's horizontal window is recomputed with one grapheme pass per frame.
++It was previously measured inside a loop, which is quadratic and made a pasted
++3 KB value take about 2.1 s per frame; fuzzing surfaced it as a worker timeout.
++The window is now linear in the value length, so a 64 KiB field costs about
++16 ms per recomputation — still a form-field budget, not a document one.
++
+ The fixed-row virtual range for a declared one-million-row viewport remains
+ O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and
+ 48 ns (80 rows), all 0 alloc/op. Applications draw only that returned range;
+ LUX does not materialize one million IDs or strings.
+ 
++Wheel routing through nested viewports is 0 alloc/op and grows with nesting
++depth in its worst case, where every level is exhausted and the whole enclosure
++chain is walked: about 173 ns for 2 levels, 242 ns for 8, and 516 ns for 32 in
++the same run. Real interfaces nest a few levels, so no parent index is justified
++yet.
++
+ Until those steps are complete, describe LUX TUI as performance-oriented, not
+ as the fastest TUI framework.
+diff --git a/examples/showcase/main.go b/examples/showcase/main.go
+index b98904e..b2d6cf4 100644
+--- a/examples/showcase/main.go
++++ b/examples/showcase/main.go
+@@ -38,6 +38,7 @@ type showcase struct {
+ 	name          ui.TextInput
+ 	scenes        ui.ListState
+ 	logs          ui.ScrollState
++	controls      ui.ScrollState
+ 	showHelp      bool
+ 	observe       chan showcaseState
+ 	clipboard     memoryClipboard
+@@ -46,6 +47,8 @@ type showcase struct {
+ type showcaseState struct {
+ 	name     string
+ 	showHelp bool
++	controls int
++	logs     int
+ }
+ 
+ // memoryClipboard demonstrates the explicit port without touching the host
+@@ -103,6 +106,8 @@ func (app *showcase) Update(next event.Event) lux.Command {
+ 			return lux.Quit()
+ 		case "logs":
+ 			app.logs.Apply(action, virtualLogCount, max(action.Bounds.H, 1))
++		case "controls":
++			app.controls.Apply(action, controlsContent, max(action.Bounds.H, 1))
+ 		}
+ 		return nil
+ 	}
+@@ -172,7 +177,7 @@ func (app *showcase) View(frame *lux.Frame) {
+ 	}
+ 	if app.observe != nil {
+ 		select {
+-		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp}:
++		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp, controls: app.controls.Offset, logs: app.logs.Offset}:
+ 		default:
+ 		}
+ 	}
+@@ -182,6 +187,11 @@ var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matr
+ 
+ const virtualLogCount = 1_000_000
+ 
++// controlsContent is the panel's natural row count: heading, editor, scene list,
++// nested log, the action row and frame telemetry. The panel scrolls instead of
++// dropping controls.
++const controlsContent = 27
++
+ func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
+ 	buttonWidth := min(14, max(area.W/3, 6))
+ 	app.ui.Button("pause", canvas, render.Rect{X: area.X, Y: area.Y, W: buttonWidth, H: min(area.H, 3)}, pauseLabel(app.paused), buttonStyle())
+@@ -210,44 +220,56 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
+ 		return
+ 	}
+ 	canvas.Text(inner.X, inner.Y, "INTERACTION LAB", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+-	y := inner.Y + 2
+-	if y < inner.Bottom() {
+-		canvas.Text(inner.X, y, "Project name", render.Style{Foreground: muted, Background: panel})
+-		y++
+-		app.ui.Input("name", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: 1}, &app.name, inputStyle())
+-		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}, Owner: "name", Target: "name-copy", Kind: ui.Activate, Scope: ui.ScopeFocused})
+-		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Mod: event.ModCtrl}, Owner: "name", Target: "name-cut", Kind: ui.Activate, Scope: ui.ScopeFocused})
+-		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'v', Mod: event.ModCtrl}, Owner: "name", Target: "name-paste", Kind: ui.Activate, Scope: ui.ScopeFocused})
+-		y += 2
+-	}
+-	available := max(inner.Bottom()-y, 0)
+-	// Reserve the virtual viewport and primary actions before letting the small
+-	// scene list consume remaining height.
+-	reserved := 0
+-	if available >= 10 {
+-		reserved = 8
++	body := render.Rect{X: inner.X, Y: inner.Y + 2, W: inner.W, H: max(inner.Bottom()-inner.Y-2, 0)}
++	if body.Empty() {
++		return
+ 	}
+-	listHeight := min(max(available-reserved-1, 0), 5)
+-	if listHeight > 0 {
+-		canvas.Text(inner.X, y, "Scene", render.Style{Foreground: muted, Background: panel})
+-		y++
+-		app.ui.List("scenes", canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: listHeight}, &app.scenes, sceneNames, listStyle())
+-		y += listHeight + 1
++	// The panel scrolls as one document, so a short terminal hides nothing, and
++	// the nested log viewport hands the wheel back once it reaches its own end.
++	view := app.ui.ScrollViewport("controls", canvas, body, &app.controls, controlsContent, ui.ScrollStyle{Passive: true})
++	top := -app.controls.Offset
++	label := render.Style{Foreground: muted, Background: panel}
++
++	view.Text(0, top, "Project name", label)
++	app.ui.Input("name", view, render.Rect{Y: top + 1, W: body.W, H: 1}, &app.name, inputStyle())
++	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Mod: event.ModCtrl}, Owner: "name", Target: "name-copy", Kind: ui.Activate, Scope: ui.ScopeFocused})
++	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Mod: event.ModCtrl}, Owner: "name", Target: "name-cut", Kind: ui.Activate, Scope: ui.ScopeFocused})
++	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'v', Mod: event.ModCtrl}, Owner: "name", Target: "name-paste", Kind: ui.Activate, Scope: ui.ScopeFocused})
++
++	view.Text(0, top+3, "Scene", label)
++	app.ui.List("scenes", view, render.Rect{Y: top + 4, W: body.W, H: 5}, &app.scenes, sceneNames, listStyle())
++
++	view.Text(0, top+10, "Virtual log (1M)", label)
++	app.drawVirtualLog(view, render.Rect{Y: top + 11, W: body.W, H: 4})
++
++	app.ui.Button("pause", view, render.Rect{Y: top + 16, W: min(body.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
++	if body.W >= 24 {
++		app.ui.Button("help", view, render.Rect{X: body.W - 8, Y: top + 16, W: 8, H: 3}, "Help", buttonStyle())
+ 	}
+-	logHeight := min(max(inner.Bottom()-y-4, 0), 4)
+-	if logHeight > 0 {
+-		canvas.Text(inner.X, y, "Virtual log (1M)", render.Style{Foreground: muted, Background: panel})
+-		y++
+-		app.drawVirtualLog(canvas, render.Rect{X: inner.X, Y: y, W: inner.W, H: logHeight})
+-		y += logHeight + 1
++
++	view.Text(0, top+20, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
++	app.drawTelemetry(view, render.Rect{Y: top + 21, W: body.W, H: 6}, frame)
++}
++
++// drawTelemetry lists the runtime's own presentation metrics, which is the only
++// way an application sees the adaptive pacing decisions it is subject to.
++func (app *showcase) drawTelemetry(canvas *render.Canvas, area render.Rect, frame *lux.Frame) {
++	rows := []struct{ label, value string }{
++		{"viewport", fmt.Sprintf("%d x %d", app.width, app.height)},
++		{"target", fmt.Sprintf("%d FPS", frame.Metrics.TargetFPS)},
++		{"present", frame.Metrics.PresentTime.Round(100 * time.Microsecond).String()},
++		{"dropped", fmt.Sprint(frame.Metrics.DroppedFrames)},
++		{"color", colorName(frame.Capabilities.Color)},
++		{"renderer", "CPU / half-block"},
+ 	}
+-	if y+2 < inner.Bottom() {
+-		app.ui.Button("pause", canvas, render.Rect{X: inner.X, Y: y, W: min(inner.W, 14), H: 3}, pauseLabel(app.paused), buttonStyle())
+-		if inner.W >= 24 {
+-			app.ui.Button("help", canvas, render.Rect{X: inner.Right() - 8, Y: y, W: 8, H: 3}, "Help", buttonStyle())
++	for index, row := range rows {
++		if index >= area.H {
++			break
+ 		}
++		y := area.Y + index
++		canvas.Text(area.X, y, row.label, render.Style{Foreground: muted, Background: panel})
++		canvas.Text(area.X+min(11, max(area.W-1, 0)), y, row.value, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
+ 	}
+-	_ = frame
+ }
+ 
+ func (app *showcase) drawHelp(canvas *render.Canvas, area render.Rect) {
+@@ -308,29 +330,6 @@ func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect, unicode
+ 	}
+ }
+ 
+-func (app *showcase) drawInfo(canvas *render.Canvas, area render.Rect, frame *lux.Frame) {
+-	canvas.Fill(area, " ", render.Style{Background: panel})
+-	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
+-	inner := area.Inset(2, 1)
+-	canvas.Text(inner.X, inner.Y, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+-	rows := []struct{ label, value string }{
+-		{"viewport", fmt.Sprintf("%d × %d", app.width, app.height)},
+-		{"target", fmt.Sprintf("%d FPS", frame.Metrics.TargetFPS)},
+-		{"present", frame.Metrics.PresentTime.Round(100 * time.Microsecond).String()},
+-		{"dropped", fmt.Sprint(frame.Metrics.DroppedFrames)},
+-		{"color", colorName(frame.Capabilities.Color)},
+-		{"renderer", "CPU / half-block"},
+-	}
+-	for index, row := range rows {
+-		y := inner.Y + 2 + index*2
+-		if y >= inner.Bottom() {
+-			break
+-		}
+-		canvas.Text(inner.X, y, row.label, render.Style{Foreground: muted, Background: panel})
+-		canvas.Text(min(inner.X+11, inner.Right()-1), y, row.value, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
+-	}
+-}
+-
+ func (app *showcase) drawScene(frame *lux.Frame, area render.Rect) {
+ 	if area.Empty() {
+ 		return
+diff --git a/examples/showcase/main_test.go b/examples/showcase/main_test.go
+index ddb1bbc..cd477d6 100644
+--- a/examples/showcase/main_test.go
++++ b/examples/showcase/main_test.go
+@@ -2,7 +2,7 @@ package main
+ 
+ import (
+ 	"context"
+-	"sync"
++	"strings"
+ 	"testing"
+ 	"time"
+ 
+@@ -42,27 +42,25 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
+ 
+ 	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(120, 36)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
+ 	app.View(frame)
+-	// The standard medium/wide layout must expose the million-row viewport.
+-	app.ui.Focus("logs") // not committed yet; registration is inspected below.
+-	found := false
+-	// Registration is private to package ui, so prove the visible heading/rows.
+-	for y := 0; y < 36; y++ {
+-		for x := 0; x < 120; x++ {
+-			if frame.Canvas.Buffer().Cell(x, y).Grapheme == "V" {
+-				found = true
+-				break
+-			}
++	// The standard medium/wide layout must expose the million-row viewport and the
++	// runtime's own telemetry, both of which live in the scrolling panel.
++	painted := frame.Canvas.Buffer()
++	for _, want := range []string{"Virtual log (1M)", "FRAME TELEMETRY", "renderer"} {
++		found := false
++		for y := 0; y < 36 && !found; y++ {
++			found = strings.Contains(rowText(painted, y), want)
++		}
++		if !found {
++			t.Fatalf("%q was not rendered at 120x36", want)
+ 		}
+-	}
+-	if !found {
+-		t.Fatal("virtual log was not rendered at 120x36")
+ 	}
+ }
+ 
+ type interactiveBackend struct {
+ 	events chan event.Event
+ 	frames chan *render.Buffer
+-	once   sync.Once
++	width  int
++	height int
+ }
+ 
+ func (b *interactiveBackend) Open(context.Context) (capability.Set, error) {
+@@ -83,8 +81,13 @@ func (b *interactiveBackend) Present(_ context.Context, frame *render.Buffer) er
+ 	}
+ 	return nil
+ }
+-func (*interactiveBackend) Size() (int, int, error) { return 120, 36, nil }
+-func (*interactiveBackend) Close() error            { return nil }
++func (b *interactiveBackend) Size() (int, int, error) {
++	if b.width == 0 || b.height == 0 {
++		return 120, 36, nil
++	}
++	return b.width, b.height, nil
++}
++func (*interactiveBackend) Close() error { return nil }
+ 
+ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
+ 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+@@ -102,9 +105,8 @@ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
+ 	}
+ 	backend.events <- event.KeyPress(event.KeyF1, 0)
+ 	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.showHelp })
+-	waitFrame(t, backend.frames)
+ 	// Wait until the modal hit/focus snapshot, not merely its pixels, is live.
+-	time.Sleep(10 * time.Millisecond)
++	settle(t, backend.frames)
+ 	backend.events <- event.KeyPress(event.KeyEscape, 0)
+ 	waitStateWhere(t, app.observe, func(state showcaseState) bool { return !state.showHelp })
+ 	backend.events <- event.RuneKey('q', event.ModCtrl)
+@@ -118,6 +120,129 @@ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
+ 	}
+ }
+ 
++func TestShowcaseFrameCarriesEditorCaret(t *testing.T) {
++	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
++	app := newShowcase()
++	done := make(chan error, 1)
++	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
++
++	deadline := time.After(2 * time.Second)
++	for {
++		select {
++		case frame := <-backend.frames:
++			x, y, visible := frame.Caret()
++			if !visible {
++				continue
++			}
++			// The editor owns the terminal cursor: panel column plus the caret's
++			// cell offset inside "LUX explorer", on the field's row.
++			if x != 3+12 || y != controlsBodyTop+1 {
++				t.Fatalf("caret = (%d,%d), want (%d,%d)", x, y, 15, controlsBodyTop+1)
++			}
++			backend.events <- event.RuneKey('q', event.ModCtrl)
++			select {
++			case err := <-done:
++				if err != nil {
++					t.Fatal(err)
++				}
++			case <-time.After(2 * time.Second):
++				t.Fatal("showcase did not quit")
++			}
++			return
++		case <-deadline:
++			t.Fatal("no frame requested the terminal caret")
++		}
++	}
++}
++
++func TestShowcaseNestedWheelBubblesToControlsPanel(t *testing.T) {
++	// A short terminal makes the panel taller than its viewport, which is the
++	// only case where nesting is observable.
++	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32), width: 120, height: 24}
++	app := newShowcase()
++	app.observe = make(chan showcaseState, 64)
++	done := make(chan error, 1)
++	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
++	defer func() {
++		backend.events <- event.RuneKey('q', event.ModCtrl)
++		select {
++		case err := <-done:
++			if err != nil {
++				t.Error(err)
++			}
++		case <-time.After(2 * time.Second):
++			t.Error("showcase did not quit")
++		}
++	}()
++	waitFrame(t, backend.frames)
++	// The hit snapshot commits on the presented frame, so wait for it.
++	settle(t, backend.frames)
++
++	// Scrolling over the panel body moves the panel itself.
++	backend.events <- wheelAt(5, 8, false)
++	scrolled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls > 0 })
++	painted := settle(t, backend.frames)
++
++	logRow := controlsBodyTop + 12 - scrolled.controls
++	if text := rowText(painted, logRow); !strings.Contains(text, "event ready") {
++		t.Fatalf("row %d is not the nested log: %q", logRow, text)
++	}
++	// The nested log can still scroll down, so it keeps the wheel.
++	backend.events <- wheelAt(5, logRow, false)
++	inner := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.logs > 0 })
++	if inner.controls != scrolled.controls {
++		t.Fatalf("panel moved while the log scrolled: %#v -> %#v", scrolled, inner)
++	}
++	settle(t, backend.frames)
++
++	// At the log's top boundary the same wheel reaches the enclosing panel.
++	backend.events <- wheelAt(5, logRow, true)
++	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.logs == 0 })
++	settle(t, backend.frames)
++	backend.events <- wheelAt(5, logRow, true)
++	bubbled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls < inner.controls })
++	if bubbled.logs != 0 {
++		t.Fatalf("log moved past its boundary: %#v", bubbled)
++	}
++}
++
++// settle waits until the interaction snapshot of a freshly painted frame is
++// committed. ui.Context commits through Frame.OnPresented, which the runtime
++// runs immediately after a successful Present, so a following frame proves the
++// previous commit already ran. It returns the last frame it observed.
++func settle(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
++	t.Helper()
++	for {
++		select {
++		case <-frames:
++		default:
++			waitFrame(t, frames)
++			return waitFrame(t, frames)
++		}
++	}
++}
++
++func rowText(buffer *render.Buffer, y int) string {
++	width, _ := buffer.Size()
++	var row strings.Builder
++	for x := 0; x < width; x++ {
++		row.WriteString(buffer.Cell(x, y).Grapheme)
++	}
++	return row.String()
++}
++
++// controlsBodyTop is the first scrollable row of the controls panel: three header
++// rows, one panel border row, and one heading row plus its blank separator.
++const controlsBodyTop = 6
++
++func wheelAt(x, y int, up bool) event.Event {
++	button := event.MouseWheelDown
++	if up {
++		button = event.MouseWheelUp
++	}
++	return event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: x, Y: y, Action: event.MouseWheel, Button: button}}
++}
++
+ func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
+ 	t.Helper()
+ 	select {
+@@ -145,11 +270,13 @@ func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showca
+ 	}
+ }
+ 
+-func waitFrame(t *testing.T, frames <-chan *render.Buffer) {
++func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
+ 	t.Helper()
+ 	select {
+-	case <-frames:
++	case frame := <-frames:
++		return frame
+ 	case <-time.After(2 * time.Second):
+ 		t.Fatal("frame timeout")
++		return nil
+ 	}
+ }
+diff --git a/internal/terminal/encoder.go b/internal/terminal/encoder.go
+index d9fa771..86e35bf 100644
+--- a/internal/terminal/encoder.go
++++ b/internal/terminal/encoder.go
+@@ -7,7 +7,11 @@ import (
+ 	"github.com/lux-tui/lux/render"
+ )
+ 
+-const resetStyle = "\x1b[0m"
++const (
++	resetStyle = "\x1b[0m"
++	showCaret  = "\x1b[?25h"
++	hideCaret  = "\x1b[?25l"
++)
+ 
+ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
+ 	width, height := frame.Size()
+@@ -57,10 +61,26 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
+ 			}
+ 		}
+ 	}
+-	if !wrote {
++	caretX, caretY, caretOn := frame.Caret()
++	oldX, oldY, caretWasOn := previous.Caret()
++	caretMoved := caretOn != caretWasOn || caretOn && (caretX != oldX || caretY != oldY)
++	if !wrote && !caretMoved {
+ 		return dst[:start]
+ 	}
+-	dst = append(dst, resetStyle...)
++	if wrote {
++		dst = append(dst, resetStyle...)
++	}
++	switch {
++	case caretOn:
++		// Cell runs left the cursor wherever the last run ended, so the caret is
++		// repositioned whenever anything was written, not only when it moved.
++		dst = appendCursor(dst, caretY+1, caretX+1)
++		if !caretWasOn {
++			dst = append(dst, showCaret...)
++		}
++	case caretWasOn:
++		dst = append(dst, hideCaret...)
++	}
+ 	if synchronized {
+ 		payload := append([]byte("\x1b[?2026h"), dst[start:]...)
+ 		payload = append(payload, "\x1b[?2026l"...)
+diff --git a/internal/terminal/platform_windows.go b/internal/terminal/platform_windows.go
+index 9a47354..c54aa67 100644
+--- a/internal/terminal/platform_windows.go
++++ b/internal/terminal/platform_windows.go
+@@ -31,10 +31,7 @@ func duplicateFile(file *os.File, name string) (*os.File, error) {
+ 	if file == nil {
+ 		return nil, nil
+ 	}
+-	process, err := windows.GetCurrentProcess()
+-	if err != nil {
+-		return nil, err
+-	}
++	process := windows.CurrentProcess()
+ 	var duplicate windows.Handle
+ 	if err := windows.DuplicateHandle(process, windows.Handle(file.Fd()), process, &duplicate, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+ 		return nil, err
+diff --git a/internal/terminal/vtgrid_test.go b/internal/terminal/vtgrid_test.go
+new file mode 100644
+index 0000000..744381a
+--- /dev/null
++++ b/internal/terminal/vtgrid_test.go
+@@ -0,0 +1,377 @@
++package terminal
++
++import (
++	"strconv"
++	"strings"
++	"testing"
++
++	"github.com/lux-tui/lux/capability"
++	"github.com/lux-tui/lux/render"
++	"github.com/rivo/uniseg"
++)
++
++// referenceGrid is a deliberately narrow VT interpreter: it understands exactly
++// the sequences appendFrame can emit and nothing else. Reconstructing a grid
++// from real output and comparing it with the source buffer proves the encoder,
++// instead of asserting the byte strings we happen to produce today.
++type referenceGrid struct {
++	buffer   *render.Buffer
++	canvas   *render.Canvas
++	style    render.Style
++	x, y     int
++	caretOn  bool
++	sync     int
++	maxSync  int
++	sawColor bool
++}
++
++// newReferenceGrid starts from a blank screen. One grid is fed every successive
++// frame, exactly like a real terminal, so retained cells are what makes a
++// changed-run diff verifiable.
++func newReferenceGrid(width, height int) *referenceGrid {
++	buffer := render.NewBuffer(width, height)
++	grid := &referenceGrid{buffer: buffer}
++	grid.canvas = render.NewCanvas(buffer)
++	return grid
++}
++
++func (g *referenceGrid) feed(t *testing.T, data []byte) {
++	t.Helper()
++	text := string(data)
++	run := strings.Builder{}
++	flush := func() {
++		if run.Len() == 0 {
++			return
++		}
++		g.print(run.String())
++		run.Reset()
++	}
++	for index := 0; index < len(text); {
++		if text[index] != 0x1b {
++			run.WriteByte(text[index])
++			index++
++			continue
++		}
++		flush()
++		consumed := g.escape(t, text[index:])
++		if consumed <= 0 {
++			t.Fatalf("reference grid: unsupported sequence at %d: %q", index, text[index:min(index+16, len(text))])
++		}
++		index += consumed
++	}
++	flush()
++}
++
++func (g *referenceGrid) escape(t *testing.T, text string) int {
++	t.Helper()
++	if !strings.HasPrefix(text, "\x1b[") {
++		return 0
++	}
++	end := strings.IndexAny(text[2:], "Hhlm")
++	if end < 0 {
++		return 0
++	}
++	end += 2
++	body, final := text[2:end], text[end]
++	switch {
++	case final == 'H':
++		row, column, ok := strings.Cut(body, ";")
++		if !ok {
++			return 0
++		}
++		y, errRow := strconv.Atoi(row)
++		x, errColumn := strconv.Atoi(column)
++		if errRow != nil || errColumn != nil || x < 1 || y < 1 {
++			return 0
++		}
++		g.x, g.y = x-1, y-1
++	case final == 'm':
++		if !g.sgr(body) {
++			return 0
++		}
++	case body == "?25" && final == 'h':
++		g.caretOn = true
++	case body == "?25" && final == 'l':
++		g.caretOn = false
++	case body == "?2026" && final == 'h':
++		g.sync++
++		g.maxSync = max(g.maxSync, g.sync)
++	case body == "?2026" && final == 'l':
++		g.sync--
++	default:
++		return 0
++	}
++	return end + 1
++}
++
++func (g *referenceGrid) sgr(body string) bool {
++	parameters := strings.Split(body, ";")
++	attrs := map[string]render.Attr{
++		"1": render.AttrBold, "2": render.AttrDim, "3": render.AttrItalic, "4": render.AttrUnderline,
++		"5": render.AttrBlink, "7": render.AttrReverse, "8": render.AttrHidden, "9": render.AttrStrike,
++	}
++	for index := 0; index < len(parameters); index++ {
++		parameter := parameters[index]
++		if parameter == "0" || parameter == "" {
++			g.style = render.Style{}
++			continue
++		}
++		if attr, ok := attrs[parameter]; ok {
++			g.style.Attrs |= attr
++			continue
++		}
++		value, err := strconv.Atoi(parameter)
++		if err != nil {
++			return false
++		}
++		switch {
++		case value == 38 || value == 48:
++			color, consumed, ok := parseExtendedColor(parameters[index:])
++			if !ok {
++				return false
++			}
++			g.setColor(value == 38, color)
++			index += consumed - 1
++		case value >= 30 && value <= 37:
++			g.setColor(true, render.ANSIColor(uint8(value-30)))
++		case value >= 40 && value <= 47:
++			g.setColor(false, render.ANSIColor(uint8(value-40)))
++		case value >= 90 && value <= 97:
++			g.setColor(true, render.ANSIColor(uint8(value-90+8)))
++		case value >= 100 && value <= 107:
++			g.setColor(false, render.ANSIColor(uint8(value-100+8)))
++		default:
++			return false
++		}
++	}
++	return true
++}
++
++func parseExtendedColor(parameters []string) (render.Color, int, bool) {
++	if len(parameters) < 3 {
++		return render.Color{}, 0, false
++	}
++	switch parameters[1] {
++	case "5":
++		index, err := strconv.Atoi(parameters[2])
++		if err != nil || index < 0 || index > 255 {
++			return render.Color{}, 0, false
++		}
++		return render.IndexedColor(uint8(index)), 3, true
++	case "2":
++		if len(parameters) < 5 {
++			return render.Color{}, 0, false
++		}
++		channels := [3]uint8{}
++		for offset := range channels {
++			value, err := strconv.Atoi(parameters[2+offset])
++			if err != nil || value < 0 || value > 255 {
++				return render.Color{}, 0, false
++			}
++			channels[offset] = uint8(value)
++		}
++		return render.RGBColor(channels[0], channels[1], channels[2]), 5, true
++	default:
++		return render.Color{}, 0, false
++	}
++}
++
++func (g *referenceGrid) setColor(foreground bool, color render.Color) {
++	g.sawColor = true
++	if foreground {
++		g.style.Foreground = color
++		return
++	}
++	g.style.Background = color
++}
++
++func (g *referenceGrid) print(text string) {
++	graphemes := uniseg.NewGraphemes(text)
++	for graphemes.Next() {
++		cluster := graphemes.Str()
++		width := render.GraphemeWidth(cluster)
++		g.canvas.Put(g.x, g.y, cluster, g.style)
++		g.x += max(width, 1)
++	}
++}
++
++// present feeds one encoded frame into the grid and returns the emitted bytes.
++func (g *referenceGrid) present(t *testing.T, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
++	t.Helper()
++	data := appendFrame(nil, frame, previous, depth, synchronized)
++	g.feed(t, data)
++	if g.sync != 0 {
++		t.Fatalf("reference grid: unbalanced synchronized output wrapper: %d", g.sync)
++	}
++	return data
++}
++
++func (g *referenceGrid) requireMatches(t *testing.T, frame *render.Buffer, depth capability.ColorDepth) {
++	t.Helper()
++	width, height := frame.Size()
++	gridWidth, gridHeight := g.buffer.Size()
++	if width != gridWidth || height != gridHeight {
++		t.Fatalf("reference grid: size %dx%d, frame %dx%d", gridWidth, gridHeight, width, height)
++	}
++	for y := 0; y < height; y++ {
++		for x := 0; x < width; x++ {
++			if !equalRenderedCell(frame, g.buffer, x, y, depth) {
++				t.Fatalf("reference grid: cell (%d,%d) is %#v, frame has %#v", x, y, g.buffer.Cell(x, y), frame.Cell(x, y))
++			}
++		}
++	}
++	caretX, caretY, caretOn := frame.Caret()
++	// A terminal has one cursor: the caret is wherever the frame left it, so the
++	// encoder must position it last whenever the caret is visible.
++	if caretOn != g.caretOn || caretOn && (caretX != g.x || caretY != g.y) {
++		t.Fatalf("reference grid: caret (%d,%d,%t), frame wants (%d,%d,%t)", g.x, g.y, g.caretOn, caretX, caretY, caretOn)
++	}
++}
++
++func paintSample(buffer *render.Buffer, variant int) {
++	canvas := render.NewCanvas(buffer)
++	canvas.Clear(render.Style{})
++	styles := []render.Style{
++		{Foreground: render.RGBColor(220, 40, 90), Background: render.RGBColor(12, 14, 18)},
++		{Foreground: render.IndexedColor(213), Attrs: render.AttrBold | render.AttrUnderline},
++		{Foreground: render.ANSIColor(3), Background: render.ANSIColor(12), Attrs: render.AttrReverse},
++		{Attrs: render.AttrDim | render.AttrItalic | render.AttrStrike},
++	}
++	lines := []string{
++		"LUX " + strconv.Itoa(variant),
++		"日本語テキスト",
++		"émotion \U0001F1FA\U0001F1F8",
++		"tail",
++	}
++	for index, line := range lines {
++		canvas.Text(index%3, index, line, styles[(index+variant)%len(styles)])
++	}
++	canvas.Border(render.Rect{X: 0, Y: 0, W: 12, H: 4}, render.SingleBorder, styles[variant%len(styles)])
++}
++
++func TestReferenceGridMatchesEncodedFrames(t *testing.T) {
++	depths := []struct {
++		name  string
++		depth capability.ColorDepth
++	}{
++		{"truecolor", capability.TrueColor},
++		{"ansi256", capability.ANSI256},
++		{"ansi16", capability.ANSI16},
++		{"monochrome", capability.Monochrome},
++	}
++	for _, synchronized := range []bool{false, true} {
++		for _, depth := range depths {
++			name := depth.name
++			if synchronized {
++				name += "/sync"
++			}
++			t.Run(name, func(t *testing.T) {
++				frame := render.NewBuffer(20, 6)
++				paintSample(frame, 0)
++				grid := newReferenceGrid(20, 6)
++				data := grid.present(t, frame, nil, depth.depth, synchronized)
++				grid.requireMatches(t, frame, depth.depth)
++				if synchronized && grid.maxSync != 1 {
++					t.Fatalf("synchronized output was not wrapped: %d", grid.maxSync)
++				}
++				if depth.depth == capability.Monochrome && grid.sawColor {
++					// Comparing through equalRenderedCell ignores color at this
++					// depth, so assert no color parameter was emitted at all.
++					t.Fatalf("monochrome output carries color: %q", data)
++				}
++
++				// A changed-run diff transmits only differences, so the same grid
++				// must remain correct across successive frames.
++				for variant := 1; variant <= 3; variant++ {
++					previous := frame.Clone()
++					paintSample(frame, variant)
++					frame.SetCaret(variant, variant%6)
++					grid.present(t, frame, previous, depth.depth, synchronized)
++					grid.requireMatches(t, frame, depth.depth)
++				}
++
++				// Cells change while the caret stays put: the cursor must be
++				// repositioned anyway, because the runs moved it.
++				previous := frame.Clone()
++				caretX, caretY, _ := frame.Caret()
++				render.NewCanvas(frame).Put(19, 5, "Z", render.Style{Attrs: render.AttrBold})
++				frame.SetCaret(caretX, caretY)
++				data = grid.present(t, frame, previous, depth.depth, synchronized)
++				grid.requireMatches(t, frame, depth.depth)
++				if want := "\x1b[" + strconv.Itoa(caretY+1) + ";" + strconv.Itoa(caretX+1) + "H"; !strings.Contains(string(data), want) {
++					t.Fatalf("a stationary caret was not restated after cell runs: %q", data)
++				}
++
++				// Erasing content back to blanks must be transmitted too.
++				previous = frame.Clone()
++				render.NewCanvas(frame).Clear(render.Style{})
++				frame.HideCaret()
++				grid.present(t, frame, previous, depth.depth, synchronized)
++				grid.requireMatches(t, frame, depth.depth)
++			})
++		}
++	}
++}
++
++func TestReferenceGridRetainsUntransmittedCells(t *testing.T) {
++	// Content that is never retransmitted can only match if the grid remembers
++	// it, which is what makes a changed-run diff verifiable at all.
++	frame := render.NewBuffer(16, 3)
++	canvas := render.NewCanvas(frame)
++	canvas.Clear(render.Style{})
++	canvas.Text(0, 0, "STABLE HEADER", render.Style{Foreground: render.RGBColor(20, 200, 120)})
++	grid := newReferenceGrid(16, 3)
++	grid.present(t, frame, nil, capability.TrueColor, false)
++	grid.requireMatches(t, frame, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas.Text(0, 1, "row two", render.Style{Attrs: render.AttrItalic})
++	data := grid.present(t, frame, previous, capability.TrueColor, false)
++	grid.requireMatches(t, frame, capability.TrueColor)
++	if strings.Contains(string(data), "STABLE") {
++		t.Fatalf("an unchanged row was retransmitted: %q", data)
++	}
++	if !strings.Contains(string(data), "\x1b[2;1H") {
++		t.Fatalf("the changed row was not addressed: %q", data)
++	}
++}
++
++func TestReferenceGridFullRepaintAfterResize(t *testing.T) {
++	frame := render.NewBuffer(20, 6)
++	paintSample(frame, 1)
++	grid := newReferenceGrid(20, 6)
++	grid.present(t, frame, nil, capability.TrueColor, false)
++	grid.requireMatches(t, frame, capability.TrueColor)
++
++	previous := frame.Clone()
++	frame.Resize(9, 3)
++	paintSample(frame, 2)
++	resized := newReferenceGrid(9, 3)
++	data := resized.present(t, frame, previous, capability.TrueColor, false)
++	resized.requireMatches(t, frame, capability.TrueColor)
++	if !strings.Contains(string(data), "\x1b[1;1H") {
++		t.Fatalf("a resized frame must repaint from the origin: %q", data)
++	}
++}
++
++func TestReferenceGridCaretOnlyChange(t *testing.T) {
++	frame := render.NewBuffer(12, 3)
++	paintSample(frame, 0)
++	frame.SetCaret(4, 1)
++	grid := newReferenceGrid(12, 3)
++	grid.present(t, frame, nil, capability.ANSI256, false)
++	grid.requireMatches(t, frame, capability.ANSI256)
++
++	previous := frame.Clone()
++	frame.SetCaret(7, 2)
++	data := grid.present(t, frame, previous, capability.ANSI256, false)
++	grid.requireMatches(t, frame, capability.ANSI256)
++	if want := "\x1b[3;8H"; string(data) != want {
++		t.Fatalf("caret-only frame emitted %q, want %q", data, want)
++	}
++
++	previous = frame.Clone()
++	if data := appendFrame(nil, frame, previous, capability.ANSI256, false); len(data) != 0 {
++		t.Fatalf("an unchanged frame must emit nothing, got %q", data)
++	}
++}
+diff --git a/render/buffer.go b/render/buffer.go
+index 32f7303..4eb67ff 100644
+--- a/render/buffer.go
++++ b/render/buffer.go
+@@ -7,11 +7,17 @@ type Change struct {
+ 	Cell Cell
+ }
+ 
+-// Buffer owns a rectangular, row-major grid of canonical cells.
++// Buffer owns a rectangular, row-major grid of canonical cells plus the caret
++// the terminal cursor should occupy. The caret is presentation state: cell
++// comparison, diffing, and equality ignore it.
+ type Buffer struct {
+ 	width  int
+ 	height int
+ 	cells  []Cell
++
++	caretX      int
++	caretY      int
++	caretActive bool
+ }
+ 
+ // NewBuffer returns a blank buffer. Negative dimensions are treated as zero.
+@@ -66,6 +72,39 @@ func (b *Buffer) CellAt(index int) Cell {
+ 	return b.cells[index]
+ }
+ 
++// SetCaret asks the terminal to show its cursor at x, y. Coordinates outside
++// the buffer hide it instead; a wide grapheme's continuation cell snaps to the
++// leading cell, where a real terminal keeps its cursor.
++func (b *Buffer) SetCaret(x, y int) {
++	if b == nil {
++		return
++	}
++	cell, ok := b.CellOK(x, y)
++	if !ok {
++		b.caretActive = false
++		return
++	}
++	if cell.Width == 0 && x > 0 {
++		x--
++	}
++	b.caretX, b.caretY, b.caretActive = x, y, true
++}
++
++// HideCaret leaves the terminal cursor hidden for this frame.
++func (b *Buffer) HideCaret() {
++	if b != nil {
++		b.caretActive = false
++	}
++}
++
++// Caret returns the requested cursor cell and whether it should be shown.
++func (b *Buffer) Caret() (x, y int, visible bool) {
++	if b == nil {
++		return 0, 0, false
++	}
++	return b.caretX, b.caretY, b.caretActive
++}
++
+ // EqualCell compares one coordinate in two buffers.
+ func (b *Buffer) EqualCell(other *Buffer, x, y int) bool {
+ 	left, leftOK := b.CellOK(x, y)
+@@ -102,7 +141,7 @@ func (b *Buffer) Clone() *Buffer {
+ 	if b == nil {
+ 		return nil
+ 	}
+-	clone := &Buffer{width: b.width, height: b.height, cells: make([]Cell, len(b.cells))}
++	clone := &Buffer{width: b.width, height: b.height, cells: make([]Cell, len(b.cells)), caretX: b.caretX, caretY: b.caretY, caretActive: b.caretActive}
+ 	copy(clone.cells, b.cells)
+ 	return clone
+ }
+@@ -114,10 +153,12 @@ func (b *Buffer) CopyFrom(source *Buffer) {
+ 	}
+ 	if source == nil {
+ 		b.width, b.height, b.cells = 0, 0, nil
++		b.caretActive = false
+ 		return
+ 	}
+ 	b.width, b.height = source.width, source.height
+ 	b.cells = append(b.cells[:0], source.cells...)
++	b.caretX, b.caretY, b.caretActive = source.caretX, source.caretY, source.caretActive
+ }
+ 
+ // Resize changes the dimensions while preserving their overlapping top-left
+@@ -140,12 +181,17 @@ func (b *Buffer) Resize(width, height int) bool {
+ 		copy(cells[y*width:y*width+copyWidth], b.cells[y*b.width:y*b.width+copyWidth])
+ 	}
+ 	b.width, b.height, b.cells = width, height, cells
++	b.caretActive = false
+ 	b.repair()
+ 	return true
+ }
+ 
+-// Reset clears b to default-style blanks without reallocating.
+-func (b *Buffer) Reset() { b.Clear(Style{}) }
++// Reset clears b to default-style blanks and hides the caret without
++// reallocating. Each frame therefore restates its caret.
++func (b *Buffer) Reset() {
++	b.Clear(Style{})
++	b.HideCaret()
++}
+ 
+ // Clear fills b with blank cells using style.
+ func (b *Buffer) Clear(style Style) {
+diff --git a/render/canvas.go b/render/canvas.go
+index 2590706..05ce8ce 100644
+--- a/render/canvas.go
++++ b/render/canvas.go
+@@ -86,6 +86,20 @@ func (c *Canvas) GlobalPoint(x, y int) (int, int) {
+ 	return c.originX + x, c.originY + y
+ }
+ 
++// SetCaret asks the terminal to show its cursor at a local cell. A caret
++// outside the canvas or its clip leaves the cursor hidden, so a scrolled-out
++// control never steals the visible cursor.
++func (c *Canvas) SetCaret(x, y int) {
++	if c == nil || c.buffer == nil {
++		return
++	}
++	spot := c.GlobalRect(Rect{X: x, Y: y, W: 1, H: 1})
++	if spot.Empty() {
++		return
++	}
++	c.buffer.SetCaret(spot.X, spot.Y)
++}
++
+ // Subview returns a canvas whose origin is rect's clipped top-left corner.
+ func (c *Canvas) Subview(rect Rect) *Canvas {
+ 	if c == nil {
+diff --git a/render/caret_test.go b/render/caret_test.go
+new file mode 100644
+index 0000000..4d6ac20
+--- /dev/null
++++ b/render/caret_test.go
+@@ -0,0 +1,105 @@
++package render
++
++import "testing"
++
++func TestBufferCaretLifecycle(t *testing.T) {
++	buffer := NewBuffer(6, 3)
++	if _, _, visible := buffer.Caret(); visible {
++		t.Fatalf("a fresh buffer must not request a caret")
++	}
++	buffer.SetCaret(2, 1)
++	if x, y, visible := buffer.Caret(); !visible || x != 2 || y != 1 {
++		t.Fatalf("caret = (%d,%d,%t)", x, y, visible)
++	}
++
++	// Out-of-range coordinates hide the caret instead of pointing at nothing.
++	for _, spot := range [][2]int{{-1, 0}, {0, -1}, {6, 0}, {0, 3}} {
++		buffer.SetCaret(2, 1)
++		buffer.SetCaret(spot[0], spot[1])
++		if _, _, visible := buffer.Caret(); visible {
++			t.Fatalf("caret at %v must hide", spot)
++		}
++	}
++
++	// A wide grapheme's continuation cell snaps back to the leading cell, where
++	// a real terminal parks its cursor.
++	NewCanvas(buffer).Put(1, 2, "界", Style{})
++	buffer.SetCaret(2, 2)
++	if x, y, visible := buffer.Caret(); !visible || x != 1 || y != 2 {
++		t.Fatalf("continuation caret = (%d,%d,%t), want (1,2,true)", x, y, visible)
++	}
++
++	buffer.HideCaret()
++	if _, _, visible := buffer.Caret(); visible {
++		t.Fatalf("HideCaret left the caret visible")
++	}
++
++	// Each frame restates its caret, so Reset drops it; a resize invalidates the
++	// coordinates outright.
++	buffer.SetCaret(3, 0)
++	buffer.Reset()
++	if _, _, visible := buffer.Caret(); visible {
++		t.Fatalf("Reset must hide the caret")
++	}
++	buffer.SetCaret(3, 0)
++	buffer.Resize(9, 4)
++	if _, _, visible := buffer.Caret(); visible {
++		t.Fatalf("Resize must hide the caret")
++	}
++	buffer.Resize(9, 4)
++	buffer.SetCaret(3, 0)
++	if _, _, visible := buffer.Caret(); !visible {
++		t.Fatalf("a no-op resize must keep the caret")
++	}
++}
++
++func TestBufferCaretTravelsWithCopies(t *testing.T) {
++	source := NewBuffer(4, 2)
++	source.SetCaret(3, 1)
++	clone := source.Clone()
++	if x, y, visible := clone.Caret(); !visible || x != 3 || y != 1 {
++		t.Fatalf("clone caret = (%d,%d,%t)", x, y, visible)
++	}
++	target := NewBuffer(2, 2)
++	target.CopyFrom(source)
++	if x, y, visible := target.Caret(); !visible || x != 3 || y != 1 {
++		t.Fatalf("copied caret = (%d,%d,%t)", x, y, visible)
++	}
++	target.CopyFrom(nil)
++	if _, _, visible := target.Caret(); visible {
++		t.Fatalf("copying nil must hide the caret")
++	}
++
++	// The caret is presentation state: it never appears in a cell diff.
++	left, right := NewBuffer(3, 1), NewBuffer(3, 1)
++	left.SetCaret(1, 0)
++	if !left.Equal(right) || len(left.Diff(right)) != 0 {
++		t.Fatalf("caret leaked into cell comparison")
++	}
++}
++
++func TestCanvasSetCaretRespectsClipAndOrigin(t *testing.T) {
++	buffer := NewBuffer(10, 6)
++	canvas := NewCanvas(buffer)
++	view := canvas.Subview(Rect{X: 3, Y: 2, W: 4, H: 2})
++	view.SetCaret(1, 1)
++	if x, y, visible := buffer.Caret(); !visible || x != 4 || y != 3 {
++		t.Fatalf("subview caret = (%d,%d,%t), want (4,3,true)", x, y, visible)
++	}
++
++	buffer.HideCaret()
++	view.SetCaret(4, 0)
++	if _, _, visible := buffer.Caret(); visible {
++		t.Fatalf("a caret outside the subview must stay hidden")
++	}
++
++	clipped := canvas.Clip(Rect{X: 0, Y: 4, W: 10, H: 2})
++	clipped.SetCaret(0, 0)
++	if _, _, visible := buffer.Caret(); visible {
++		t.Fatalf("a caret outside the clip must stay hidden")
++	}
++	clipped.SetCaret(2, 5)
++	if x, y, visible := buffer.Caret(); !visible || x != 2 || y != 5 {
++		t.Fatalf("clipped caret = (%d,%d,%t), want (2,5,true)", x, y, visible)
++	}
++}
+diff --git a/ui/caret_test.go b/ui/caret_test.go
+new file mode 100644
+index 0000000..1103b7d
+--- /dev/null
++++ b/ui/caret_test.go
+@@ -0,0 +1,437 @@
++package ui
++
++import (
++	"fmt"
++	"strings"
++	"testing"
++	"time"
++
++	lux "github.com/lux-tui/lux"
++	"github.com/lux-tui/lux/event"
++	"github.com/lux-tui/lux/render"
++)
++
++func caretOf(t *testing.T, buffer *render.Buffer) (int, int, bool) {
++	t.Helper()
++	return buffer.Caret()
++}
++
++func TestInputPlacesTerminalCaretOnlyWhenEditable(t *testing.T) {
++	buffer := render.NewBuffer(20, 3)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	input := TextInput{Value: "日本語ab"}
++	input.Cursor, input.Anchor = len("日本語"), len("日本語")
++
++	var ctx Context
++	ctx.Begin(frame)
++	ctx.Input("name", canvas, render.Rect{X: 4, Y: 1, W: 10, H: 1}, &input, InputStyle{})
++	x, y, visible := caretOf(t, buffer)
++	if !visible || x != 4+6 || y != 1 {
++		t.Fatalf("focused caret = (%d,%d,%t), want (10,1,true)", x, y, visible)
++	}
++
++	// Read-only and disabled fields keep focus but must not own the cursor.
++	for _, style := range []InputStyle{{ReadOnly: true}, {Disabled: true}} {
++		buffer.Reset()
++		var readOnly Context
++		readOnly.Begin(frame)
++		readOnly.Input("name", canvas, render.Rect{X: 4, Y: 1, W: 10, H: 1}, &input, style)
++		if _, _, visible := caretOf(t, buffer); visible {
++			t.Fatalf("style %#v must not show a caret", style)
++		}
++	}
++
++	// An unfocused field is skipped even though it paints.
++	buffer.Reset()
++	var two Context
++	two.Begin(frame)
++	two.Input("first", canvas, render.Rect{Y: 0, W: 10, H: 1}, &TextInput{}, InputStyle{})
++	other := TextInput{Value: "second"}
++	two.Input("second", canvas, render.Rect{Y: 2, W: 10, H: 1}, &other, InputStyle{})
++	if x, y, visible := caretOf(t, buffer); !visible || x != 0 || y != 0 {
++		t.Fatalf("first field owns the caret, got (%d,%d,%t)", x, y, visible)
++	}
++
++	// A horizontally scrolled field must place the caret from the visible slice,
++	// not from the whole value, so it stays inside its own rectangle.
++	buffer.Reset()
++	long := TextInput{Value: "abcdefghijklmnop"}
++	long.Cursor, long.Anchor = len(long.Value), len(long.Value)
++	field := render.Rect{X: 2, Y: 1, W: 6, H: 1}
++	var scrolled Context
++	scrolled.Begin(frame)
++	scrolled.Input("name", canvas, field, &long, InputStyle{})
++	x, y, visible = caretOf(t, buffer)
++	if !visible || x < field.X || x >= field.Right() || y != field.Y {
++		t.Fatalf("scrolled caret = (%d,%d,%t), want inside %#v", x, y, visible, field)
++	}
++	if long.Offset == 0 {
++		t.Fatalf("the fixture must force a horizontal offset: %#v", long)
++	}
++}
++
++func TestInputCaretHiddenWhenScrolledOutOfClip(t *testing.T) {
++	buffer := render.NewBuffer(20, 6)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	clipped := canvas.Clip(render.Rect{X: 0, Y: 3, W: 20, H: 3})
++	input := TextInput{Value: "value"}
++
++	var ctx Context
++	ctx.Begin(frame)
++	// The field is painted above the clip, exactly like a row scrolled out of a
++	// viewport: it must not drag the terminal cursor into view.
++	ctx.Input("name", clipped, render.Rect{X: 1, Y: 1, W: 8, H: 1}, &input, InputStyle{})
++	if _, _, visible := caretOf(t, buffer); visible {
++		t.Fatalf("clipped caret must stay hidden")
++	}
++}
++
++func TestDragExtendsSelectionWithoutHistory(t *testing.T) {
++	input := TextInput{Value: "abcdef", UndoBytes: 1 << 10}
++	bounds := render.Rect{X: 3, Y: 2, W: 6, H: 1}
++
++	press := Action{Target: "name", Kind: Input, Bounds: bounds, X: 1, Event: event.Event{
++		Kind: event.Mouse, Mouse: event.MouseEvent{X: 4, Y: 2, Action: event.MousePress, Button: event.MouseLeft},
++	}}
++	if !input.Apply(press) || input.Cursor != 1 || input.Anchor != 1 {
++		t.Fatalf("press = %#v", input)
++	}
++	drag := Action{Target: "name", Kind: Input, Bounds: bounds, X: 4, Event: event.Event{
++		Kind: event.Mouse, Mouse: event.MouseEvent{X: 7, Y: 2, Action: event.MouseMove, Button: event.MouseLeft},
++	}}
++	if !input.Apply(drag) || input.Cursor != 4 || input.Anchor != 1 {
++		t.Fatalf("drag = %#v", input)
++	}
++	if start, end := input.Selection(); start != 1 || end != 4 || input.SelectedText() != "bcd" {
++		t.Fatalf("selection = %d..%d %q", start, end, input.SelectedText())
++	}
++	// Selection is not an edit: dragging must never consume undo history.
++	if input.Undo() {
++		t.Fatalf("drag recorded an undo step: %#v", input)
++	}
++
++	// Motion without the left button is hover or another button's gesture, not a
++	// drag: it must not move the caret even when it points somewhere else.
++	input.Cursor, input.Anchor = 1, 1
++	for _, button := range []event.MouseButton{event.MouseNone, event.MouseRight} {
++		hover := drag
++		hover.X = 5
++		hover.Event.Mouse.Button = button
++		if input.Apply(hover) || input.Cursor != 1 {
++			t.Fatalf("motion with button %v edited state: %#v", button, input)
++		}
++	}
++}
++
++func TestDragPastEdgesWalksOneGraphemeAndScrolls(t *testing.T) {
++	input := TextInput{Value: "日本語です", Offset: len("日本"), Cursor: len("日本語"), Anchor: len("日本")}
++	bounds := render.Rect{W: 4, H: 1}
++	move := func(x int) Action {
++		return Action{Target: "name", Kind: Input, Bounds: bounds, X: x, Event: event.Event{
++			Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseMove, Button: event.MouseLeft},
++		}}
++	}
++
++	if !input.Apply(move(9)) || input.Cursor != len("日本語で") {
++		t.Fatalf("drag right past the edge = %#v", input)
++	}
++	if !input.Apply(move(9)) || input.Cursor != len("日本語です") {
++		t.Fatalf("second drag right = %#v", input)
++	}
++	if input.Apply(move(9)) {
++		t.Fatalf("drag past the end must saturate: %#v", input)
++	}
++	input.Cursor = input.Offset
++	if !input.Apply(move(-2)) || input.Cursor != len("日") {
++		t.Fatalf("drag left past the edge = %#v", input)
++	}
++	// The next frame's ensureOffset is what turns a caret move into a scroll.
++	input.ensureOffset(bounds.W, true)
++	if input.Offset > input.Cursor {
++		t.Fatalf("offset %d must follow the caret %d", input.Offset, input.Cursor)
++	}
++	if input.Anchor != len("日本") {
++		t.Fatalf("anchor moved during drag: %#v", input)
++	}
++}
++
++func TestContextRoutesCapturedDragAndStopsAtRelease(t *testing.T) {
++	var ctx Context
++	presented(&ctx, []region{
++		{id: "input", bounds: render.Rect{X: 2, Y: 1, W: 6, H: 1}, flags: Focusable | Editable},
++		{id: "button", bounds: render.Rect{X: 2, Y: 3, W: 6, H: 1}, flags: Focusable | Activatable},
++	}, modal{})
++
++	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 4, Y: 1, Action: event.MousePress, Button: event.MouseLeft}}
++	if action, handled := ctx.Handle(press); !handled || action.Kind != Input || action.Target != "input" {
++		t.Fatalf("press = %#v handled=%v", action, handled)
++	}
++	// Capture keeps the drag on the pressed field with coordinates that leave it,
++	// which is what lets a narrow field autoscroll.
++	outside := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 12, Y: 4, Action: event.MouseMove, Button: event.MouseLeft}}
++	action, handled := ctx.Handle(outside)
++	if !handled || action.Kind != Input || action.Target != "input" || action.X != 10 || action.Y != 3 {
++		t.Fatalf("captured drag = %#v handled=%v", action, handled)
++	}
++
++	release := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 12, Y: 4, Action: event.MouseRelease}}
++	ctx.Handle(release)
++	if action, handled := ctx.Handle(outside); handled || action.Kind != None {
++		t.Fatalf("drag after release = %#v handled=%v", action, handled)
++	}
++
++	// A pressed button captures too, but a drag over it is not editable input.
++	buttonPress := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 4, Y: 3, Action: event.MousePress, Button: event.MouseLeft}}
++	ctx.Handle(buttonPress)
++	if action, handled := ctx.Handle(outside); !handled || action.Kind != None {
++		t.Fatalf("button drag = %#v handled=%v", action, handled)
++	}
++}
++
++func wheel(x, y int, up bool) event.Event {
++	button := event.MouseWheelDown
++	if up {
++		button = event.MouseWheelUp
++	}
++	return event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: x, Y: y, Action: event.MouseWheel, Button: button}}
++}
++
++func TestWheelBubblesToEnclosingScrollableAtBoundary(t *testing.T) {
++	outer := region{id: "outer", bounds: render.Rect{W: 20, H: 10}, flags: Focusable | Scrollable}
++	inner := region{id: "inner", bounds: render.Rect{X: 4, Y: 2, W: 10, H: 4}, flags: Focusable | Scrollable, atTop: true}
++	var ctx Context
++	presented(&ctx, []region{outer, inner}, modal{})
++
++	// The child can still scroll down, so it keeps the wheel.
++	if action, handled := ctx.Handle(wheel(6, 3, false)); !handled || action.Target != "inner" {
++		t.Fatalf("child scroll = %#v handled=%v", action, handled)
++	}
++	// At its top boundary the same child hands the wheel to its parent.
++	if action, handled := ctx.Handle(wheel(6, 3, true)); !handled || action.Target != "outer" {
++		t.Fatalf("bubbled scroll = %#v handled=%v", action, handled)
++	}
++	// Outside the child, the parent is hit directly.
++	if action, handled := ctx.Handle(wheel(18, 8, true)); !handled || action.Target != "outer" {
++		t.Fatalf("parent scroll = %#v handled=%v", action, handled)
++	}
++}
++
++func TestWheelStopsAtInnermostWhenNoParentCanScroll(t *testing.T) {
++	exhausted := region{id: "inner", bounds: render.Rect{X: 1, Y: 1, W: 6, H: 3}, flags: Focusable | Scrollable, atTop: true, atBottom: true}
++	cases := []struct {
++		name    string
++		regions []region
++		target  ID
++	}{
++		{
++			name:    "plain parent",
++			regions: []region{{id: "panel", bounds: render.Rect{W: 20, H: 10}, flags: Focusable}, exhausted},
++			target:  "inner",
++		},
++		{
++			name: "overlapping sibling is not an ancestor",
++			regions: []region{
++				// Overlaps the child's left half without containing it, so it is a
++				// neighbour painted underneath rather than a parent.
++				{id: "sibling", bounds: render.Rect{W: 4, H: 8}, flags: Focusable | Scrollable},
++				exhausted,
++			},
++			target: "inner",
++		},
++		{
++			name: "exhausted parent",
++			regions: []region{
++				{id: "outer", bounds: render.Rect{W: 20, H: 10}, flags: Focusable | Scrollable, atTop: true, atBottom: true},
++				exhausted,
++			},
++			target: "inner",
++		},
++	}
++	for _, testCase := range cases {
++		t.Run(testCase.name, func(t *testing.T) {
++			var ctx Context
++			presented(&ctx, testCase.regions, modal{})
++			action, handled := ctx.Handle(wheel(3, 2, true))
++			if !handled || action.Target != testCase.target || action.Kind != Scroll {
++				t.Fatalf("wheel = %#v handled=%v", action, handled)
++			}
++		})
++	}
++}
++
++func TestWheelBubblingRespectsModalAndDisabledRegions(t *testing.T) {
++	var ctx Context
++	presented(&ctx, []region{
++		{id: "background", bounds: render.Rect{W: 20, H: 10}, flags: Focusable | Scrollable},
++		{id: "panel", bounds: render.Rect{X: 2, Y: 2, W: 10, H: 6}, flags: Focusable | Scrollable, modal: "dialog"},
++		{id: "list", bounds: render.Rect{X: 3, Y: 3, W: 8, H: 3}, flags: Focusable | Scrollable, modal: "dialog", atTop: true},
++	}, modal{id: "dialog", bounds: render.Rect{X: 2, Y: 2, W: 10, H: 6}})
++
++	if action, handled := ctx.Handle(wheel(4, 4, true)); !handled || action.Target != "panel" {
++		t.Fatalf("modal bubbling = %#v handled=%v", action, handled)
++	}
++	// A modal must never leak the wheel to the background it covers.
++	if action, handled := ctx.Handle(wheel(18, 9, true)); action.Target != "" || !handled {
++		t.Fatalf("outside modal = %#v handled=%v", action, handled)
++	}
++
++	var blocked Context
++	presented(&blocked, []region{
++		{id: "outer", bounds: render.Rect{W: 20, H: 10}, flags: Focusable | Scrollable},
++		{id: "cover", bounds: render.Rect{X: 1, Y: 1, W: 6, H: 4}, flags: Focusable | Scrollable | Disabled},
++	}, modal{})
++	if action, handled := blocked.Handle(wheel(2, 2, true)); handled || action.Target != "" {
++		t.Fatalf("disabled cover must block = %#v handled=%v", action, handled)
++	}
++}
++
++func TestScrollViewportAndListReportScrollBoundaries(t *testing.T) {
++	buffer := render.NewBuffer(20, 8)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++
++	cases := []struct {
++		name     string
++		offset   int
++		content  int
++		atTop    bool
++		atBottom bool
++	}{
++		{name: "top", offset: 0, content: 100, atTop: true},
++		{name: "middle", offset: 10, content: 100},
++		{name: "bottom", offset: 96, content: 100, atBottom: true},
++		{name: "fits", offset: 0, content: 2, atTop: true, atBottom: true},
++	}
++	for _, testCase := range cases {
++		t.Run(testCase.name, func(t *testing.T) {
++			var ctx Context
++			ctx.Begin(frame)
++			state := ScrollState{Offset: testCase.offset}
++			ctx.ScrollViewport("log", canvas, render.Rect{W: 20, H: 4}, &state, testCase.content, ScrollStyle{})
++			item := ctx.building[0]
++			if item.atTop != testCase.atTop || item.atBottom != testCase.atBottom {
++				t.Fatalf("viewport boundaries = %t/%t, want %t/%t", item.atTop, item.atBottom, testCase.atTop, testCase.atBottom)
++			}
++		})
++	}
++
++	items := []string{"a", "b", "c", "d", "e", "f"}
++	// Every index matters: the List wheel moves the selection, so boundaries
++	// derived from the scroll offset would agree only at the extremes.
++	for selected := range items {
++		var ctx Context
++		ctx.Begin(frame)
++		state := ListState{Selected: selected}
++		ctx.List("items", canvas, render.Rect{W: 20, H: 3}, &state, items, ListStyle{})
++		item := ctx.building[0]
++		if item.atTop != (selected == 0) || item.atBottom != (selected == len(items)-1) {
++			t.Fatalf("list selected=%d boundaries = %t/%t", selected, item.atTop, item.atBottom)
++		}
++	}
++
++	var empty Context
++	empty.Begin(frame)
++	state := ListState{}
++	empty.List("items", canvas, render.Rect{W: 20, H: 3}, &state, nil, ListStyle{})
++	if item := empty.building[0]; !item.atTop || !item.atBottom {
++		t.Fatalf("empty list must bubble: %#v", item)
++	}
++}
++
++func TestEnsureOffsetKeepsCaretVisibleAndMinimal(t *testing.T) {
++	cases := []struct {
++		name   string
++		value  string
++		cursor int
++		width  int
++		caret  bool
++		offset int
++	}{
++		{name: "fits", value: "abcdef", cursor: 6, width: 10, caret: true, offset: 0},
++		{name: "caret at end reserves a cell", value: "abcdef", cursor: 6, width: 4, caret: true, offset: 3},
++		{name: "no caret needs no cell", value: "abcdef", cursor: 6, width: 4, caret: false, offset: 2},
++		{name: "wide graphemes never split", value: "日本語です", cursor: len("日本語です"), width: 5, caret: true, offset: len("日本語")},
++		{name: "cursor inside reserves its own width", value: "日本語です", cursor: len("日本"), width: 4, caret: true, offset: len("日")},
++		{name: "zero width collapses", value: "abcdef", cursor: 4, width: 0, caret: true, offset: 4},
++		{name: "width smaller than the caret glyph", value: "日本", cursor: 0, width: 1, caret: true, offset: 0},
++		{name: "start of text", value: "abc", cursor: 0, width: 3, caret: true, offset: 0},
++	}
++	for _, testCase := range cases {
++		t.Run(testCase.name, func(t *testing.T) {
++			// A stale offset must not survive: the window is recomputed, not nudged.
++			for _, start := range []int{0, testCase.cursor, len(testCase.value)} {
++				input := TextInput{Value: testCase.value, Cursor: testCase.cursor, Anchor: testCase.cursor, Offset: start}
++				input.ensureOffset(testCase.width, testCase.caret)
++				if input.Offset != testCase.offset {
++					t.Fatalf("from offset %d got %d, want %d", start, input.Offset, testCase.offset)
++				}
++				if input.Offset > input.Cursor {
++					t.Fatalf("offset %d passed the caret %d", input.Offset, input.Cursor)
++				}
++			}
++		})
++	}
++}
++
++func TestEnsureOffsetStaysLinear(t *testing.T) {
++	// Measuring the candidate window inside a loop made this quadratic: a pasted
++	// 3 KB value took seconds per frame. One absolute bound catches a severe
++	// regression within a second, and a growth ratio catches a mild one without
++	// depending on machine speed or the race detector's overhead.
++	measure := func(clusters, repeats int) (time.Duration, int) {
++		input := TextInput{Value: strings.Repeat("ab界🙂", clusters)}
++		input.Cursor, input.Anchor = len(input.Value), len(input.Value)
++		started := time.Now()
++		for range repeats {
++			input.Offset = 0
++			input.ensureOffset(20, true)
++		}
++		return time.Since(started), input.Offset
++	}
++	single, offset := measure(1<<10, 1)
++	if offset == 0 {
++		t.Fatalf("a value far wider than the field must scroll, offset = %d", offset)
++	}
++	if single > time.Second {
++		t.Fatalf("one window recomputation over 10 KB took %s", single)
++	}
++	small, _ := measure(2<<10, 5)
++	large, _ := measure(4<<10, 5)
++	if small < time.Millisecond {
++		t.Skipf("baseline %s is too small to compare growth", small)
++	}
++	if large > 3*small {
++		t.Fatalf("doubling the text grew the cost from %s to %s, which is not linear", small, large)
++	}
++}
++
++// BenchmarkWheelBubbling measures the worst case for the router: every nested
++// level is exhausted, so it walks the whole enclosure chain.
++func BenchmarkWheelBubbling(b *testing.B) {
++	for _, depth := range []int{2, 8, 32} {
++		b.Run(fmt.Sprint(depth), func(b *testing.B) {
++			regions := make([]region, 0, depth)
++			for level := range depth {
++				regions = append(regions, region{
++					id:       ID(fmt.Sprint("level", level)),
++					bounds:   render.Rect{X: level, Y: level, W: 200 - 2*level, H: 100 - 2*level},
++					flags:    Focusable | Scrollable,
++					atTop:    true,
++					atBottom: true,
++				})
++			}
++			var ctx Context
++			presented(&ctx, regions, modal{})
++			up := wheel(100, 50, true)
++			b.ReportAllocs()
++			b.ResetTimer()
++			for range b.N {
++				if _, handled := ctx.Handle(up); !handled {
++					b.Fatal("wheel was not routed")
++				}
++			}
++		})
++	}
++}
+diff --git a/ui/context.go b/ui/context.go
+index 6ba7772..a153937 100644
+--- a/ui/context.go
++++ b/ui/context.go
+@@ -25,11 +25,15 @@ const (
+ 
+ // RegionOptions customizes event-local coordinates without changing visual
+ // hit bounds. ContentHeight is useful for lists whose blank tail still accepts
+-// wheel scrolling but must not select a nonexistent row.
++// wheel scrolling but must not select a nonexistent row. AtTop and AtBottom
++// declare an exhausted scroll boundary so the wheel bubbles to an enclosing
++// scrollable region; their zero value keeps a region always eligible.
+ type RegionOptions struct {
+ 	// ContentHeight limits press/click rows while preserving wheel routing.
+ 	// Zero means no pressable content; Region uses -1 for the full bounds.
+ 	ContentHeight int
++	AtTop         bool
++	AtBottom      bool
+ }
+ 
+ // ActionKind describes a routed interaction.
+@@ -63,6 +67,8 @@ type region struct {
+ 	flags         Flags
+ 	modal         ID
+ 	contentHeight int
++	atTop         bool
++	atBottom      bool
+ }
+ 
+ type modal struct {
+@@ -166,7 +172,7 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
+ 		// Preserve local row coordinates when the region is clipped at its top.
+ 		contentHeight = min(contentHeight, max(absolute.Bottom()-originY, 0))
+ 	}
+-	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight}
++	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight, atTop: options.AtTop, atBottom: options.AtBottom}
+ 	c.building = append(c.building, next)
+ 	if c.viewFocus == "" && focusable(next, c.currentModal) {
+ 		c.viewFocus = id
+@@ -357,7 +363,7 @@ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
+ 	}
+ 
+ 	if mouse.Action == event.MouseWheel {
+-		if scrollTarget, ok := hit(c.committed, mouse.X, mouse.Y, Scrollable); ok {
++		if scrollTarget, ok := wheelTarget(c.committed, mouse); ok {
+ 			return actionFor(scrollTarget, Scroll, next), true
+ 		}
+ 		return Action{}, c.committed.modal.id != ""
+@@ -408,9 +414,70 @@ func (c *Context) handleMouseLocked(next event.Event) (Action, bool) {
+ 		return Action{}, captured != "" || c.committed.modal.id != ""
+ 	}
+ 
++	if mouse.Action == event.MouseMove && c.captureLeft && c.captured != "" {
++		// Capture keeps delivering to the pressed control even once the pointer
++		// leaves it, which is what turns a press into a drag.
++		if target, ok := regionByID(c.committed, c.captured); ok && target.flags&Editable != 0 {
++			return actionFor(target, Input, next), true
++		}
++		return Action{}, true
++	}
++
+ 	return Action{}, found || c.captured != "" || c.committed.modal.id != ""
+ }
+ 
++// wheelTarget resolves the topmost scrollable region under the pointer that can
++// still move, then bubbles outward through regions that geometrically enclose
++// it. Registration order alone cannot express nesting, so enclosure is what
++// separates a real parent from an overlapping sibling underneath.
++func wheelTarget(state snapshot, mouse event.MouseEvent) (region, bool) {
++	var child region
++	found := false
++	for index := len(state.regions) - 1; index >= 0; index-- {
++		item := state.regions[index]
++		if state.modal.id != "" && item.modal != state.modal.id {
++			continue
++		}
++		if !item.bounds.Contains(mouse.X, mouse.Y) {
++			continue
++		}
++		if item.flags&Disabled != 0 {
++			if found {
++				break
++			}
++			return region{}, false
++		}
++		if item.flags&Scrollable == 0 {
++			continue
++		}
++		if found && !encloses(item.bounds, child.bounds) {
++			continue
++		}
++		if canScroll(item, mouse.Button) {
++			return item, true
++		}
++		if !found {
++			child, found = item, true
++		}
++	}
++	return child, found
++}
++
++func canScroll(item region, button event.MouseButton) bool {
++	switch button {
++	case event.MouseWheelUp:
++		return !item.atTop
++	case event.MouseWheelDown:
++		return !item.atBottom
++	default:
++		return true
++	}
++}
++
++func encloses(outer, inner render.Rect) bool {
++	return outer.X <= inner.X && outer.Y <= inner.Y && outer.Right() >= inner.Right() && outer.Bottom() >= inner.Bottom()
++}
++
+ func (c *Context) commit(generation, sequence uint64, next snapshot) {
+ 	c.mu.Lock()
+ 	defer c.mu.Unlock()
+diff --git a/ui/controls.go b/ui/controls.go
+index d4da45f..a04bdc3 100644
+--- a/ui/controls.go
++++ b/ui/controls.go
+@@ -25,8 +25,9 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
+ 	if canvas == nil || bounds.Empty() {
+ 		return
+ 	}
+-	bounds = bounds.Intersect(canvas.Bounds())
+-	if bounds.Empty() {
++	// Draw against the logical rectangle and let the canvas clip it, so a button
++	// inside a scrolled container keeps its geometry instead of sliding.
++	if bounds.Intersect(canvas.Bounds()).Empty() {
+ 		return
+ 	}
+ 	flags := Focusable | Activatable
+@@ -155,17 +156,22 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
+ 	if canvas == nil || state == nil || bounds.Empty() {
+ 		return
+ 	}
+-	bounds = bounds.Intersect(canvas.Bounds())
+-	if bounds.Empty() {
++	// Rows are addressed in the list's own coordinates; clipping is the canvas's
++	// job, which keeps a partially scrolled list aligned with its content.
++	if bounds.Intersect(canvas.Bounds()).Empty() {
+ 		return
+ 	}
+ 	flags := Focusable | Scrollable | Activatable
+ 	if style.Disabled {
+ 		flags |= Disabled
+ 	}
+-	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{ContentHeight: min(bounds.H, max(len(items)-state.Offset, 0))})
+ 	state.Selected = min(max(state.Selected, 0), max(len(items)-1, 0))
+ 	state.ensureVisible(len(items), bounds.H)
++	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{
++		ContentHeight: min(bounds.H, max(len(items)-state.Offset, 0)),
++		AtTop:         state.Selected <= 0,
++		AtBottom:      state.Selected >= len(items)-1,
++	})
+ 	canvas = canvas.Clip(bounds)
+ 	canvas.Fill(bounds, " ", style.Normal)
+ 	marker := style.Marker
+diff --git a/ui/scroll.go b/ui/scroll.go
+index 258ae2f..08eac3e 100644
+--- a/ui/scroll.go
++++ b/ui/scroll.go
+@@ -96,9 +96,12 @@ func (s *ScrollState) EnsureVisible(index, content, rows int) {
+ 	s.Range(content, rows)
+ }
+ 
+-// ScrollStyle configures viewport interaction.
++// ScrollStyle configures viewport interaction. A Passive viewport routes the
++// wheel without joining Tab traversal, which is what a container whose children
++// own the keyboard needs.
+ type ScrollStyle struct {
+ 	Disabled bool
++	Passive  bool
+ }
+ 
+ // ScrollViewport registers a fixed-row scrolling region and returns its
+@@ -111,9 +114,16 @@ func (c *Context) ScrollViewport(id ID, canvas *render.Canvas, rect render.Rect,
+ 	_, rows := view.Size()
+ 	visible := state.Range(content, rows)
+ 	flags := Focusable | Scrollable
++	if style.Passive {
++		flags = Scrollable
++	}
+ 	if style.Disabled {
+ 		flags |= Disabled
+ 	}
+-	c.RegionWithOptions(id, canvas, rect, flags, RegionOptions{ContentHeight: visible.Last - visible.First})
++	c.RegionWithOptions(id, canvas, rect, flags, RegionOptions{
++		ContentHeight: visible.Last - visible.First,
++		AtTop:         state.Offset <= 0,
++		AtBottom:      state.Offset >= max(max(content, 0)-max(rows, 0), 0),
++	})
+ 	return view
+ }
+diff --git a/ui/testdata/fuzz/FuzzTextInputInvariants/17038fb72c781d46 b/ui/testdata/fuzz/FuzzTextInputInvariants/17038fb72c781d46
+new file mode 100644
+index 0000000..69c11af
+--- /dev/null
++++ b/ui/testdata/fuzz/FuzzTextInputInvariants/17038fb72c781d46
+@@ -0,0 +1,6 @@
++go test fuzz v1
++[]byte("???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????0A")
++byte('£')
++byte('j')
++byte('\x00')
++byte(' ')
+diff --git a/ui/testdata/fuzz/FuzzTextInputInvariants/52361c169ae63351 b/ui/testdata/fuzz/FuzzTextInputInvariants/52361c169ae63351
+new file mode 100644
+index 0000000..f3a959f
+--- /dev/null
++++ b/ui/testdata/fuzz/FuzzTextInputInvariants/52361c169ae63351
+@@ -0,0 +1,6 @@
++go test fuzz v1
++[]byte("???????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????0A")
++byte('£')
++byte('N')
++byte('\x00')
++byte(' ')
+diff --git a/ui/testdata/fuzz/FuzzTextInputInvariants/6a333b0c99221b26 b/ui/testdata/fuzz/FuzzTextInputInvariants/6a333b0c99221b26
+new file mode 100644
+index 0000000..186f664
+--- /dev/null
++++ b/ui/testdata/fuzz/FuzzTextInputInvariants/6a333b0c99221b26
+@@ -0,0 +1,6 @@
++go test fuzz v1
++[]byte("?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????\x1f?????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????????0A")
++byte('£')
++byte('N')
++byte('\x00')
++byte(' ')
+diff --git a/ui/textinput.go b/ui/textinput.go
+index 40118ba..dfcff5c 100644
+--- a/ui/textinput.go
++++ b/ui/textinput.go
+@@ -194,6 +194,13 @@ func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *T
+ 	canvas.Fill(line, " ", base)
+ 	focused := c.Focused(id) && !style.ReadOnly && !style.Disabled
+ 	input.ensureOffset(line.W, focused)
++	if focused {
++		// The real terminal cursor follows the caret so IME and screen readers
++		// track it; a clipped or scrolled-out caret stays hidden.
++		if column := textCells(input.Value[input.Offset:input.Cursor]); column < line.W {
++			canvas.SetCaret(line.X+column, line.Y)
++		}
++	}
+ 
+ 	placeholder := style.Placeholder
+ 	if placeholder == (render.Style{}) {
+@@ -428,14 +435,36 @@ func (t *TextInput) applyKey(key event.KeyEvent) {
+ 
+ func (t *TextInput) applyMouse(action Action) {
+ 	mouse := action.Event.Mouse
+-	if mouse.Action != event.MousePress || mouse.Button != event.MouseLeft {
++	if mouse.Button != event.MouseLeft {
+ 		return
+ 	}
+-	target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W)
+-	if mouse.Mod&event.ModShift != 0 {
+-		t.Cursor = target
+-	} else {
+-		t.Cursor, t.Anchor = target, target
++	switch mouse.Action {
++	case event.MousePress:
++		target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W)
++		if mouse.Mod&event.ModShift != 0 {
++			t.Cursor = target
++		} else {
++			t.Cursor, t.Anchor = target, target
++		}
++	case event.MouseMove:
++		// A captured drag extends the selection and keeps the anchor; dragging
++		// past an edge walks one grapheme per event so a narrow field scrolls.
++		t.Cursor = t.dragTarget(action)
++	}
++}
++
++func (t *TextInput) dragTarget(action Action) int {
++	width := action.Bounds.W
++	switch {
++	case action.X < 0:
++		return previousBoundary(t.Value, min(t.Cursor, t.Offset))
++	case width > 0 && action.X >= width:
++		if inside := byteAtCell(t.Value, t.Offset, width-1, width); inside > t.Cursor {
++			return inside
++		}
++		return nextBoundary(t.Value, t.Cursor)
++	default:
++		return byteAtCell(t.Value, t.Offset, action.X, width)
+ 	}
+ }
+ 
+@@ -478,33 +507,43 @@ func (t *TextInput) remove(start, end int) {
+ 	t.Offset = floorBoundary(t.Value, min(t.Offset, t.Cursor))
+ }
+ 
++// ensureOffset recomputes the horizontal window so the caret is visible. The
++// window is the shortest suffix of the text before the caret that still fits,
++// so one grapheme pass is enough; measuring the candidate window inside a loop
++// would be quadratic in the value length and stall a frame on a pasted field.
+ func (t *TextInput) ensureOffset(width int, caret bool) {
+ 	if width <= 0 {
+ 		t.Offset = t.Cursor
+ 		return
+ 	}
+-	if t.Offset > t.Cursor {
+-		t.Offset = t.Cursor
+-	}
+ 	needed := 0
+ 	if t.Cursor < len(t.Value) {
+ 		needed = max(render.GraphemeWidth(t.Value[t.Cursor:]), 1)
+ 	} else if caret {
+ 		needed = 1
+ 	}
+-	for t.Offset < t.Cursor && textCells(t.Value[t.Offset:t.Cursor])+needed > width {
+-		t.Offset = nextBoundary(t.Value, t.Offset)
+-	}
+-	if textCells(t.Value[t.Offset:t.Cursor])+needed > width {
++	budget := width - needed
++	if budget <= 0 {
+ 		t.Offset = t.Cursor
++		return
+ 	}
+-	for t.Offset > 0 {
+-		previous := previousBoundary(t.Value, t.Offset)
+-		if textCells(t.Value[previous:t.Cursor])+needed > width {
+-			break
++	head := t.Value[:t.Cursor]
++	total := textCells(head)
++	if total <= budget {
++		t.Offset = 0
++		return
++	}
++	used := 0
++	graphemes := uniseg.NewGraphemes(head)
++	for graphemes.Next() {
++		_, to := graphemes.Positions()
++		used += render.GraphemeWidth(graphemes.Str())
++		if total-used <= budget {
++			t.Offset = to
++			return
+ 		}
+-		t.Offset = previous
+ 	}
++	t.Offset = t.Cursor
+ }
+ 
+ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal, selection, caret render.Style, focused bool) {
+diff --git a/ui/textinput_test.go b/ui/textinput_test.go
+index e4be12f..484338c 100644
+--- a/ui/textinput_test.go
++++ b/ui/textinput_test.go
+@@ -287,7 +287,7 @@ func FuzzTextInputInvariants(f *testing.F) {
+ 	f.Fuzz(func(t *testing.T, raw []byte, cursor, anchor, limit, operation uint8) {
+ 		input := TextInput{Value: string(raw), Cursor: int(cursor), Anchor: int(anchor), Offset: int(anchor), MaxBytes: int(limit)}
+ 		action := inputAction(event.KeyPress(event.KeyLeft, event.ModShift))
+-		switch operation % 6 {
++		switch operation % 7 {
+ 		case 0:
+ 			action.Event = event.KeyPress(event.KeyBackspace, 0)
+ 		case 1:
+@@ -301,6 +301,11 @@ func FuzzTextInputInvariants(f *testing.F) {
+ 		case 5:
+ 			action.Event = event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}}
+ 			action.X, action.Bounds.W = int(cursor%16), int(anchor%16)
++		case 6:
++			// A captured drag reaches the same invariants from arbitrary offsets,
++			// including coordinates outside the field.
++			action.Event = event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseMove, Button: event.MouseLeft}}
++			action.X, action.Bounds.W = int(cursor%32)-8, int(anchor%16)
+ 		}
+ 		input.Apply(action)
+ 		buffer := render.NewBuffer(int(anchor%16), 1)
