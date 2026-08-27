@@ -47,6 +47,12 @@ func (g *referenceGrid) feed(t *testing.T, data []byte) {
 		run.Reset()
 	}
 	for index := 0; index < len(text); {
+		if text[index] == '\r' {
+			flush()
+			g.x = 0
+			index++
+			continue
+		}
 		if text[index] != 0x1b {
 			run.WriteByte(text[index])
 			index++
@@ -67,7 +73,7 @@ func (g *referenceGrid) escape(t *testing.T, text string) int {
 	if !strings.HasPrefix(text, "\x1b[") {
 		return 0
 	}
-	end := strings.IndexAny(text[2:], "Hhlm")
+	end := strings.IndexAny(text[2:], "CHKhlm")
 	if end < 0 {
 		return 0
 	}
@@ -85,6 +91,25 @@ func (g *referenceGrid) escape(t *testing.T, text string) int {
 			return 0
 		}
 		g.x, g.y = x-1, y-1
+	case final == 'C':
+		steps := 1
+		if body != "" {
+			value, err := strconv.Atoi(body)
+			if err != nil || value < 1 {
+				return 0
+			}
+			steps = value
+		}
+		width, _ := g.buffer.Size()
+		g.x = min(g.x+steps, width-1)
+	case final == 'K':
+		if body != "" && body != "0" {
+			return 0
+		}
+		width, _ := g.buffer.Size()
+		for x := g.x; x < width; x++ {
+			g.canvas.Put(x, g.y, " ", g.style)
+		}
 	case final == 'm':
 		if !g.sgr(body) {
 			return 0
@@ -110,6 +135,12 @@ func (g *referenceGrid) sgr(body string) bool {
 		"1": render.AttrBold, "2": render.AttrDim, "3": render.AttrItalic, "4": render.AttrUnderline,
 		"5": render.AttrBlink, "7": render.AttrReverse, "8": render.AttrHidden, "9": render.AttrStrike,
 	}
+	// SGR 22 clears bold and dim together, which is why the encoder restates the
+	// survivor instead of assuming one code per attribute.
+	cleared := map[string]render.Attr{
+		"22": render.AttrBold | render.AttrDim, "23": render.AttrItalic, "24": render.AttrUnderline,
+		"25": render.AttrBlink, "27": render.AttrReverse, "28": render.AttrHidden, "29": render.AttrStrike,
+	}
 	for index := 0; index < len(parameters); index++ {
 		parameter := parameters[index]
 		if parameter == "0" || parameter == "" {
@@ -118,6 +149,10 @@ func (g *referenceGrid) sgr(body string) bool {
 		}
 		if attr, ok := attrs[parameter]; ok {
 			g.style.Attrs |= attr
+			continue
+		}
+		if attr, ok := cleared[parameter]; ok {
+			g.style.Attrs &^= attr
 			continue
 		}
 		value, err := strconv.Atoi(parameter)
@@ -132,6 +167,8 @@ func (g *referenceGrid) sgr(body string) bool {
 			}
 			g.setColor(value == 38, color)
 			index += consumed - 1
+		case value == 39 || value == 49:
+			g.setColor(value == 39, render.Color{})
 		case value >= 30 && value <= 37:
 			g.setColor(true, render.ANSIColor(uint8(value-30)))
 		case value >= 40 && value <= 47:
@@ -291,16 +328,15 @@ func TestReferenceGridMatchesEncodedFrames(t *testing.T) {
 				}
 
 				// Cells change while the caret stays put: the cursor must be
-				// repositioned anyway, because the runs moved it.
+				// repositioned anyway, because the runs moved it. requireMatches
+				// compares the grid cursor with the frame caret, so an encoder that
+				// only repositions on caret movement fails here.
 				previous := frame.Clone()
 				caretX, caretY, _ := frame.Caret()
 				render.NewCanvas(frame).Put(19, 5, "Z", render.Style{Attrs: render.AttrBold})
 				frame.SetCaret(caretX, caretY)
-				data = grid.present(t, frame, previous, depth.depth, synchronized)
+				grid.present(t, frame, previous, depth.depth, synchronized)
 				grid.requireMatches(t, frame, depth.depth)
-				if want := "\x1b[" + strconv.Itoa(caretY+1) + ";" + strconv.Itoa(caretX+1) + "H"; !strings.Contains(string(data), want) {
-					t.Fatalf("a stationary caret was not restated after cell runs: %q", data)
-				}
 
 				// Erasing content back to blanks must be transmitted too.
 				previous = frame.Clone()

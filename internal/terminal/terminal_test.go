@@ -111,7 +111,9 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
 	style := render.Style{Foreground: render.RGBColor(1, 2, 3), Background: render.IndexedColor(42), Attrs: render.AttrBold}
 	canvas.Text(0, 0, "A界B", style)
 	got := string(appendFrame(nil, frame, nil, capability.TrueColor, false))
-	want := "\x1b[1;1H\x1b[0;1;38;2;1;2;3;48;5;42mA界B\x1b[0m \x1b[0m"
+	// The trailing blank leaves the terminal at the default style, so the frame
+	// needs no closing reset.
+	want := "\x1b[1;1H\x1b[0;1;38;2;1;2;3;48;5;42mA界B\x1b[0m "
 	if got != want {
 		t.Fatalf("full frame\n got: %q\nwant: %q", got, want)
 	}
@@ -122,7 +124,7 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
 	}
 	canvas.Put(4, 0, "X", render.Style{})
 	got = string(appendFrame(nil, frame, previous, capability.ANSI16, true))
-	want = "\x1b[?2026h\x1b[1;5H\x1b[0mX\x1b[0m\x1b[?2026l"
+	want = "\x1b[?2026h\x1b[1;5H\x1b[0mX\x1b[?2026l"
 	if got != want {
 		t.Fatalf("diff\n got: %q\nwant: %q", got, want)
 	}
@@ -143,10 +145,10 @@ func TestANSIFrameSkipsColorsEquivalentAfterDowngrade(t *testing.T) {
 
 func TestColorDowngradeAndPlainFrame(t *testing.T) {
 	style := render.Style{Foreground: render.RGBColor(255, 0, 0), Background: render.IndexedColor(21)}
-	if got, want := string(appendStyle(nil, style, capability.ANSI16)), "\x1b[0;91;104m"; got != want {
+	if got, want := string(appendFullStyle(nil, style, capability.ANSI16)), "\x1b[0;91;104m"; got != want {
 		t.Fatalf("ANSI16 style = %q, want %q", got, want)
 	}
-	if got, want := string(appendStyle(nil, style, capability.ANSI256)), "\x1b[0;38;5;196;48;5;21m"; got != want {
+	if got, want := string(appendFullStyle(nil, style, capability.ANSI256)), "\x1b[0;38;5;196;48;5;21m"; got != want {
 		t.Fatalf("ANSI256 style = %q, want %q", got, want)
 	}
 

@@ -174,6 +174,10 @@ The current adapter provides:
 - bounded escape and paste buffers;
 - alternate-screen lifecycle and terminal restoration;
 - changed-run ANSI encoding and RGB → 256 → 16 → monochrome downgrade;
+- shortest-form output: a run is addressed relatively when that is fewer bytes
+  than absolute addressing, a style is transmitted as a delta when that beats
+  restating it, and a row whose tail is default-styled blanks is erased rather
+  than transmitted;
 - caret positioning with `DECTCEM` visibility transitions, emitted after the
   cell runs that move the cursor;
 - opt-in synchronized output through `LUX_TUI_SYNC_OUTPUT`;
@@ -184,7 +188,14 @@ covering exactly the sequences the encoder can emit replays real output into a
 grid seeded from the previous frame, then requires that grid to equal the source
 buffer under the active color depth, including the caret. It runs across the
 four color depths with synchronized output on and off, over successive diffs,
-and across a resize repaint.
+and across a resize repaint. Every byte-saving shortcut is therefore paid for in
+the interpreter first: an encoding the reference terminal cannot model is
+rejected outright rather than trusted.
+
+The one shortcut the encoder deliberately refuses is erasing a styled tail.
+Erase-to-end-of-line fills with the active background on terminals with
+background-color erase and with the default background on those without, so it
+is only used for default-styled blanks, after the style has been reset.
 
 Capability detection is deliberately conservative but currently environment
 based. Active, bounded feature negotiation is roadmap work.

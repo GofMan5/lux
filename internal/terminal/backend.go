@@ -31,6 +31,7 @@ type Backend struct {
 
 	mu           sync.Mutex
 	writeMu      sync.Mutex
+	encoded      []byte
 	opened       bool
 	plain        bool
 	synchronized bool
@@ -194,12 +195,15 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	}
 	output, plain, synchronized, features, previous := b.writer, b.plain, b.synchronized, b.features, b.previous
 	b.mu.Unlock()
+	// writeMu serializes Present, so the encode scratch and the retained frame are
+	// reused instead of reallocated once per frame.
 	var data []byte
 	if plain {
-		data = appendPlain(nil, frame)
+		data = appendPlain(b.encoded[:0], frame)
 	} else {
-		data = appendFrame(nil, frame, previous, features.Color, synchronized)
+		data = appendFrame(b.encoded[:0], frame, previous, features.Color, synchronized)
 	}
+	b.encoded = data
 	if len(data) == 0 {
 		return nil
 	}
@@ -207,8 +211,12 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		return err
 	}
 	b.mu.Lock()
-	if b.opened {
-		b.previous = frame.Clone()
+	if b.opened && b.previous == previous {
+		if previous == nil {
+			b.previous = frame.Clone()
+		} else {
+			previous.CopyFrom(frame)
+		}
 	}
 	b.mu.Unlock()
 	return nil

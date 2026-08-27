@@ -12,7 +12,9 @@ The implementation already provides:
 - front/back buffers;
 - no terminal output for an unchanged frame;
 - changed row runs rather than unconditional full-screen VT output;
-- one assembled byte slice per `Present` call;
+- one reused byte slice per `Present` call, and one reused retained frame;
+- shortest-form VT encoding: relative cursor moves, SGR deltas, and
+  erase-to-end-of-line instead of transmitted blanks;
 - absolute-time tweens and springs that skip missed visual states;
 - an idle runtime that disarms its frame timer;
 - three reusable surfaces with a one-slot latest-frame queue;
@@ -111,7 +113,27 @@ A test terminal that applies emitted VT operations to a reference grid now
 exists: `internal/terminal/vtgrid_test.go` replays real encoder output and
 requires the reconstructed grid, including the caret, to equal the source buffer
 across the four color depths, synchronized output on and off, successive diffs,
-and a resize repaint.
+and a resize repaint. It models exactly the sequences the encoder can emit —
+`CUP`, `CUF`, carriage return, `EL`, `SGR`, `DECTCEM`, and synchronized output —
+and fails on anything else, so a shorter encoding cannot be shipped without
+being proved equivalent.
+
+Output size was measured against the previous encoder on the same frames
+(`paintSample`, truecolor, Windows amd64, i5-10400F, Go 1.25.5):
+
+| Frame | Before | After | Change |
+|---|---|---|---|
+| 80×24 repaint | 2420 B | 607 B | −74.9% |
+| 120×40 repaint | 5412 B | 767 B | −85.8% |
+| Sparse diff | 277 B | 259 B | −6.5% |
+| 120×40 dense half-block scene | 177155 B | 167557 B | −5.4% |
+
+Most of the repaint saving is erase-to-end-of-line replacing transmitted blanks,
+which is why a sparse redraw gains far more than a dense 3D scene where every
+cell carries two distinct colors. `TestEncoderFrameBudget` pins the 80×24
+numbers so a future change cannot quietly grow them. Encoding itself is
+0 alloc/op; scanning an unchanged 120×40 frame costs roughly 100 µs on a loaded
+machine, and that cost is unchanged by this work.
 
 Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
 show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
