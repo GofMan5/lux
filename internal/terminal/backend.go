@@ -30,7 +30,8 @@ type Backend struct {
 	writer *os.File
 
 	mu           sync.Mutex
-	writeMu      sync.Mutex
+	writeOnce    sync.Once
+	writeSlot    chan struct{}
 	encoded      []byte
 	opened       bool
 	plain        bool
@@ -182,8 +183,9 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	b.writeMu.Lock()
-	defer b.writeMu.Unlock()
+	slot := b.writeSlotChan()
+	slot <- struct{}{}
+	defer func() { <-slot }()
 	b.mu.Lock()
 	if !b.opened {
 		b.mu.Unlock()
@@ -195,8 +197,8 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	}
 	output, plain, synchronized, features, previous := b.writer, b.plain, b.synchronized, b.features, b.previous
 	b.mu.Unlock()
-	// writeMu serializes Present, so the encode scratch and the retained frame are
-	// reused instead of reallocated once per frame.
+	// The write slot serializes Present, so the encode scratch and the retained
+	// frame are reused instead of reallocated once per frame.
 	var data []byte
 	if plain {
 		data = appendPlain(b.encoded[:0], frame)
@@ -243,6 +245,39 @@ func (b *Backend) Size() (int, int, error) {
 	return 0, 0, errors.New("terminal: size unavailable for redirected streams")
 }
 
+// restoreGrace bounds how long Close waits for an in-flight frame before it
+// restores the terminal without writing its own sequences.
+const restoreGrace = 100 * time.Millisecond
+
+// writeSlotChan returns the one-slot semaphore that serializes writer access.
+// It is a channel rather than a mutex because Close must be able to stop
+// waiting for it.
+func (b *Backend) writeSlotChan() chan struct{} {
+	b.writeOnce.Do(func() { b.writeSlot = make(chan struct{}, 1) })
+	return b.writeSlot
+}
+
+// writerBusy reports whether a write currently holds the slot. It exists for
+// tests that need to observe a blocked writer.
+func (b *Backend) writerBusy() bool { return len(b.writeSlotChan()) == 1 }
+
+func (b *Backend) acquireWriteSlot(wait time.Duration) bool {
+	slot := b.writeSlotChan()
+	select {
+	case slot <- struct{}{}:
+		return true
+	default:
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case slot <- struct{}{}:
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
 // Close disables terminal modes and restores the exact raw input state saved
 // by Open. It is idempotent and makes a best effort to perform both restores.
 func (b *Backend) Close() error {
@@ -269,13 +304,20 @@ func (b *Backend) Close() error {
 	}
 	var result error
 	if writer != nil {
-		if !plain {
+		// Splicing the restore into a frame another goroutine is still writing
+		// would corrupt the screen, so it is only written once the writer is idle.
+		// Waiting forever is not an option either: a write blocked on a terminal
+		// that stopped draining holds the slot until the descriptor is closed, and
+		// on Windows it may not return even then.
+		if !plain && b.acquireWriteSlot(restoreGrace) {
 			result = errors.Join(result, writeAll(writer, []byte(leaveTerminal)))
+			<-b.writeSlotChan()
 		}
 		result = errors.Join(result, writer.Close())
 	}
-	b.writeMu.Lock()
-	defer b.writeMu.Unlock()
+	if b.acquireWriteSlot(restoreGrace) {
+		<-b.writeSlotChan()
+	}
 	if state != nil && input != nil {
 		result = errors.Join(result, term.Restore(int(input.Fd()), state))
 	}

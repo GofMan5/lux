@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"os"
@@ -121,5 +122,66 @@ func TestFailedPresentDiscardsTheTerminalModel(t *testing.T) {
 	// leave that model in use.
 	if backend.previous != nil {
 		t.Fatal("a failed write kept a stale terminal model")
+	}
+}
+
+func TestCloseWritesItsRestoreWhenTheWriterIsIdle(t *testing.T) {
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
+	frame := render.NewBuffer(8, 2)
+	render.NewCanvas(frame).Text(0, 0, "hello", render.Style{})
+	if err := backend.Present(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	if err := backend.Close(); err != nil {
+		t.Fatal(err)
+	}
+	written, err := os.ReadFile(output.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.HasSuffix(written, []byte(leaveTerminal)) {
+		t.Fatalf("Close did not restore the terminal last: %q", written)
+	}
+	if bytes.Count(written, []byte(leaveTerminal)) != 1 {
+		t.Fatalf("the restore sequence appears more than once: %q", written)
+	}
+}
+
+func TestCloseGivesUpOnAWriterThatStopsDraining(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Nothing drains the pipe, so a large frame fills it and blocks mid-write
+	// while holding the write slot.
+	t.Cleanup(func() { _ = reader.Close() })
+	backend := &Backend{opened: true, output: writer, writer: writer, features: capability.Set{Color: capability.TrueColor}}
+	presented := make(chan error, 1)
+	frame := render.NewBuffer(400, 2000)
+	render.NewCanvas(frame).Clear(render.Style{Foreground: render.RGBColor(1, 2, 3)})
+	go func() { presented <- backend.Present(context.Background(), frame) }()
+
+	deadline := time.Now().Add(hangTimeout)
+	for !backend.writerBusy() {
+		if time.Now().After(deadline) {
+			t.Skip("the pipe accepted the whole frame, so no write was ever blocked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	closed := make(chan error, 1)
+	start := time.Now()
+	go func() { closed <- backend.Close() }()
+	select {
+	case <-closed:
+	case <-time.After(hangTimeout):
+		t.Fatal("Close hung behind a blocked write")
+	}
+	if elapsed := time.Since(start); elapsed > hangTimeout/2 {
+		t.Fatalf("Close took %s to give up", elapsed)
 	}
 }

@@ -213,6 +213,12 @@ based. Active, bounded feature negotiation is roadmap work.
 
 ### Application runtime
 
+Shutdown is bounded rather than blocking. The adapter serializes writer access
+with a one-slot semaphore instead of a mutex, so `Close` can wait a short grace
+period for an in-flight frame, write its restore sequence only when the writer
+is idle, and give up rather than hang behind a write to a terminal that stopped
+draining.
+
 `lux.Run` owns backend open/close, initial resize, serialized model updates and
 views, commands, frames, size limits, and cancellation. Three reusable surfaces
 bound the presentation path: one can be drawn, one queued, and one in flight.
