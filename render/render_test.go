@@ -196,3 +196,54 @@ func BenchmarkBufferDiffNoChanges(b *testing.B) {
 		changes = back.AppendDiff(changes[:0], front)
 	}
 }
+
+func TestScrollRowsMovesAndBlanksLikeATerminal(t *testing.T) {
+	buffer := NewBuffer(3, 5)
+	canvas := NewCanvas(buffer)
+	for row := range 5 {
+		canvas.Text(0, row, string(rune('a'+row)), Style{Attrs: AttrBold})
+	}
+	rowText := func(y int) string {
+		text := ""
+		for x := 0; x < 3; x++ {
+			text += buffer.Cell(x, y).Grapheme
+		}
+		return text
+	}
+
+	// Scrolling up inside a region leaves the rows outside it untouched.
+	if !buffer.ScrollRows(1, 3, 1) {
+		t.Fatal("ScrollRows reported no movement")
+	}
+	for y, want := range []string{"a  ", "c  ", "d  ", "   ", "e  "} {
+		if got := rowText(y); got != want {
+			t.Fatalf("after scrolling up, row %d = %q, want %q", y, got, want)
+		}
+	}
+	if got := buffer.Cell(0, 3); got != BlankCell {
+		t.Fatalf("an exposed row kept its style: %#v", got)
+	}
+
+	if !buffer.ScrollRows(1, 3, -2) {
+		t.Fatal("ScrollRows reported no movement")
+	}
+	for y, want := range []string{"a  ", "   ", "   ", "c  ", "e  "} {
+		if got := rowText(y); got != want {
+			t.Fatalf("after scrolling down, row %d = %q, want %q", y, got, want)
+		}
+	}
+
+	// A shift at least as large as the region blanks all of it, and impossible
+	// requests move nothing.
+	if !buffer.ScrollRows(0, 4, 9) {
+		t.Fatal("an oversized shift reported no movement")
+	}
+	for y := range 5 {
+		if got := rowText(y); got != "   " {
+			t.Fatalf("row %d survived an oversized shift: %q", y, got)
+		}
+	}
+	if buffer.ScrollRows(1, 3, 0) || buffer.ScrollRows(4, 1, 1) || (*Buffer)(nil).ScrollRows(0, 1, 1) {
+		t.Fatal("ScrollRows moved something it should not have")
+	}
+}

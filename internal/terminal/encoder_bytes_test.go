@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -189,4 +190,166 @@ func TestEncoderRewindsToACaretLeftOfItsRun(t *testing.T) {
 	if !strings.Contains(data, "\r\x1b[22C") {
 		t.Fatalf("a caret left of its run must rewind, not readdress: %q", data)
 	}
+}
+
+// scrollingList paints a viewport of numbered rows starting at offset, framed
+// by a static header and footer that must survive the scroll untouched.
+func scrollingList(buffer *render.Buffer, offset int) {
+	canvas := render.NewCanvas(buffer)
+	canvas.Clear(render.Style{})
+	_, height := buffer.Size()
+	canvas.Text(0, 0, "HEADER", render.Style{Attrs: render.AttrBold})
+	canvas.Text(0, height-1, "FOOTER", render.Style{Attrs: render.AttrDim})
+	for row := 1; row < height-1; row++ {
+		canvas.Text(0, row, "entry "+strconv.Itoa(offset+row)+" payload text", render.Style{
+			Foreground: render.IndexedColor(uint8(30 + (offset+row)%40)),
+		})
+	}
+}
+
+func TestEncoderScrollsARegionInsteadOfRepainting(t *testing.T) {
+	frame := render.NewBuffer(60, 24)
+	scrollingList(frame, 0)
+	grid := newReferenceGrid(60, 24)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	previous := frame.Clone()
+	scrollingList(frame, 1)
+	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+	if !strings.Contains(data, "\x1b[2;23r") {
+		t.Fatalf("the scrolled rows must be moved by the terminal: %q", data)
+	}
+	if !strings.Contains(data, "\x1b[1M") {
+		t.Fatalf("a one-row scroll must delete one line: %q", data)
+	}
+	if !strings.Contains(data, dropRegion) {
+		t.Fatalf("the scrolling region must be released: %q", data)
+	}
+	if strings.Contains(data, "HEADER") || strings.Contains(data, "FOOTER") {
+		t.Fatalf("static rows outside the region were retransmitted: %q", data)
+	}
+	if len(data) > 120 {
+		t.Fatalf("a one-row scroll cost %d bytes: %q", len(data), data)
+	}
+}
+
+func TestEncoderScrollsBackwards(t *testing.T) {
+	frame := render.NewBuffer(60, 24)
+	scrollingList(frame, 8)
+	grid := newReferenceGrid(60, 24)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	for _, step := range []int{7, 4, 0} {
+		previous := frame.Clone()
+		scrollingList(frame, step)
+		data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+		if !strings.Contains(data, "L") {
+			t.Fatalf("scrolling back to offset %d did not insert lines: %q", step, data)
+		}
+	}
+}
+
+func TestEncoderScrollsUnderEveryColorDepth(t *testing.T) {
+	for _, depth := range []capability.ColorDepth{capability.TrueColor, capability.ANSI256, capability.ANSI16, capability.Monochrome} {
+		for _, synchronized := range []bool{false, true} {
+			frame := render.NewBuffer(48, 16)
+			scrollingList(frame, 0)
+			grid := newReferenceGrid(48, 16)
+			grid.present(t, frame, nil, depth, synchronized)
+			grid.requireMatches(t, frame, depth)
+			for step := 1; step <= 5; step++ {
+				previous := frame.Clone()
+				scrollingList(frame, step*step)
+				frame.SetCaret(step, step)
+				grid.present(t, frame, previous, depth, synchronized)
+				grid.requireMatches(t, frame, depth)
+			}
+		}
+	}
+}
+
+func TestEncoderKeepsStyledRowsOutOfAScroll(t *testing.T) {
+	// A scroll exposes rows the encoder never writes. On a terminal with
+	// background-color erase those rows carry the active background, so the
+	// style must be reset before the region moves.
+	frame := render.NewBuffer(40, 12)
+	canvas := render.NewCanvas(frame)
+	canvas.Clear(render.Style{Background: render.IndexedColor(52)})
+	for row := range 12 {
+		canvas.Text(0, row, "line "+strconv.Itoa(row), render.Style{Background: render.IndexedColor(52)})
+	}
+	grid := newReferenceGrid(40, 12)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	previous := frame.Clone()
+	canvas.Clear(render.Style{Background: render.IndexedColor(52)})
+	for row := range 12 {
+		canvas.Text(0, row, "line "+strconv.Itoa(row+1), render.Style{Background: render.IndexedColor(52)})
+	}
+	encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+}
+
+func TestEncoderIgnoresScrollsThatDoNotPay(t *testing.T) {
+	frame := render.NewBuffer(40, 12)
+	canvas := render.NewCanvas(frame)
+	canvas.Text(0, 3, "one", render.Style{})
+	grid := newReferenceGrid(40, 12)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	previous := frame.Clone()
+	canvas.Clear(render.Style{})
+	canvas.Text(0, 2, "one", render.Style{})
+	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+	if strings.Contains(data, dropRegion) {
+		t.Fatalf("a shift that repairs two rows is cheaper to repaint: %q", data)
+	}
+}
+
+// TestScrollBudgetIsIndependentOfScreenSize pins the whole point of the
+// scrolling region: moving a list by one row costs the same on a small screen
+// and a large one, because only the exposed rows are transmitted. Without the
+// region the same frames cost 826 and 1434 bytes.
+func TestScrollBudgetIsIndependentOfScreenSize(t *testing.T) {
+	for _, size := range []struct{ w, h int }{{80, 24}, {120, 40}} {
+		frame := render.NewBuffer(size.w, size.h)
+		scrollingList(frame, 0)
+		grid := newReferenceGrid(size.w, size.h)
+		encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+		previous := frame.Clone()
+		scrollingList(frame, 1)
+		one := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+
+		previous = frame.Clone()
+		scrollingList(frame, 6)
+		five := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+
+		if len(one) > 80 {
+			t.Fatalf("%dx%d one-row scroll is %d bytes: %q", size.w, size.h, len(one), one)
+		}
+		if len(five) > 260 {
+			t.Fatalf("%dx%d five-row scroll is %d bytes: %q", size.w, size.h, len(five), five)
+		}
+		t.Logf("%dx%d list: scroll by 1 = %d bytes, scroll by 5 = %d bytes", size.w, size.h, len(one), len(five))
+	}
+}
+
+func TestEncoderDoesNotInheritTheTerminalStyle(t *testing.T) {
+	// A frame must not depend on the SGR state it finds. That matters most for a
+	// scroll: on a terminal with background-color erase the exposed rows are
+	// filled with the active background, which the encoder never chose.
+	frame := render.NewBuffer(40, 12)
+	scrollingList(frame, 0)
+	grid := newReferenceGrid(40, 12)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	grid.style = render.Style{Background: render.IndexedColor(160), Attrs: render.AttrUnderline}
+	previous := frame.Clone()
+	scrollingList(frame, 1)
+	encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+
+	grid.style = render.Style{Foreground: render.IndexedColor(9), Attrs: render.AttrReverse}
+	previous = frame.Clone()
+	render.NewCanvas(frame).Clear(render.Style{})
+	encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
 }

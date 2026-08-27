@@ -208,6 +208,14 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		return nil
 	}
 	if err := writeAllContext(ctx, output, data); err != nil {
+		// The encoder may already have moved rows in its model of the terminal,
+		// and a failed write leaves the real terminal in an unknown state, so the
+		// model is discarded and the next frame repaints from scratch.
+		b.mu.Lock()
+		if b.previous == previous {
+			b.previous = nil
+		}
+		b.mu.Unlock()
 		return err
 	}
 	b.mu.Lock()

@@ -178,6 +178,8 @@ The current adapter provides:
   than absolute addressing, a style is transmitted as a delta when that beats
   restating it, and a row whose tail is default-styled blanks is erased rather
   than transmitted;
+- a scrolling region for vertical row shifts, so moving a list costs the rows
+  it exposes rather than the rows it moves;
 - caret positioning with `DECTCEM` visibility transitions, emitted after the
   cell runs that move the cursor;
 - opt-in synchronized output through `LUX_TUI_SYNC_OUTPUT`;
@@ -196,6 +198,15 @@ The one shortcut the encoder deliberately refuses is erasing a styled tail.
 Erase-to-end-of-line fills with the active background on terminals with
 background-color erase and with the default background on those without, so it
 is only used for default-styled blanks, after the style has been reset.
+
+Scrolling is the one operation where the encoder moves cells it never
+transmits. It compares row hashes to find a vertical shift, emits a scrolling
+region with insert- or delete-line, and applies the same shift to its model of
+the terminal before diffing the rest. Only full-width row ranges qualify,
+because a scrolling region has no portable horizontal margins, and a hash
+collision can only cost bytes because the diff that follows compares real
+cells. Because the model now describes an operation the encoder did not
+transmit cell by cell, a failed write discards it: the next frame repaints.
 
 Capability detection is deliberately conservative but currently environment
 based. Active, bounded feature negotiation is roadmap work.

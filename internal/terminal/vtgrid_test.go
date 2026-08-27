@@ -19,6 +19,8 @@ type referenceGrid struct {
 	canvas   *render.Canvas
 	style    render.Style
 	x, y     int
+	top      int
+	bottom   int
 	caretOn  bool
 	sync     int
 	maxSync  int
@@ -30,7 +32,7 @@ type referenceGrid struct {
 // changed-run diff verifiable.
 func newReferenceGrid(width, height int) *referenceGrid {
 	buffer := render.NewBuffer(width, height)
-	grid := &referenceGrid{buffer: buffer}
+	grid := &referenceGrid{buffer: buffer, bottom: height - 1}
 	grid.canvas = render.NewCanvas(buffer)
 	return grid
 }
@@ -73,13 +75,59 @@ func (g *referenceGrid) escape(t *testing.T, text string) int {
 	if !strings.HasPrefix(text, "\x1b[") {
 		return 0
 	}
-	end := strings.IndexAny(text[2:], "CHKhlm")
+	end := strings.IndexAny(text[2:], "CHKLMhlmr")
 	if end < 0 {
 		return 0
 	}
 	end += 2
 	body, final := text[2:end], text[end]
+	width, height := g.buffer.Size()
 	switch {
+	case final == 'r':
+		g.top, g.bottom = 0, height-1
+		if body != "" {
+			first, last, ok := strings.Cut(body, ";")
+			if !ok {
+				return 0
+			}
+			top, errTop := strconv.Atoi(first)
+			bottom, errBottom := strconv.Atoi(last)
+			if errTop != nil || errBottom != nil || top < 1 || bottom > height || top >= bottom {
+				return 0
+			}
+			g.top, g.bottom = top-1, bottom-1
+		}
+		// DECSTBM homes the cursor.
+		g.x, g.y = 0, 0
+	case final == 'L' || final == 'M':
+		lines := 1
+		if body != "" {
+			value, err := strconv.Atoi(body)
+			if err != nil || value < 1 {
+				return 0
+			}
+			lines = value
+		}
+		if g.y < g.top || g.y > g.bottom {
+			// Insert and delete line are ignored outside the scrolling region.
+			return end + 1
+		}
+		delta := lines
+		exposedTop, exposedBottom := g.bottom-lines+1, g.bottom
+		if final == 'L' {
+			delta, exposedTop, exposedBottom = -lines, g.y, min(g.y+lines-1, g.bottom)
+		}
+		g.buffer.ScrollRows(g.y, g.bottom, delta)
+		// Background-color erase fills the exposed rows with the active
+		// background, so an encoder that forgets to reset its style is caught.
+		if g.style != (render.Style{}) {
+			for y := max(exposedTop, g.top); y <= exposedBottom; y++ {
+				for x := 0; x < width; x++ {
+					g.canvas.Put(x, y, " ", g.style)
+				}
+			}
+		}
+		g.x = 0
 	case final == 'H':
 		row, column, ok := strings.Cut(body, ";")
 		if !ok {
@@ -100,13 +148,11 @@ func (g *referenceGrid) escape(t *testing.T, text string) int {
 			}
 			steps = value
 		}
-		width, _ := g.buffer.Size()
 		g.x = min(g.x+steps, width-1)
 	case final == 'K':
 		if body != "" && body != "0" {
 			return 0
 		}
-		width, _ := g.buffer.Size()
 		for x := g.x; x < width; x++ {
 			g.canvas.Put(x, g.y, " ", g.style)
 		}

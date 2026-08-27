@@ -41,7 +41,7 @@ func TestCanceledPresentNeverCommitsPrevious(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = output.Close() }()
-	backend := &Backend{opened: true, output: output, features: capability.Set{Color: capability.TrueColor}}
+	backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
 	if err := backend.Present(ctx, render.NewBuffer(2, 1)); err == nil {
 		t.Fatal("canceled Present succeeded")
 	}
@@ -93,5 +93,33 @@ func TestGatedWriterFixture(t *testing.T) {
 	close(writer.release)
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFailedPresentDiscardsTheTerminalModel(t *testing.T) {
+	output, err := os.CreateTemp(t.TempDir(), "output")
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
+	frame := render.NewBuffer(8, 2)
+	render.NewCanvas(frame).Text(0, 0, "first", render.Style{})
+	if err := backend.Present(context.Background(), frame); err != nil {
+		t.Fatal(err)
+	}
+	if backend.previous == nil {
+		t.Fatal("a presented frame was not retained")
+	}
+	if err := output.Close(); err != nil {
+		t.Fatal(err)
+	}
+	render.NewCanvas(frame).Text(0, 1, "second", render.Style{})
+	if err := backend.Present(context.Background(), frame); err == nil {
+		t.Fatal("writing to a closed file succeeded")
+	}
+	// The encoder mutates its model of the terminal, so a partial write must not
+	// leave that model in use.
+	if backend.previous != nil {
+		t.Fatal("a failed write kept a stale terminal model")
 	}
 }

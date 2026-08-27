@@ -221,6 +221,39 @@ func (b *Buffer) AppendDiff(changes []Change, previous *Buffer) []Change {
 // Diff returns cells that differ from previous.
 func (b *Buffer) Diff(previous *Buffer) []Change { return b.AppendDiff(nil, previous) }
 
+// ScrollRows moves the rows in [top, bottom] by delta and fills the rows this
+// vacates with default blanks, which is exactly what a terminal scrolling
+// region does. A positive delta moves content up. It reports whether anything
+// moved; the caret is presentation state and is left alone.
+func (b *Buffer) ScrollRows(top, bottom, delta int) bool {
+	if b == nil || delta == 0 || b.width == 0 {
+		return false
+	}
+	top, bottom = max(top, 0), min(bottom, b.height-1)
+	if top > bottom {
+		return false
+	}
+	steps := min(max(delta, -delta), bottom-top+1)
+	if delta > 0 {
+		for y := top; y+steps <= bottom; y++ {
+			copy(b.row(y), b.row(y+steps))
+		}
+		for y := max(bottom-steps+1, top); y <= bottom; y++ {
+			fillCells(b.row(y), BlankCell)
+		}
+		return true
+	}
+	for y := bottom; y-steps >= top; y-- {
+		copy(b.row(y), b.row(y-steps))
+	}
+	for y := top; y < min(top+steps, bottom+1); y++ {
+		fillCells(b.row(y), BlankCell)
+	}
+	return true
+}
+
+func (b *Buffer) row(y int) []Cell { return b.cells[y*b.width : (y+1)*b.width] }
+
 func (b *Buffer) put(x, y int, grapheme string, width int, style Style) bool {
 	if b == nil || y < 0 || y >= b.height || x < 0 || x >= b.width || width < 1 || width > 2 || x+width > b.width {
 		return false

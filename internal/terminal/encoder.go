@@ -14,12 +14,25 @@ const (
 	beginSync  = "\x1b[?2026h"
 	endSync    = "\x1b[?2026l"
 	eraseLine  = "\x1b[K"
+	dropRegion = "\x1b[r"
 )
 
-func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
+// maxTrackedRows bounds the stack storage the scroll detector uses. A taller
+// frame skips the optimization rather than allocate for it.
+const maxTrackedRows = 512
+
+// minScrollRows is the net number of rows a shift must repair before the region
+// sequences pay for themselves.
+const minScrollRows = 3
+
+// appendFrame encodes the difference between terminal, which models what the
+// terminal currently shows, and frame. A scrolling region moves rows the
+// encoder never transmits, so terminal is updated to match: a caller that fails
+// to write the result must discard its model instead of reusing it.
+func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
 	width, height := frame.Size()
-	previousWidth, previousHeight := previous.Size()
-	repaint := previous == nil || width != previousWidth || height != previousHeight
+	previousWidth, previousHeight := terminal.Size()
+	repaint := terminal == nil || width != previousWidth || height != previousHeight
 	start := len(dst)
 	if synchronized {
 		dst = append(dst, beginSync...)
@@ -27,11 +40,22 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
 	wrote := false
 	var style styleWriter
 	var at cursor
+	if !repaint && height > 1 && height <= maxTrackedRows {
+		if top, bottom, delta, ok := detectScroll(frame, terminal, depth, width, height); ok {
+			// Exposed rows are filled with the active background on terminals with
+			// background-color erase, so the style is reset before the region moves.
+			dst = style.reset(dst)
+			dst = appendScrollRegion(dst, top, bottom, delta)
+			terminal.ScrollRows(top, bottom, delta)
+			at.known = false
+			wrote = true
+		}
+	}
 	for y := 0; y < height; y++ {
 		blankFrom := -1
 		for x := 0; x < width; {
 			cell := frame.Cell(x, y)
-			if cell.Width == 0 || (!repaint && equalRenderedCell(frame, previous, x, y, depth)) {
+			if cell.Width == 0 || (!repaint && equalRenderedCell(frame, terminal, x, y, depth)) {
 				x++
 				continue
 			}
@@ -45,7 +69,7 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
 					x++
 					continue
 				}
-				if !repaint && equalRenderedCell(frame, previous, x, y, depth) {
+				if !repaint && equalRenderedCell(frame, terminal, x, y, depth) {
 					break
 				}
 				x += max(int(cell.Width), 1)
@@ -83,13 +107,10 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
 		}
 	}
 	caretX, caretY, caretOn := frame.Caret()
-	oldX, oldY, caretWasOn := previous.Caret()
+	oldX, oldY, caretWasOn := terminal.Caret()
 	caretMoved := caretOn != caretWasOn || caretOn && (caretX != oldX || caretY != oldY)
 	if !wrote && !caretMoved {
 		return dst[:start]
-	}
-	if wrote && !style.isDefault() {
-		dst = append(dst, resetStyle...)
 	}
 	switch {
 	case caretOn:
@@ -123,6 +144,130 @@ func erasableTail(frame *render.Buffer, y, width int) int {
 		column--
 	}
 	return column
+}
+
+// detectScroll looks for a vertical shift of full-width rows that the terminal
+// can perform itself. Only full-width row ranges qualify, because a scrolling
+// region has no portable horizontal margins.
+//
+// Rows are compared by hash, so a collision can only cost bytes: the emitted
+// region is applied to the terminal model before the diff runs, and the diff
+// then compares real cells.
+func detectScroll(frame, terminal *render.Buffer, depth capability.ColorDepth, width, height int) (top, bottom, delta int, ok bool) {
+	var frameRows, terminalRows [maxTrackedRows]uint64
+	dirty := false
+	for y := 0; y < height; y++ {
+		frameRows[y] = hashRow(frame, y, width, depth)
+		terminalRows[y] = hashRow(terminal, y, width, depth)
+		dirty = dirty || frameRows[y] != terminalRows[y]
+	}
+	if !dirty {
+		return 0, 0, 0, false
+	}
+	blank := hashBlankRow(width, depth)
+	best := 0
+	for candidate := -(height - 1); candidate <= height-1; candidate++ {
+		if candidate == 0 {
+			continue
+		}
+		first, last := -1, -1
+		for y := max(0, -candidate); y < height && y+candidate < height; y++ {
+			if frameRows[y] == terminalRows[y] || frameRows[y] != terminalRows[y+candidate] {
+				continue
+			}
+			if first < 0 {
+				first = y
+			}
+			last = y
+		}
+		if first < 0 {
+			continue
+		}
+		regionTop, regionBottom := first, last
+		if candidate > 0 {
+			regionBottom = min(last+candidate, height-1)
+		} else {
+			regionTop = max(first+candidate, 0)
+		}
+		score := 0
+		for y := regionTop; y <= regionBottom; y++ {
+			after := blank
+			if source := y + candidate; source >= regionTop && source <= regionBottom {
+				after = terminalRows[source]
+			}
+			switch {
+			case frameRows[y] != terminalRows[y] && frameRows[y] == after:
+				score++
+			case frameRows[y] == terminalRows[y] && frameRows[y] != after:
+				score--
+			}
+		}
+		if score > best {
+			best, top, bottom, delta = score, regionTop, regionBottom, candidate
+		}
+	}
+	return top, bottom, delta, best >= minScrollRows
+}
+
+// appendScrollRegion moves rows inside a scrolling region. Insert- and
+// delete-line are used rather than SU and SD because every terminal this
+// project targets implements them, including the Linux console.
+func appendScrollRegion(dst []byte, top, bottom, delta int) []byte {
+	dst = append(dst, '\x1b', '[')
+	dst = strconv.AppendInt(dst, int64(top+1), 10)
+	dst = append(dst, ';')
+	dst = strconv.AppendInt(dst, int64(bottom+1), 10)
+	dst = append(dst, 'r')
+	dst = appendCursor(dst, top+1, 1)
+	dst = append(dst, '\x1b', '[')
+	dst = strconv.AppendInt(dst, int64(max(delta, -delta)), 10)
+	if delta > 0 {
+		dst = append(dst, 'M')
+	} else {
+		dst = append(dst, 'L')
+	}
+	return append(dst, dropRegion...)
+}
+
+const (
+	hashOffset = 14695981039346656037
+	hashPrime  = 1099511628211
+)
+
+func hashRow(buffer *render.Buffer, y, width int, depth capability.ColorDepth) uint64 {
+	hash := uint64(hashOffset)
+	for x := 0; x < width; x++ {
+		cell := buffer.Cell(x, y)
+		hash = hashStyled(hash, cell.Grapheme, cell.Width, cell.Style, depth)
+	}
+	return hash
+}
+
+func hashBlankRow(width int, depth capability.ColorDepth) uint64 {
+	hash := uint64(hashOffset)
+	for x := 0; x < width; x++ {
+		hash = hashStyled(hash, render.BlankCell.Grapheme, render.BlankCell.Width, render.BlankCell.Style, depth)
+	}
+	return hash
+}
+
+func hashStyled(hash uint64, grapheme string, width uint8, style render.Style, depth capability.ColorDepth) uint64 {
+	for index := 0; index < len(grapheme); index++ {
+		hash = (hash ^ uint64(grapheme[index])) * hashPrime
+	}
+	hash = (hash ^ uint64(width)) * hashPrime
+	hash = (hash ^ uint64(style.Attrs)) * hashPrime
+	if depth == capability.Monochrome {
+		// Colors are not transmitted, so two rows that differ only in color are
+		// the same row as far as the encoder is concerned.
+		return hash
+	}
+	foregroundMode, foregroundValue := renderedColor(style.Foreground, depth)
+	backgroundMode, backgroundValue := renderedColor(style.Background, depth)
+	hash = (hash ^ uint64(foregroundMode)) * hashPrime
+	hash = (hash ^ uint64(foregroundValue)) * hashPrime
+	hash = (hash ^ uint64(backgroundMode)) * hashPrime
+	return (hash ^ uint64(backgroundValue)) * hashPrime
 }
 
 // cursor tracks where emitted output leaves the terminal cursor so the next
@@ -190,9 +335,9 @@ func digits(value int) int {
 	return count
 }
 
-func equalRenderedCell(frame, previous *render.Buffer, x, y int, depth capability.ColorDepth) bool {
+func equalRenderedCell(frame, terminal *render.Buffer, x, y int, depth capability.ColorDepth) bool {
 	current, currentOK := frame.CellOK(x, y)
-	old, oldOK := previous.CellOK(x, y)
+	old, oldOK := terminal.CellOK(x, y)
 	if currentOK != oldOK || !currentOK {
 		return false
 	}
@@ -293,6 +438,16 @@ func (w *styleWriter) apply(dst []byte, style render.Style, depth capability.Col
 }
 
 func (w *styleWriter) isDefault() bool { return w.known && w.current == render.Style{} }
+
+// reset puts the terminal back to the default style, which is what an erase or
+// a scrolling region needs before it exposes cells the encoder will not write.
+func (w *styleWriter) reset(dst []byte) []byte {
+	if w.isDefault() {
+		return dst
+	}
+	w.current, w.known = render.Style{}, true
+	return append(dst, resetStyle...)
+}
 
 func appendFullStyle(dst []byte, style render.Style, depth capability.ColorDepth) []byte {
 	dst = append(dst, '\x1b', '[', '0')
