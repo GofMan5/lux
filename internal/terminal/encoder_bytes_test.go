@@ -176,3 +176,17 @@ func BenchmarkScanUnchanged(b *testing.B) {
 		appendFrame(nil, frame, previous, capability.TrueColor, false)
 	}
 }
+
+func TestEncoderRewindsToACaretLeftOfItsRun(t *testing.T) {
+	frame := render.NewBuffer(40, 3)
+	grid := newReferenceGrid(40, 3)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	previous := frame.Clone()
+	render.NewCanvas(frame).Text(20, 1, "edited", render.Style{})
+	frame.SetCaret(22, 1)
+	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+	if !strings.Contains(data, "\r\x1b[22C") {
+		t.Fatalf("a caret left of its run must rewind, not readdress: %q", data)
+	}
+}
