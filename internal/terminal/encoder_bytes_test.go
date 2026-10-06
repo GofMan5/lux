@@ -178,6 +178,27 @@ func BenchmarkScanUnchanged(b *testing.B) {
 	}
 }
 
+// BenchmarkScrollFrame prices a one-row scroll of a 120x40 list. The clone is
+// deliberately inside the loop: appendFrame mutates its terminal buffer when
+// it scrolls, so every iteration needs a pristine predecessor. The clone cost
+// is part of the scroll path's honest price, and an A/B against the legacy
+// encoder must clone symmetrically.
+func BenchmarkScrollFrame(b *testing.B) {
+	base := render.NewBuffer(120, 40)
+	scrollingList(base, 0)
+	frame := base.Clone()
+	scrollingList(frame, 1)
+	scratch := make([]byte, 0, 8192)
+	size := 0
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		scratch = appendFrame(scratch[:0], frame, base.Clone(), capability.TrueColor, false)
+		size = len(scratch)
+	}
+	b.ReportMetric(float64(size), "bytes/frame")
+}
+
 func TestEncoderRewindsToACaretLeftOfItsRun(t *testing.T) {
 	frame := render.NewBuffer(40, 3)
 	grid := newReferenceGrid(40, 3)

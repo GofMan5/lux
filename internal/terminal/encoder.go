@@ -40,18 +40,30 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 	wrote := false
 	var style styleWriter
 	var at cursor
-	if !repaint && height > 1 && height <= maxTrackedRows {
-		if top, bottom, delta, ok := detectScroll(frame, terminal, depth, width, height); ok {
-			// Exposed rows are filled with the active background on terminals with
-			// background-color erase, so the style is reset before the region moves.
-			dst = style.reset(dst)
-			dst = appendScrollRegion(dst, top, bottom, delta)
-			terminal.ScrollRows(top, bottom, delta)
-			at.known = false
-			wrote = true
+	var dirty rowBits
+	// Most rows of most frames are untouched, and proving that one row at a time
+	// is far cheaper than proving it one cell at a time. Taller frames fall back
+	// to comparing each row as the diff reaches it.
+	tracked := !repaint && height <= maxTrackedRows
+	if tracked {
+		dirty.mark(frame, terminal, height)
+		if height > 1 && dirty.count >= minScrollRows {
+			if top, bottom, delta, ok := detectScroll(frame, terminal, depth, width, height); ok {
+				// Exposed rows are filled with the active background on terminals
+				// with background-color erase, so the style is reset first.
+				dst = style.reset(dst)
+				dst = appendScrollRegion(dst, top, bottom, delta)
+				terminal.ScrollRows(top, bottom, delta)
+				dirty.mark(frame, terminal, height)
+				at.known = false
+				wrote = true
+			}
 		}
 	}
 	for y := 0; y < height; y++ {
+		if tracked && !dirty.has(y) || !tracked && !repaint && frame.EqualRow(terminal, y) {
+			continue
+		}
 		blankFrom := -1
 		for x := 0; x < width; {
 			cell := frame.Cell(x, y)
@@ -146,6 +158,26 @@ func erasableTail(frame *render.Buffer, y, width int) int {
 	return column
 }
 
+// rowBits records which rows differ, so the row comparison is paid for once
+// even though both the scroll detector and the diff need the answer.
+type rowBits struct {
+	words [maxTrackedRows / 64]uint64
+	count int
+}
+
+func (r *rowBits) mark(frame, terminal *render.Buffer, height int) {
+	*r = rowBits{}
+	for y := 0; y < height; y++ {
+		if frame.EqualRow(terminal, y) {
+			continue
+		}
+		r.words[y/64] |= 1 << uint(y%64)
+		r.count++
+	}
+}
+
+func (r *rowBits) has(y int) bool { return r.words[y/64]&(1<<uint(y%64)) != 0 }
+
 // detectScroll looks for a vertical shift of full-width rows that the terminal
 // can perform itself. Only full-width row ranges qualify, because a scrolling
 // region has no portable horizontal margins.
@@ -234,9 +266,16 @@ const (
 	hashPrime  = 1099511628211
 )
 
+// hashSamples bounds how many cells identify a row. A scroll moves whole rows,
+// so a spread sample distinguishes them well enough, and a collision can only
+// cost bytes: the diff that follows the shift compares real cells.
+const hashSamples = 32
+
+func hashStride(width int) int { return max(1, (width+hashSamples-1)/hashSamples) }
+
 func hashRow(buffer *render.Buffer, y, width int, depth capability.ColorDepth) uint64 {
 	hash := uint64(hashOffset)
-	for x := 0; x < width; x++ {
+	for x, stride := 0, hashStride(width); x < width; x += stride {
 		cell := buffer.Cell(x, y)
 		hash = hashStyled(hash, cell.Grapheme, cell.Width, cell.Style, depth)
 	}
@@ -245,7 +284,7 @@ func hashRow(buffer *render.Buffer, y, width int, depth capability.ColorDepth) u
 
 func hashBlankRow(width int, depth capability.ColorDepth) uint64 {
 	hash := uint64(hashOffset)
-	for x := 0; x < width; x++ {
+	for x, stride := 0, hashStride(width); x < width; x += stride {
 		hash = hashStyled(hash, render.BlankCell.Grapheme, render.BlankCell.Width, render.BlankCell.Style, depth)
 	}
 	return hash

@@ -221,6 +221,22 @@ func (b *Buffer) AppendDiff(changes []Change, previous *Buffer) []Change {
 // Diff returns cells that differ from previous.
 func (b *Buffer) Diff(previous *Buffer) []Change { return b.AppendDiff(nil, previous) }
 
+// EqualRow reports whether row y is identical in both buffers. It exists
+// because a diff spends most of its time proving that unchanged rows are
+// unchanged, and one comparison per row is far cheaper than one per cell.
+func (b *Buffer) EqualRow(other *Buffer, y int) bool {
+	if b == nil || other == nil || b.width != other.width || y < 0 || y >= b.height || y >= other.height {
+		return false
+	}
+	left, right := b.row(y), other.row(y)
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 // ScrollRows moves the rows in [top, bottom] by delta and fills the rows this
 // vacates with default blanks, which is exactly what a terminal scrolling
 // region does. A positive delta moves content up. It reports whether anything
