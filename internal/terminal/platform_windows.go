@@ -52,7 +52,25 @@ func duplicateFile(file *os.File, name string) (*os.File, error) {
 	return os.NewFile(uintptr(duplicate), name), nil
 }
 
-func terminalSize(file *os.File) (int, int, error) { return term.GetSize(int(file.Fd())) }
+// terminalSize reports the active console's size. The Windows console splits
+// its handles by direction: the screen-buffer query behind the size needs an
+// output handle and fails with an invalid-handle error on the input handle,
+// so a caller holding the input side — the resize poller, the probe-time
+// size snapshot — resolves the real answer by opening the console's own
+// output. The open is a few microseconds, noise next to the poller's 100 ms
+// cadence, and it also keeps Size() honest when stdout is redirected while a
+// console is still attached.
+func terminalSize(file *os.File) (int, int, error) {
+	if width, height, err := term.GetSize(int(file.Fd())); err == nil {
+		return width, height, nil
+	}
+	console, err := os.OpenFile("CONOUT$", os.O_RDWR, 0)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer func() { _ = console.Close() }()
+	return term.GetSize(int(console.Fd()))
+}
 
 var errReadTimeout = errors.New("terminal: read timeout")
 

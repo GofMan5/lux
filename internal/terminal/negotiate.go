@@ -63,6 +63,13 @@ type probeReply struct {
 // exactly one bounded wait and a broken pipe returns immediately. It stops
 // early once every question is answered; a terminal that answers DA1 but not
 // DECRQM keeps the probe alive until the deadline, which startup pays once.
+//
+// A report whose tail is still missing when the deadline hits is returned
+// unclassified with its head: the replayed bytes surface to the app as one
+// escape key press followed by literal runes. That is the honest price of a
+// bounded wait — one cosmetic burst on a slow link at startup, never lost
+// input — and it beats the alternative of waiting on a half-delivered reply
+// with no proof the tail will ever come.
 func negotiate(ctx context.Context, input *os.File, writer io.Writer, timeout time.Duration) (probeReply, []byte) {
 	if err := writeAllContext(ctx, writer, []byte(probeRequest)); err != nil {
 		// A probe write that fails means the terminal is unwritable, and the

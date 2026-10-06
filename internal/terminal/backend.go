@@ -102,10 +102,13 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	}
 	b.writer = writer
 	b.features = detectCapabilities(syncOutputConfigured())
-	// The size around the probe is compared below: a resize during the probe
-	// window would otherwise be invisible — the watchers start only after the
-	// probe, the Unix handler has no SIGWINCH registered yet, and the Windows
-	// poller takes its baseline after the probe has already passed.
+	// The size is snapshotted before the probe and compared after it: a
+	// resize inside the probe window is invisible to the watchers, which
+	// start only once the probe returns — Unix has no SIGWINCH handler
+	// registered yet, and the Windows poller takes its baseline after the
+	// probe has already passed. Windows terminalSize answers through the
+	// console's screen buffer no matter which handle it is given, so the
+	// snapshot works through the input file on both platforms.
 	preWidth, preHeight, sizeKnown := 0, 0, false
 	if width, height, err := terminalSize(b.input); err == nil {
 		preWidth, preHeight, sizeKnown = width, height, true
@@ -141,11 +144,9 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// first event, so the app's first layout reflects the real terminal size
 	// instead of the pre-probe snapshot; the channel has no reader yet, but a
 	// single event fits the 64-slot buffer and NextEvent drains it.
-	if sizeKnown {
-		if postWidth, postHeight, err := terminalSize(b.input); err == nil &&
-			(postWidth != preWidth || postHeight != preHeight) {
-			b.events <- event.ResizeTo(postWidth, postHeight)
-		}
+	postWidth, postHeight, postErr := terminalSize(b.input)
+	if resize, resized := resizeDuringProbe(sizeKnown, preWidth, preHeight, postWidth, postHeight, postErr); resized {
+		b.events <- resize
 	}
 	b.resize.start(readCtx, b.input, b.events)
 	// Keystrokes that raced the probe travel to the read loop as a prefill:
@@ -155,6 +156,18 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// first read, which preserves the byte order.
 	go b.readLoop(readCtx, b.readDone, b.events, b.parser, leftover)
 	return b.features, nil
+}
+
+// resizeDuringProbe reports the resize event synthesized for a size change
+// that landed inside the probe window. The watchers start only after the
+// probe returns, so without this replay the first layout would miss a
+// terminal resized mid-handshake. It is pure so the comparison itself is
+// table-tested; Open supplies the snapshots from both sides of the probe.
+func resizeDuringProbe(sizeKnown bool, preWidth, preHeight, postWidth, postHeight int, postErr error) (event.Event, bool) {
+	if !sizeKnown || postErr != nil || (postWidth == preWidth && postHeight == preHeight) {
+		return event.Event{}, false
+	}
+	return event.ResizeTo(postWidth, postHeight), true
 }
 
 // NextEvent waits for the next decoded input or resize event.

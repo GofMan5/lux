@@ -199,3 +199,48 @@ two passes each (6 binaries), SHA256 pairwise byte-identical per OS:
 (Binaries under .verification/xbuild/, not committed.) The hashes differ
 from the stage-5 ones on purpose: the negotiation slice changes the
 binary; the gate is pairwise identity across rebuilds, which holds 6/6.
+
+10. Round-3 adversarial review (post-commit tree: bcdd046 + 5f3e52f + cd21821)
+-------------------------------------------------------------------------
+Verdict: 0 BUG, 1 RISK, 1 NIT. Findings and disposition (fix-forward
+commit, pinned by tests):
+- RISK 1 (confirmed by empirical probe, not just review): Windows
+  terminalSize = term.GetSize = GetConsoleScreenBufferInfo on the fd.
+  The console splits handles by direction — the screen-buffer query needs
+  an OUTPUT handle; on the console input handle (CONIN$) it fails with
+  ERROR_INVALID_HANDLE (6); on CONOUT$ it succeeds. The backend holds the
+  input side everywhere it asks: terminalSize(b.input) in the probe
+  snapshot/replay (B above) and in resizeWatcher.start's baseline/poll.
+  So the probe-window replay was dead code on Windows, and the Windows
+  resize poller NEVER delivered a resize event (pre-existing, not a
+  regression vs HEAD — hence RISK, not BUG; Size() worked because it
+  prefers the output handle). Fix: Windows terminalSize now falls back to
+  opening CONOUT$ and querying it when the given handle's query fails.
+  One change revives the poller, the probe snapshot/replay, and Size()
+  with redirected stdout on a console. Unix terminalSize (TIOCGWINSZ on
+  the input fd) is untouched — same tty, no redirected-stdout regression.
+  Pinned by TestTerminalSizeAnswersThroughInputHandle (opens CONIN$, the
+  exact dead handle, asserts a positive size; ran live on this console:
+  PASS — it fails without the fallback). The poller call path is the same
+  terminalSize, three lines of glue around it.
+- B-pin gap (self-found, closed here): the round-2 B fix had no test that
+  fails if the pre/post comparison in Open is mutated. Fix: the decision
+  is extracted into pure resizeDuringProbe(sizeKnown, pre, post, postErr)
+  and table-tested by TestResizeDuringProbe (5 rows: unknown pre size
+  quiet, failed post query quiet, unchanged quiet, width change, height
+  change — asserting Kind/Width/Height of the synthesized event).
+- NIT 1 (documented, not fixed): a probe reply split exactly at the
+  deadline (head delivered, tail >35 ms later on a slow ssh) is returned
+  unclassified — leftover prefill replays the head, the parser shows the
+  leading ESC as one KeyEscape plus literal runes. Cosmetic, once per
+  startup at worst, lossless-replay invariant intact; documented in the
+  negotiate doc comment as the honest price of a bounded wait.
+- The reviewer's re-verification of round-2 fixes A-E and the two
+  documented divergences (CONIN$ signaling for reply-delivery tests, DECOM
+  proxy) came back clean, as did build/vet/test on the committed snapshot.
+Gates re-run on the fix-forward tree: gofmt clean, vet clean, full
+go test -count=1 ./... (10 packages ok), golangci-lint 0 issues (after
+one errcheck fix: defer-close of the CONOUT$ file), race terminal+render
+ok, GOOS linux/darwin/windows build ok (compile gate; the binaries are
+reproduced only at stage close). No benchmarks re-run: the change touches
+startup and a 10 Hz poller, not the per-frame path.
