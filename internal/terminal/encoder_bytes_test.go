@@ -1,6 +1,8 @@
 package terminal
 
 import (
+	"context"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -162,7 +164,7 @@ func BenchmarkEncodeFrame(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		scratch = appendFrame(scratch[:0], frame, previous, capability.TrueColor, false)
+		scratch = appendFrame(scratch[:0], frame, previous, capability.TrueColor, true, false)
 		size = len(scratch)
 	}
 	b.ReportMetric(float64(size), "bytes/frame")
@@ -174,7 +176,7 @@ func BenchmarkScanUnchanged(b *testing.B) {
 	previous := frame.Clone()
 	b.ResetTimer()
 	for range b.N {
-		appendFrame(nil, frame, previous, capability.TrueColor, false)
+		appendFrame(nil, frame, previous, capability.TrueColor, true, false)
 	}
 }
 
@@ -193,10 +195,39 @@ func BenchmarkScrollFrame(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		scratch = appendFrame(scratch[:0], frame, base.Clone(), capability.TrueColor, false)
+		scratch = appendFrame(scratch[:0], frame, base.Clone(), capability.TrueColor, true, false)
 		size = len(scratch)
 	}
 	b.ReportMetric(float64(size), "bytes/frame")
+}
+
+// BenchmarkIdlePresent prices the complete Present call on a frame that did
+// not change: write-slot semaphore, feature snapshot, the idle scan, and the
+// zero-byte early exit. No terminal bytes are written, so the writer is only
+// there to satisfy the nil guard, and the median is the per-frame floor every
+// idle application pays at 60 FPS.
+func BenchmarkIdlePresent(b *testing.B) {
+	frame := render.NewBuffer(120, 40)
+	paintSample(frame, 0)
+	devNull, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		b.Fatalf("open dev null: %v", err)
+	}
+	defer func() { _ = devNull.Close() }()
+	backend := &Backend{
+		writer:   devNull,
+		opened:   true,
+		features: capability.Set{Color: capability.TrueColor, ScrollRegions: true},
+		previous: frame.Clone(),
+	}
+	ctx := context.Background()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for range b.N {
+		if err := backend.Present(ctx, frame); err != nil {
+			b.Fatalf("present idle frame: %v", err)
+		}
+	}
 }
 
 func TestEncoderRewindsToACaretLeftOfItsRun(t *testing.T) {

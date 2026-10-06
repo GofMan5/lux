@@ -29,7 +29,10 @@ const minScrollRows = 3
 // terminal currently shows, and frame. A scrolling region moves rows the
 // encoder never transmits, so terminal is updated to match: a caller that fails
 // to write the result must discard its model instead of reusing it.
-func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
+//
+// scrollRegions gates the DECSTBM path: terminals that do not implement it get
+// a row-diff repaint of the same frame, which is larger but never corrupts.
+func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.ColorDepth, scrollRegions, synchronized bool) []byte {
 	width, height := frame.Size()
 	previousWidth, previousHeight := terminal.Size()
 	repaint := terminal == nil || width != previousWidth || height != previousHeight
@@ -47,7 +50,7 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 	tracked := !repaint && height <= maxTrackedRows
 	if tracked {
 		dirty.mark(frame, terminal, height)
-		if height > 1 && dirty.count >= minScrollRows {
+		if scrollRegions && height > 1 && dirty.count >= minScrollRows {
 			if top, bottom, delta, ok := detectScroll(frame, terminal, depth, width, height); ok {
 				// Exposed rows are filled with the active background on terminals
 				// with background-color erase, so the style is reset first.
@@ -242,8 +245,10 @@ func detectScroll(frame, terminal *render.Buffer, depth capability.ColorDepth, w
 }
 
 // appendScrollRegion moves rows inside a scrolling region. Insert- and
-// delete-line are used rather than SU and SD because every terminal this
-// project targets implements them, including the Linux console.
+// delete-line are used rather than SU and SD because DECSTBM with IL and DL
+// is the subset even the Linux console implements. Terminals that rejected
+// the mode during capability negotiation never reach this path: their frames
+// are row-diffed instead, which costs bytes but not correctness.
 func appendScrollRegion(dst []byte, top, bottom, delta int) []byte {
 	dst = append(dst, '\x1b', '[')
 	dst = strconv.AppendInt(dst, int64(top+1), 10)

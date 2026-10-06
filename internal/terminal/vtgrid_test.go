@@ -279,9 +279,11 @@ func (g *referenceGrid) print(text string) {
 }
 
 // present feeds one encoded frame into the grid and returns the emitted bytes.
+// Scroll regions stay enabled: the reference grid tests the byte stream a
+// capable terminal sees, while dedicated tests exercise the fallback gate.
 func (g *referenceGrid) present(t *testing.T, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
 	t.Helper()
-	data := appendFrame(nil, frame, previous, depth, synchronized)
+	data := appendFrame(nil, frame, previous, depth, true, synchronized)
 	g.feed(t, data)
 	if g.sync != 0 {
 		t.Fatalf("reference grid: unbalanced synchronized output wrapper: %d", g.sync)
@@ -453,7 +455,7 @@ func TestReferenceGridCaretOnlyChange(t *testing.T) {
 	}
 
 	previous = frame.Clone()
-	if data := appendFrame(nil, frame, previous, capability.ANSI256, false); len(data) != 0 {
+	if data := appendFrame(nil, frame, previous, capability.ANSI256, true, false); len(data) != 0 {
 		t.Fatalf("an unchanged frame must emit nothing, got %q", data)
 	}
 }

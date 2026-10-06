@@ -94,7 +94,7 @@ func TestReadLoopClosesCapturedDoneChannel(t *testing.T) {
 	defer func() { _ = input.Close() }()
 	done := make(chan struct{})
 	backend := &Backend{input: input}
-	go backend.readLoop(context.Background(), done, make(chan event.Event, 1), newParser())
+	go backend.readLoop(context.Background(), done, make(chan event.Event, 1), newParser(), nil)
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
 	canvas := render.NewCanvas(frame)
 	style := render.Style{Foreground: render.RGBColor(1, 2, 3), Background: render.IndexedColor(42), Attrs: render.AttrBold}
 	canvas.Text(0, 0, "A界B", style)
-	got := string(appendFrame(nil, frame, nil, capability.TrueColor, false))
+	got := string(appendFrame(nil, frame, nil, capability.TrueColor, true, false))
 	// The trailing blank leaves the terminal at the default style, so the frame
 	// needs no closing reset.
 	want := "\x1b[1;1H\x1b[0;1;38;2;1;2;3;48;5;42mA界B\x1b[0m "
@@ -119,11 +119,11 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
 	}
 
 	previous := frame.Clone()
-	if got := appendFrame(nil, frame, previous, capability.TrueColor, true); len(got) != 0 {
+	if got := appendFrame(nil, frame, previous, capability.TrueColor, true, true); len(got) != 0 {
 		t.Fatalf("unchanged synchronized frame = %q", got)
 	}
 	canvas.Put(4, 0, "X", render.Style{})
-	got = string(appendFrame(nil, frame, previous, capability.ANSI16, true))
+	got = string(appendFrame(nil, frame, previous, capability.ANSI16, true, true))
 	want = "\x1b[?2026h\x1b[1;5H\x1b[0mX\x1b[?2026l"
 	if got != want {
 		t.Fatalf("diff\n got: %q\nwant: %q", got, want)
@@ -135,10 +135,10 @@ func TestANSIFrameSkipsColorsEquivalentAfterDowngrade(t *testing.T) {
 	frame := render.NewBuffer(1, 1)
 	render.NewCanvas(previous).Put(0, 0, "x", render.Style{Foreground: render.RGBColor(255, 0, 0)})
 	render.NewCanvas(frame).Put(0, 0, "x", render.Style{Foreground: render.ANSIColor(9)})
-	if got := appendFrame(nil, frame, previous, capability.ANSI16, false); len(got) != 0 {
+	if got := appendFrame(nil, frame, previous, capability.ANSI16, true, false); len(got) != 0 {
 		t.Fatalf("equivalent downgraded color emitted diff: %q", got)
 	}
-	if got := appendFrame(nil, frame, previous, capability.TrueColor, false); len(got) == 0 {
+	if got := appendFrame(nil, frame, previous, capability.TrueColor, true, false); len(got) == 0 {
 		t.Fatal("different true colors did not emit diff")
 	}
 }

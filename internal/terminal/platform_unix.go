@@ -10,10 +10,19 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/lux-tui/lux/capability"
 	"github.com/lux-tui/lux/event"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )
+
+// defaultColorDepth reports the color floor for Unix terminals. Unix hosts a
+// much wider range of terminals than Windows, from modern emulators to the
+// 16-color Linux console and dumb serial lines, so the floor stays low and
+// the environment overrides in detectCapabilities promote it when earned.
+func defaultColorDepth() capability.ColorDepth {
+	return capability.ANSI16
+}
 
 func enableVT(*os.File) (func() error, error) { return nil, nil }
 

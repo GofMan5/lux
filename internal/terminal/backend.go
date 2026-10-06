@@ -35,7 +35,6 @@ type Backend struct {
 	encoded      []byte
 	opened       bool
 	plain        bool
-	synchronized bool
 	features     capability.Set
 	state        *term.State
 	restoreVT    func() error
@@ -102,8 +101,24 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 		return capability.Set{}, err
 	}
 	b.writer = writer
-	b.synchronized = syncOutputConfigured()
-	b.features = detectCapabilities(b.synchronized)
+	b.features = detectCapabilities(syncOutputConfigured())
+	// The size around the probe is compared below: a resize during the probe
+	// window would otherwise be invisible — the watchers start only after the
+	// probe, the Unix handler has no SIGWINCH registered yet, and the Windows
+	// poller takes its baseline after the probe has already passed.
+	preWidth, preHeight, sizeKnown := 0, 0, false
+	if width, height, err := terminalSize(b.input); err == nil {
+		preWidth, preHeight, sizeKnown = width, height, true
+	}
+	// Negotiation runs while raw mode is already active but before the
+	// alternate screen is entered, so the probe is matched against a quiet
+	// stream: the only reports in flight are the ones it requested.
+	var leftover []byte
+	if timeout, probe := probeTimeoutConfigured(); probe {
+		reply, pending := negotiate(ctx, b.input, b.writer, timeout)
+		b.features = applyProbeFeatures(b.features, reply)
+		leftover = pending
+	}
 	b.opened = true
 	if err := writeAll(b.writer, []byte(enterTerminal)); err != nil {
 		_ = writeAll(b.writer, []byte(leaveTerminal))
@@ -122,8 +137,23 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	b.cancel = cancel
 	b.readDone = make(chan struct{})
 	b.events = make(chan event.Event, 64)
+	// A resize that landed inside the probe window is replayed here as the
+	// first event, so the app's first layout reflects the real terminal size
+	// instead of the pre-probe snapshot; the channel has no reader yet, but a
+	// single event fits the 64-slot buffer and NextEvent drains it.
+	if sizeKnown {
+		if postWidth, postHeight, err := terminalSize(b.input); err == nil &&
+			(postWidth != preWidth || postHeight != preHeight) {
+			b.events <- event.ResizeTo(postWidth, postHeight)
+		}
+	}
 	b.resize.start(readCtx, b.input, b.events)
-	go b.readLoop(readCtx, b.readDone, b.events, b.parser)
+	// Keystrokes that raced the probe travel to the read loop as a prefill:
+	// Open still holds the mutex here, so replaying events into the channel
+	// in place could wedge Open against a full buffer on a large paste, and
+	// the parser belongs to the loop. The loop feeds the prefill before its
+	// first read, which preserves the byte order.
+	go b.readLoop(readCtx, b.readDone, b.events, b.parser, leftover)
 	return b.features, nil
 }
 
@@ -195,7 +225,7 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		b.mu.Unlock()
 		return errors.New("terminal: nil output")
 	}
-	output, plain, synchronized, features, previous := b.writer, b.plain, b.synchronized, b.features, b.previous
+	output, plain, synchronized, scrollRegions, features, previous := b.writer, b.plain, b.features.SynchronizedOutput, b.features.ScrollRegions, b.features, b.previous
 	b.mu.Unlock()
 	// The write slot serializes Present, so the encode scratch and the retained
 	// frame are reused instead of reallocated once per frame.
@@ -203,7 +233,7 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	if plain {
 		data = appendPlain(b.encoded[:0], frame)
 	} else {
-		data = appendFrame(b.encoded[:0], frame, previous, features.Color, synchronized)
+		data = appendFrame(b.encoded[:0], frame, previous, features.Color, scrollRegions, synchronized)
 	}
 	b.encoded = data
 	if len(data) == 0 {
@@ -330,7 +360,7 @@ func (b *Backend) Close() error {
 	return result
 }
 
-func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<- event.Event, parser *parser) {
+func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<- event.Event, parser *parser, prefill []byte) {
 	defer func() {
 		close(done)
 		if ctx.Err() == nil {
@@ -338,6 +368,19 @@ func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<
 		}
 	}()
 	buffer := make([]byte, 4096)
+	if len(prefill) > 0 {
+		// Probe leftovers are replayed before the first read so keystrokes
+		// that raced the probe keep their place in the stream. eof=false
+		// leaves a truncated escape tail pending for the escape delay to
+		// resolve, exactly like bytes from a regular read.
+		for _, next := range parser.feed(prefill, false) {
+			select {
+			case events <- next:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
 	for {
 		wait := time.Duration(-1)
 		if parser.pendingEscape() {
@@ -446,26 +489,31 @@ func detectCapabilities(syncOutput bool) capability.Set {
 	if terminal == "" {
 		terminal = "vt"
 	}
-	color := capability.ANSI16
+	// The platform floor is what the host is known to render without help;
+	// environment overrides below raise it when the terminal earned more.
+	color := defaultColorDepth()
 	colorTerm := strings.ToLower(os.Getenv("COLORTERM"))
 	if strings.Contains(colorTerm, "truecolor") || strings.Contains(colorTerm, "24bit") {
 		color = capability.TrueColor
-	} else if strings.Contains(terminal, "256color") {
+	} else if color < capability.ANSI256 && strings.Contains(terminal, "256color") {
 		color = capability.ANSI256
 	}
 	if os.Getenv("NO_COLOR") != "" {
 		color = capability.Monochrome
 	}
 	return capability.Set{
-		Terminal:           terminal,
-		Interactive:        true,
-		Unicode:            true,
-		Color:              color,
-		AlternateScreen:    true,
-		CursorAddressing:   true,
-		Mouse:              true,
-		Focus:              true,
-		BracketedPaste:     true,
+		Terminal:         terminal,
+		Interactive:      true,
+		Unicode:          true,
+		Color:            color,
+		AlternateScreen:  true,
+		CursorAddressing: true,
+		Mouse:            true,
+		Focus:            true,
+		BracketedPaste:   true,
+		// Scroll regions are the historical baseline every VT102 descendant
+		// implements; negotiation's job is only to veto this default.
+		ScrollRegions:      true,
 		SynchronizedOutput: syncOutput,
 		Graphics:           capability.GraphicsCells,
 	}

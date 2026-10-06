@@ -197,6 +197,27 @@ func BenchmarkBufferDiffNoChanges(b *testing.B) {
 	}
 }
 
+// BenchmarkEqualRowUnchanged prices the sweep that proves an idle frame idle:
+// one EqualRow call per row, no other work. internal/terminal's idle scan runs
+// exactly this loop against the same 120x40 shape, so the difference between
+// BenchmarkScanUnchanged's median and this one is the terminal-side
+// bookkeeping around the scan (appendFrame prologue, dirty-row bitset, early
+// exit), not the render comparison itself.
+func BenchmarkEqualRowUnchanged(b *testing.B) {
+	front := NewBuffer(120, 40)
+	back := front.Clone()
+	same := true
+	b.ReportAllocs()
+	for range b.N {
+		for y := 0; y < 40; y++ {
+			same = front.EqualRow(back, y) && same
+		}
+	}
+	if !same {
+		b.Fatal("clones diverged during benchmark")
+	}
+}
+
 func TestScrollRowsMovesAndBlanksLikeATerminal(t *testing.T) {
 	buffer := NewBuffer(3, 5)
 	canvas := NewCanvas(buffer)

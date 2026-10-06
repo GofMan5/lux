@@ -25,15 +25,19 @@ const (
 // Set is a backend's immutable feature snapshot. Applications should adapt to
 // these flags rather than guessing from a terminal brand.
 type Set struct {
-	Terminal           string
-	Interactive        bool
-	Unicode            bool
-	Color              ColorDepth
-	AlternateScreen    bool
-	CursorAddressing   bool
-	Mouse              bool
-	Focus              bool
-	BracketedPaste     bool
+	Terminal         string
+	Interactive      bool
+	Unicode          bool
+	Color            ColorDepth
+	AlternateScreen  bool
+	CursorAddressing bool
+	Mouse            bool
+	Focus            bool
+	BracketedPaste   bool
+	// ScrollRegions reports whether the terminal implements scroll regions
+	// (DECSTBM with insert/delete lines). Without it, a backend must repaint
+	// scrolled rows instead of asking the terminal to move them.
+	ScrollRegions      bool
 	SynchronizedOutput bool
 	Hyperlinks         bool
 	Graphics           Graphics

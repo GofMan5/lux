@@ -8,10 +8,23 @@ import (
 	"os"
 	"time"
 
+	"github.com/lux-tui/lux/capability"
 	"github.com/lux-tui/lux/event"
 	"golang.org/x/sys/windows"
 	"golang.org/x/term"
 )
+
+// defaultColorDepth reports the color floor for a Windows console. It is
+// platform detection, not probing: Windows Terminal advertises itself in the
+// environment and is known to render 24-bit color, while legacy conhost
+// safely renders the 256-color palette under VT processing. Environment
+// overrides in detectCapabilities still win over this floor.
+func defaultColorDepth() capability.ColorDepth {
+	if os.Getenv("WT_SESSION") != "" {
+		return capability.TrueColor
+	}
+	return capability.ANSI256
+}
 
 const enableVirtualTerminalProcessing = 0x0004
 
