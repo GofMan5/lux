@@ -1,0 +1,36 @@
+goos: windows
+goarch: amd64
+pkg: github.com/lux-tui/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12       	    5638	    218279 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkEncodeFrame-12       	    6088	    211664 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkEncodeFrame-12       	    6020	    211938 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12     	    6022	    212935 ns/op
+BenchmarkScanUnchanged-12     	    5721	    209547 ns/op
+BenchmarkScanUnchanged-12     	    5701	    202380 ns/op
+BenchmarkScrollFrame-12       	    4081	    275253 ns/op	        62.00 bytes/frame	  196610 B/op	       1 allocs/op
+BenchmarkScrollFrame-12       	    3669	    308376 ns/op	        62.00 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkScrollFrame-12       	    4593	    289328 ns/op	        62.00 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABLegacyDiff-12      	   10000	    105614 ns/op	       264.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABLegacyDiff-12      	   10000	    106852 ns/op	       264.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABLegacyDiff-12      	   10000	    108197 ns/op	       264.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABNewDiff-12         	    4610	    239978 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABNewDiff-12         	    5133	    221596 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABNewDiff-12         	    6007	    212140 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABLegacyIdle-12      	   12242	    104962 ns/op	         0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABLegacyIdle-12      	   10000	    110557 ns/op	         0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABLegacyIdle-12      	   10000	    111987 ns/op	         0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABNewIdle-12         	    4790	    249845 ns/op	         0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABNewIdle-12         	    6624	    227103 ns/op	         0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABNewIdle-12         	    5286	    208119 ns/op	         0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkABLegacyScroll-12    	    7168	    162041 ns/op	      1508 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABLegacyScroll-12    	    8151	    165162 ns/op	      1508 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABLegacyScroll-12    	    7566	    220261 ns/op	      1508 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABNewScroll-12       	    3669	    290251 ns/op	        62.00 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABNewScroll-12       	    4504	    268757 ns/op	        62.00 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABNewScroll-12       	    4830	    351867 ns/op	        62.00 bytes/frame	  196608 B/op	       1 allocs/op
+BenchmarkABClone-12           	   15915	     74088 ns/op	  196673 B/op	       2 allocs/op
+BenchmarkABClone-12           	   19576	     71767 ns/op	  196673 B/op	       2 allocs/op
+BenchmarkABClone-12           	   14938	     74099 ns/op	  196672 B/op	       2 allocs/op
+PASS
+ok  	github.com/lux-tui/lux/internal/terminal	41.011s

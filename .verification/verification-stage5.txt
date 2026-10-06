@@ -1,0 +1,132 @@
+LUX TUI stage 5 verification
+UTC: 2026-10-06T05:14:30Z
+Baseline: d7b9084adf5027d353e7efc3e4d96a8fa3e36c96
+Modified: 7becfb35e976263b30073f2321ee93719a70c70f
+
+Features:
+  the keyboard reaches every control: Tab cycles controls a container owns
+    even when a clipped region registers no hit geometry
+  shortest VT encoding of a frame: SGR runs and cursor moves emit the
+    shortest escape sequences the capability profile allows
+  the terminal moves rows it already has: scroll detection emits a DECSTBM
+    region scroll plus IL/DL and lets the terminal shift rows instead of
+    repainting them; render.Buffer.ScrollRows applies the same move locally
+    and the encoder re-marks the rows the terminal vacated
+  terminal shutdown is bounded: once Close begins the terminal stops
+    accepting input and returns within the timeout
+  idle cost is one EqualRow per row: appendFrame builds a dirty-row bitset
+    (rowBits) with render.Buffer.EqualRow, skips unchanged rows in the cell
+    loop, and runs scroll detection only when at least one row is dirty, so
+    an idle frame costs height row comparisons and zero bytes
+  scroll detection hashes stride-sampled row samples (32 samples per row,
+    stride max(1, (width+31)/32)) into two fixed arrays, skipping color
+    terms under the monochrome profile
+  tests: EqualRow guard contracts (nil receiver/argument, width mismatch,
+    out-of-range y), the post-scroll re-mark regression, and backward
+    cursor-rewind coverage
+
+Validation:
+  gofmt -l . : clean
+  go vet ./... : PASS
+  golangci-lint run ./... : 0 issues
+  go mod verify : all modules verified
+  go test -count=1 ./... : PASS
+  go test -race -shuffle=on -count=10 ./... : PASS
+  internal/terminal fuzz 60s at this revision (FuzzParserNeverPanics):
+    6,948,489 executions, 75 new interesting inputs (243 corpus), PASS,
+    61.5 s. FuzzParserNeverPanics is the only fuzz target in
+    internal/terminal; any other -fuzz pattern silently degrades to a
+    no-op PASS.
+  rollback: .verification/rollback-stage5.ps1 was executed after these
+    artifacts were committed. It reset the tree to d7b9084, render/buffer.go
+    no longer contained EqualRow, go test -count=1 ./... passed at the
+    baseline, .verification/stage5.patch applied with --check onto the
+    baseline, and stage 5 was then restored to this revision.
+
+Mutation evidence (each mutation applied in a throwaway worktree, tested,
+then the worktree removed):
+  post-scroll re-mark loop removed -> CAUGHT by
+    TestEncoderRepaintsRowsThatWereEqualBeforeTheScroll: cell (0,6) is
+    " " vs "z". Not caught at 940783a.
+  dirty.has(y) skip inverted (equal rows emitted, dirty rows skipped) ->
+    CAUGHT, FAIL
+  r.count++ dropped from rowBits.mark -> CAUGHT, FAIL
+  hash sample start shifted 0 -> 1 in both hashers -> NOT CAUGHT: a
+    consistent phase shift keeps every hash comparison valid, only byte
+    cost can move; there is no output difference to catch
+  EqualRow out-of-range y guard removed -> CAUGHT: index out of range [4]
+    with length 4 (TestEqualRowRejectsUnusableComparisons). Not caught at
+    940783a.
+  EqualRow nil guard removed -> CAUGHT: nil pointer dereference. Not
+    caught at 940783a.
+  digits() count corruption -> survives: byte-cost only, every encoding
+    stays inside its limits
+  The three catches marked "not caught at 940783a" are the gap the tests
+  in 7becfb3 exist to close.
+
+Benchmarks, Windows amd64 i5-10400F Go 1.25.5, GOMAXPROCS 12, 120x40
+truecolor frames, -benchtime=1s -count=3, medians. BEFORE measured at
+d529d99 (idle-scan bitset not yet present), AFTER at 940783a. Both runs
+compile the same frozen stage-4 reference encoder (appendFrameLegacy in
+.verification/stage5-ab.go) as a control: it emits identical bytes on both
+trees (264/0/1508 bytes per diff/idle/scroll frame), so the deltas are the
+live encoder, not harness drift. Repeated runs on this CPU scale with
+frequency; medians only.
+
+                     BEFORE (d529d99)     AFTER (940783a)
+  EncodeFrame        211.9 us             73.9 us    249.0 bytes/frame
+  ScanUnchanged      209.5 us             25.5 us
+  ScrollFrame        289.3 us            122.3 us     62.00 bytes/frame
+  ABLegacyDiff       106.9 us  264 B      108.7 us  264 B
+  ABNewDiff          221.6 us  249 B       75.3 us  249 B
+  ABLegacyIdle       111.0 us    0 B      101.7 us    0 B
+  ABNewIdle          227.1 us    0 B       24.7 us    0 B
+  ABLegacyScroll     165.2 us 1508 B      194.5 us 1508 B
+  ABNewScroll        290.3 us   62 B      135.7 us   62 B
+  ABClone             74.1 us             64.4 us   196673 B/op, 2 allocs
+
+  Every timed path is 0 alloc; the only allocations are the intentional
+  per-iteration base.Clone() in the scroll benchmarks and ABClone itself.
+  Headline vs the stage-4 reference on the after tree: idle 0 bytes and
+  8.2x faster (ScanUnchanged 209.5 -> 25.5 us; ABNewIdle 227.1 -> 24.7 us),
+  diff 2.9x faster (ABNewDiff 221.6 -> 75.3 us) for 249 vs 264 bytes, and
+  scroll emits 62 vs 1508 bytes per frame (~24x) while the frame gets 2.4x
+  faster (ScrollFrame 289.3 -> 122.3 us; ABNewScroll 2.1x). The new
+  encoder emits the same bytes on both trees (249/0/62), so the win is CPU
+  and scroll bytes, never output.
+
+Cross-build hashes at this revision (go build -trimpath, CGO_ENABLED=0):
+  Linux amd64: 870E36E6AAE8D9E28BAA0D94B0D127B24FED5E238C1DD1A37E2D230526E5A37F
+  Windows amd64: DC9975D50707F1F71F90CB37AF19C7808203D8458C893A13986602CFC64EAC58
+  Darwin arm64: D48621773EA3FAF62BD35A02447FD28F9AF0A8BDA65B0F613F05760D444A0FAF
+  The same three targets built at 940783a, and built with -buildvcs=false
+  at both revisions, produce bit-identical binaries (12/12 hashes equal),
+  so the test-only commit 7becfb3 changes no shipped code.
+
+Review status:
+  One adversarial correctness pass over the encoder changes at 940783a
+  delivered: no correctness bugs found, three findings, all byte-cost:
+    - stride-sampled hashing can accept a shift whose rows are not truly
+      equal, or a different shift with an equal score; the per-row diff
+      loop repairs every row the hash-based region got wrong, so only the
+      byte count can vary
+    - the dirty bitset re-walks rows through EqualRow after the hash
+      sample, inheriting a raw byte-compare cost
+    - the dirty-gate short-circuit makes tracked/repaint combinations
+      harder to reason about at the margins
+  A mutation campaign over the same code produced the results above. The
+  code-level checks in this file are self-review, the mutation results,
+  and the gate.
+
+Known limits, deliberately not addressed here:
+  stride-hash shift acceptance is byte-cost, not correctness (see review)
+  capability negotiation is not implemented; profiles are fixed at startup
+  the idle-scan cross-package overhead (height EqualRow calls per frame)
+    is not yet documented
+  minScrollRows is 3, so shifts of 1-2 rows repaint instead of scrolling
+  frames taller than maxTrackedRows (512) fall back to full repaint
+  keyboard scrolling does not bubble between nested viewports
+  a 64 KiB single-line field still costs tens of milliseconds per edit
+
+Rollback:
+  powershell -NoProfile -ExecutionPolicy Bypass -File .verification/rollback-stage5.ps1

@@ -1,0 +1,2615 @@
+diff --git a/README.md b/README.md
+index 68a766a..07f4a37 100644
+--- a/README.md
++++ b/README.md
+@@ -35,14 +35,14 @@ comparative claims require reproducible results.
+ | Package | Implemented now |
+ |---|---|
+ | [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
+-| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, caret placement |
++| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement |
+ | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
+ | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
+ | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
+ | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
+ | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
+ | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
+-| `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, ANSI diff encoding, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
++| `internal/terminal` | VT lifecycle, streaming input parser, mouse/paste/focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+ 
+ The concrete terminal adapter stays internal; applications use `lux.Run` or
+ provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
+@@ -134,13 +134,18 @@ but remains intentionally single-line; password hardening, multiline editing,
+ RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
+ 
+ Nested viewports need no widget tree: a scrollable region publishes whether it
+-sits at a boundary, and the router bubbles the wheel to the enclosing region
+-that can still move.
++sits at a boundary, and the router bubbles the wheel or a scroll key to the
++enclosing region that can still move. Tab also reaches a control a container has
++scrolled out of view, and the container scrolls it back into sight.
++
++Scrolling is also cheap on the wire. The encoder recognises a vertical row shift
++and lets the terminal move those rows, so a list that scrolls by one row costs
++the same handful of bytes whether the screen is 80×24 or 120×40.
+ 
+ ## Direction
+ 
+-Next slices are variable-height virtualization, keyboard scroll bubbling,
+-double-click word selection, semantic bridges, and modern keyboard negotiation.
++Next slices are active capability negotiation, modern keyboard protocols,
++variable-height virtualization, and semantic accessibility bridges.
+ Graphics protocols follow only after these paths are measurable.
+ The existing CPU `scene3d` package proves the cell-rendering path; it is not a
+ GPU engine.
+diff --git a/app_test.go b/app_test.go
+index 27b49eb..9d05f49 100644
+--- a/app_test.go
++++ b/app_test.go
+@@ -13,6 +13,11 @@ import (
+ 	"github.com/lux-tui/lux/render"
+ )
+ 
++// hangTimeout only bounds a test that would otherwise hang forever. Making it
++// generous costs a passing run nothing and stops a loaded CI machine from
++// reporting a stall as a logic failure.
++const hangTimeout = 10 * time.Second
++
+ type fakeBackend struct {
+ 	mu         sync.Mutex
+ 	events     chan event.Event
+@@ -115,7 +120,7 @@ func TestRunRendersAndRestores(t *testing.T) {
+ 		if width, height := frame.Size(); width != 20 || height != 5 {
+ 			t.Fatalf("frame size = %dx%d", width, height)
+ 		}
+-	case <-time.After(time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("initial frame timeout")
+ 	}
+ 	backend.events <- event.KeyPress(event.KeyEscape, 0)
+@@ -280,7 +285,7 @@ func TestRunCancellationDoesNotWaitForBlockedPresent(t *testing.T) {
+ 	go func() { done <- Run(ctx, &testModel{}, WithBackend(backend)) }()
+ 	select {
+ 	case <-backend.started:
+-	case <-time.After(time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("present did not start")
+ 	}
+ 	cancel()
+@@ -289,7 +294,7 @@ func TestRunCancellationDoesNotWaitForBlockedPresent(t *testing.T) {
+ 		if !errors.Is(err, context.Canceled) {
+ 			t.Fatalf("error = %v", err)
+ 		}
+-	case <-time.After(time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("Run remained blocked in Present")
+ 	}
+ }
+@@ -310,7 +315,7 @@ func TestRunPlainBackendRendersOnceAndReturns(t *testing.T) {
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
+-	case <-time.After(time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("plain renderer did not return after its snapshot")
+ 	}
+ 	model.mu.Lock()
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index f270980..a39b5e6 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -144,7 +144,9 @@ bindings, and explicit priority app bindings are limited to lifecycle commands.
+ `ScrollViewport` keeps only a row offset and returns a half-open visible range;
+ one-million-row models therefore remain O(visible) at draw time. A viewport
+ publishes whether it sits at a scroll boundary, which lets the router bubble the
+-wheel to an enclosing viewport without a retained parent tree. Text history
++wheel or a scroll key to an enclosing viewport without a retained parent tree,
++and every region records the canvas clip it was drawn through so a container can
++recognise and reveal its own scrolled-out children. Text history
+ clones snapshots under a byte budget, and clipboard access is a hexagonal app
+ port rather than a terminal escape sequence.
+ 
+@@ -172,6 +174,12 @@ The current adapter provides:
+ - bounded escape and paste buffers;
+ - alternate-screen lifecycle and terminal restoration;
+ - changed-run ANSI encoding and RGB → 256 → 16 → monochrome downgrade;
++- shortest-form output: a run is addressed relatively when that is fewer bytes
++  than absolute addressing, a style is transmitted as a delta when that beats
++  restating it, and a row whose tail is default-styled blanks is erased rather
++  than transmitted;
++- a scrolling region for vertical row shifts, so moving a list costs the rows
++  it exposes rather than the rows it moves;
+ - caret positioning with `DECTCEM` visibility transitions, emitted after the
+   cell runs that move the cursor;
+ - opt-in synchronized output through `LUX_TUI_SYNC_OUTPUT`;
+@@ -182,13 +190,35 @@ covering exactly the sequences the encoder can emit replays real output into a
+ grid seeded from the previous frame, then requires that grid to equal the source
+ buffer under the active color depth, including the caret. It runs across the
+ four color depths with synchronized output on and off, over successive diffs,
+-and across a resize repaint.
++and across a resize repaint. Every byte-saving shortcut is therefore paid for in
++the interpreter first: an encoding the reference terminal cannot model is
++rejected outright rather than trusted.
++
++The one shortcut the encoder deliberately refuses is erasing a styled tail.
++Erase-to-end-of-line fills with the active background on terminals with
++background-color erase and with the default background on those without, so it
++is only used for default-styled blanks, after the style has been reset.
++
++Scrolling is the one operation where the encoder moves cells it never
++transmits. It compares row hashes to find a vertical shift, emits a scrolling
++region with insert- or delete-line, and applies the same shift to its model of
++the terminal before diffing the rest. Only full-width row ranges qualify,
++because a scrolling region has no portable horizontal margins, and a hash
++collision can only cost bytes because the diff that follows compares real
++cells. Because the model now describes an operation the encoder did not
++transmit cell by cell, a failed write discards it: the next frame repaints.
+ 
+ Capability detection is deliberately conservative but currently environment
+ based. Active, bounded feature negotiation is roadmap work.
+ 
+ ### Application runtime
+ 
++Shutdown is bounded rather than blocking. The adapter serializes writer access
++with a one-slot semaphore instead of a mutex, so `Close` can wait a short grace
++period for an in-flight frame, write its restore sequence only when the writer
++is idle, and give up rather than hang behind a write to a terminal that stopped
++draining.
++
+ `lux.Run` owns backend open/close, initial resize, serialized model updates and
+ views, commands, frames, size limits, and cancellation. Three reusable surfaces
+ bound the presentation path: one can be drawn, one queued, and one in flight.
+diff --git a/docs/INTERACTION.md b/docs/INTERACTION.md
+index 8359744..dc03e66 100644
+--- a/docs/INTERACTION.md
++++ b/docs/INTERACTION.md
+@@ -50,7 +50,11 @@ dropped or stale frame cannot steal input.
+   IME candidate windows and screen readers track. A caret outside its canvas or
+   clip leaves the cursor hidden, so a scrolled-out field cannot claim it;
+ - wheel scrolling resolves the topmost scrollable region that can still move
+-  and otherwise bubbles outward through regions that enclose it;
++  and otherwise bubbles outward through regions that enclose it; arrows, Page
++  keys, Home and End bubble the same way from the focused viewport;
++- a control a container has scrolled out of view keeps its identity, so Tab
++  still reaches it and the container scrolls it back into view before the next
++  frame; it registers no hit area, so it cannot be clicked while hidden;
+ - resize generations invalidate coordinates before a new frame is presented.
+ 
+ The registry is a linear slice. That is the correct cost for normal terminal
+@@ -59,21 +63,29 @@ control counts; add a spatial index only after a profile demonstrates a problem.
+ ## Nesting without a widget tree
+ 
+ An immediate-mode registry has no parent pointers, so nesting is derived from
+-geometry: a region bubbles the wheel only to a scrollable region that fully
+-encloses it. Registration order alone cannot express nesting, because a region
+-painted underneath is indistinguishable from a container by order.
++two facts the frame already carries. Bubbling uses geometry: a region hands the
++wheel or a scroll key only to a scrollable region that fully encloses it.
++Registration order alone cannot express nesting, because a region painted
++underneath is indistinguishable from a container by order.
+ 
+ The consequence is deliberate: a region that fully contains another and is
+ painted below it is treated as its parent, which is also the intuitive result.
+ Partially overlapping neighbours are never treated as parents.
+ 
++Revealing a focused control uses ownership instead, because geometry cannot
++answer it: a control scrolled out of view has no visible rectangle at all, and a
++neighbour drawn just below a viewport occupies the same columns as its children.
++Every region therefore records the canvas clip it was drawn through, and a
++container owns exactly the regions whose clip it contains. `Context.FocusDelta`
++reports the rows a container must move; `ScrollViewport` applies it itself, once
++per focus change, so scrolling a container away from the focused control is not
++undone by the next event.
++
+ Controls draw in their own coordinates and let the canvas clip them, so a
+ control scrolled halfway out of a container stays aligned with its content
+ instead of sliding to the clip edge. A container that exists only to scroll its
+ children registers with `ScrollStyle{Passive: true}`: it accepts the wheel but
+-stays out of Tab traversal, leaving the keyboard to its children. Keyboard
+-scrolling still does not bubble; an application that wants it can offer the same
+-action to a parent when `ScrollState.Apply` reports no movement.
++stays out of Tab traversal, leaving the keyboard to its children.
+ 
+ ## Security and platform limits
+ 
+@@ -103,17 +115,19 @@ Implemented follow-up slices:
+ - an app-supplied synchronous `Clipboard` port. Core ships no OS or OSC 52
+   adapter; Copy/Cut/Paste errors remain visible and failed Cut preserves text;
+ - a hardware caret bound to the presented frame, left-button drag selection,
+-  and automatic wheel bubbling between enclosing scrollable regions.
++  and automatic wheel bubbling between enclosing scrollable regions;
++- scroll keys bubbling the same way as the wheel, and focus-driven reveal so Tab
++  reaches a control its container has scrolled out of view.
+ 
+ Still deferred by evidence:
+ 
+-1. variable-height rows and keyboard scroll bubbling;
++1. variable-height rows;
+ 2. double-click word selection and coalesced edit history;
+ 3. Kitty associated-text/keyboard negotiation and restoration;
+-4. nested parent capture/bubble for non-wheel input and a semantic
+-   accessibility bridge;
+-5. focus-driven auto-scroll: Tab reaches the controls a container currently
+-   shows, because a clipped region registers no hit geometry at all.
++4. nested parent capture and bubbling for pointer input other than the wheel,
++   and a semantic accessibility bridge;
++5. active capability negotiation: colour depth, synchronized output and Unicode
++   behaviour are still inferred from the environment rather than queried.
+ 
+ ## Sources
+ 
+diff --git a/docs/PERFORMANCE.md b/docs/PERFORMANCE.md
+index 04293e8..aee2270 100644
+--- a/docs/PERFORMANCE.md
++++ b/docs/PERFORMANCE.md
+@@ -12,7 +12,11 @@ The implementation already provides:
+ - front/back buffers;
+ - no terminal output for an unchanged frame;
+ - changed row runs rather than unconditional full-screen VT output;
+-- one assembled byte slice per `Present` call;
++- one reused byte slice per `Present` call, and one reused retained frame;
++- shortest-form VT encoding: relative cursor moves, SGR deltas, and
++  erase-to-end-of-line instead of transmitted blanks;
++- a scrolling region for vertical row shifts, which makes the cost of scrolling
++  a list independent of the screen height;
+ - absolute-time tweens and springs that skip missed visual states;
+ - an idle runtime that disarms its frame timer;
+ - three reusable surfaces with a one-slot latest-frame queue;
+@@ -102,7 +106,8 @@ queues more output than the terminal can display.
+ 1. Make renderer output reusable without hidden per-frame allocations.
+ 2. Calibrate the implemented latest-state-wins adaptive scheduler under real
+    terminals and impaired transports.
+-3. Add stronger writer-failure/full-repaint tests.
++3. Extend writer-failure recovery beyond the current contract, which discards
++   the terminal model on a failed write so the next frame repaints.
+ 4. Build equivalent competitor adapters and publish raw results.
+ 5. Benchmark interaction routing at 10/100/1,000 regions and TextInput edits at
+    32 B/1 KiB/64 KiB before adding a spatial index or boundary cache.
+@@ -111,7 +116,34 @@ A test terminal that applies emitted VT operations to a reference grid now
+ exists: `internal/terminal/vtgrid_test.go` replays real encoder output and
+ requires the reconstructed grid, including the caret, to equal the source buffer
+ across the four color depths, synchronized output on and off, successive diffs,
+-and a resize repaint.
++and a resize repaint. It models exactly the sequences the encoder can emit —
++`CUP`, `CUF`, carriage return, `EL`, `SGR`, `DECSTBM`, insert- and
++delete-line, `DECTCEM`, and synchronized output —
++and fails on anything else, so a shorter encoding cannot be shipped without
++being proved equivalent.
++
++Output size was measured against the previous encoder on the same frames
++(`paintSample`, truecolor, Windows amd64, i5-10400F, Go 1.25.5):
++
++| Frame | Before | After | Change |
++|---|---|---|---|
++| 80×24 repaint | 2420 B | 607 B | −74.9% |
++| 120×40 repaint | 5412 B | 767 B | −85.8% |
++| Sparse diff | 277 B | 259 B | −6.5% |
++| 120×40 dense half-block scene | 177155 B | 167557 B | −5.4% |
++| 80×24 list scrolled one row | 826 B | 66 B | −92.0% |
++| 120×40 list scrolled one row | 1434 B | 66 B | −95.4% |
++| 120×40 list scrolled five rows | 1439 B | 218 B | −84.8% |
++
++Most of the repaint saving is erase-to-end-of-line replacing transmitted blanks,
++which is why a sparse redraw gains far more than a dense 3D scene where every
++cell carries two distinct colors. A scroll is the sharpest case: its cost is the
++rows the shift exposes, so moving a list by one row costs the same 66 bytes on
++an 80×24 screen and on a 120×40 one. `TestEncoderFrameBudget` and
++`TestScrollBudgetIsIndependentOfScreenSize` pin those numbers so a future change
++cannot quietly grow them. Encoding itself is 0 alloc/op; scanning an unchanged
++120×40 frame costs roughly 100 µs on a loaded machine, and that cost is
++unchanged by this work.
+ 
+ Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
+ show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
+diff --git a/examples/showcase/main_test.go b/examples/showcase/main_test.go
+index cd477d6..0affca8 100644
+--- a/examples/showcase/main_test.go
++++ b/examples/showcase/main_test.go
+@@ -13,6 +13,11 @@ import (
+ 	"github.com/lux-tui/lux/ui"
+ )
+ 
++// hangTimeout only bounds a test that would otherwise wait forever. Making it
++// generous costs a passing run nothing and stops a loaded machine from
++// reporting a stall as a logic failure.
++const hangTimeout = 10 * time.Second
++
+ func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
+ 	app := newShowcase()
+ 	app.name.Apply(ui.Action{Kind: ui.Input, Event: event.RuneKey('!', 0)})
+@@ -115,18 +120,52 @@ func TestShowcaseEndToEndInputAndModal(t *testing.T) {
+ 		if err != nil {
+ 			t.Fatal(err)
+ 		}
+-	case <-time.After(2 * time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("showcase did not quit")
+ 	}
+ }
+ 
++func TestShowcaseTabRevealsScrolledOutControl(t *testing.T) {
++	// The panel is taller than its viewport at this size, so the action row and
++	// telemetry start out of view.
++	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32), width: 120, height: 24}
++	app := newShowcase()
++	app.observe = make(chan showcaseState, 64)
++	done := make(chan error, 1)
++	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
++	defer func() {
++		backend.events <- event.RuneKey('q', event.ModCtrl)
++		select {
++		case err := <-done:
++			if err != nil {
++				t.Error(err)
++			}
++		case <-time.After(hangTimeout):
++			t.Error("showcase did not quit")
++		}
++	}()
++	waitFrame(t, backend.frames)
++	settle(t, backend.frames)
++
++	// Walk focus past the visible controls; the panel must follow rather than
++	// leave focus somewhere invisible.
++	for range 4 {
++		backend.events <- event.KeyPress(event.KeyTab, 0)
++		settle(t, backend.frames)
++	}
++	revealed := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls > 0 })
++	if revealed.logs != 0 {
++		t.Fatalf("revealing a control scrolled the nested log: %#v", revealed)
++	}
++}
++
+ func TestShowcaseFrameCarriesEditorCaret(t *testing.T) {
+ 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+ 	app := newShowcase()
+ 	done := make(chan error, 1)
+ 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+ 
+-	deadline := time.After(2 * time.Second)
++	deadline := time.After(hangTimeout)
+ 	for {
+ 		select {
+ 		case frame := <-backend.frames:
+@@ -145,7 +184,7 @@ func TestShowcaseFrameCarriesEditorCaret(t *testing.T) {
+ 				if err != nil {
+ 					t.Fatal(err)
+ 				}
+-			case <-time.After(2 * time.Second):
++			case <-time.After(hangTimeout):
+ 				t.Fatal("showcase did not quit")
+ 			}
+ 			return
+@@ -170,7 +209,7 @@ func TestShowcaseNestedWheelBubblesToControlsPanel(t *testing.T) {
+ 			if err != nil {
+ 				t.Error(err)
+ 			}
+-		case <-time.After(2 * time.Second):
++		case <-time.After(hangTimeout):
+ 			t.Error("showcase did not quit")
+ 		}
+ 	}()
+@@ -248,7 +287,7 @@ func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
+ 	select {
+ 	case state := <-states:
+ 		return state
+-	case <-time.After(2 * time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("state timeout")
+ 		return showcaseState{}
+ 	}
+@@ -256,7 +295,7 @@ func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
+ 
+ func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showcaseState) bool) showcaseState {
+ 	t.Helper()
+-	deadline := time.After(2 * time.Second)
++	deadline := time.After(hangTimeout)
+ 	for {
+ 		select {
+ 		case state := <-states:
+@@ -275,7 +314,7 @@ func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
+ 	select {
+ 	case frame := <-frames:
+ 		return frame
+-	case <-time.After(2 * time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("frame timeout")
+ 		return nil
+ 	}
+diff --git a/internal/terminal/backend.go b/internal/terminal/backend.go
+index 0bb0876..24169a1 100644
+--- a/internal/terminal/backend.go
++++ b/internal/terminal/backend.go
+@@ -30,7 +30,9 @@ type Backend struct {
+ 	writer *os.File
+ 
+ 	mu           sync.Mutex
+-	writeMu      sync.Mutex
++	writeOnce    sync.Once
++	writeSlot    chan struct{}
++	encoded      []byte
+ 	opened       bool
+ 	plain        bool
+ 	synchronized bool
+@@ -181,8 +183,9 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
+ 	if ctx == nil {
+ 		ctx = context.Background()
+ 	}
+-	b.writeMu.Lock()
+-	defer b.writeMu.Unlock()
++	slot := b.writeSlotChan()
++	slot <- struct{}{}
++	defer func() { <-slot }()
+ 	b.mu.Lock()
+ 	if !b.opened {
+ 		b.mu.Unlock()
+@@ -194,21 +197,36 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
+ 	}
+ 	output, plain, synchronized, features, previous := b.writer, b.plain, b.synchronized, b.features, b.previous
+ 	b.mu.Unlock()
++	// The write slot serializes Present, so the encode scratch and the retained
++	// frame are reused instead of reallocated once per frame.
+ 	var data []byte
+ 	if plain {
+-		data = appendPlain(nil, frame)
++		data = appendPlain(b.encoded[:0], frame)
+ 	} else {
+-		data = appendFrame(nil, frame, previous, features.Color, synchronized)
++		data = appendFrame(b.encoded[:0], frame, previous, features.Color, synchronized)
+ 	}
++	b.encoded = data
+ 	if len(data) == 0 {
+ 		return nil
+ 	}
+ 	if err := writeAllContext(ctx, output, data); err != nil {
++		// The encoder may already have moved rows in its model of the terminal,
++		// and a failed write leaves the real terminal in an unknown state, so the
++		// model is discarded and the next frame repaints from scratch.
++		b.mu.Lock()
++		if b.previous == previous {
++			b.previous = nil
++		}
++		b.mu.Unlock()
+ 		return err
+ 	}
+ 	b.mu.Lock()
+-	if b.opened {
+-		b.previous = frame.Clone()
++	if b.opened && b.previous == previous {
++		if previous == nil {
++			b.previous = frame.Clone()
++		} else {
++			previous.CopyFrom(frame)
++		}
+ 	}
+ 	b.mu.Unlock()
+ 	return nil
+@@ -227,6 +245,39 @@ func (b *Backend) Size() (int, int, error) {
+ 	return 0, 0, errors.New("terminal: size unavailable for redirected streams")
+ }
+ 
++// restoreGrace bounds how long Close waits for an in-flight frame before it
++// restores the terminal without writing its own sequences.
++const restoreGrace = 100 * time.Millisecond
++
++// writeSlotChan returns the one-slot semaphore that serializes writer access.
++// It is a channel rather than a mutex because Close must be able to stop
++// waiting for it.
++func (b *Backend) writeSlotChan() chan struct{} {
++	b.writeOnce.Do(func() { b.writeSlot = make(chan struct{}, 1) })
++	return b.writeSlot
++}
++
++// writerBusy reports whether a write currently holds the slot. It exists for
++// tests that need to observe a blocked writer.
++func (b *Backend) writerBusy() bool { return len(b.writeSlotChan()) == 1 }
++
++func (b *Backend) acquireWriteSlot(wait time.Duration) bool {
++	slot := b.writeSlotChan()
++	select {
++	case slot <- struct{}{}:
++		return true
++	default:
++	}
++	timer := time.NewTimer(wait)
++	defer timer.Stop()
++	select {
++	case slot <- struct{}{}:
++		return true
++	case <-timer.C:
++		return false
++	}
++}
++
+ // Close disables terminal modes and restores the exact raw input state saved
+ // by Open. It is idempotent and makes a best effort to perform both restores.
+ func (b *Backend) Close() error {
+@@ -253,13 +304,20 @@ func (b *Backend) Close() error {
+ 	}
+ 	var result error
+ 	if writer != nil {
+-		if !plain {
++		// Splicing the restore into a frame another goroutine is still writing
++		// would corrupt the screen, so it is only written once the writer is idle.
++		// Waiting forever is not an option either: a write blocked on a terminal
++		// that stopped draining holds the slot until the descriptor is closed, and
++		// on Windows it may not return even then.
++		if !plain && b.acquireWriteSlot(restoreGrace) {
+ 			result = errors.Join(result, writeAll(writer, []byte(leaveTerminal)))
++			<-b.writeSlotChan()
+ 		}
+ 		result = errors.Join(result, writer.Close())
+ 	}
+-	b.writeMu.Lock()
+-	defer b.writeMu.Unlock()
++	if b.acquireWriteSlot(restoreGrace) {
++		<-b.writeSlotChan()
++	}
+ 	if state != nil && input != nil {
+ 		result = errors.Join(result, term.Restore(int(input.Fd()), state))
+ 	}
+diff --git a/internal/terminal/encoder.go b/internal/terminal/encoder.go
+index 86e35bf..3f4e980 100644
+--- a/internal/terminal/encoder.go
++++ b/internal/terminal/encoder.go
+@@ -11,23 +11,69 @@ const (
+ 	resetStyle = "\x1b[0m"
+ 	showCaret  = "\x1b[?25h"
+ 	hideCaret  = "\x1b[?25l"
++	beginSync  = "\x1b[?2026h"
++	endSync    = "\x1b[?2026l"
++	eraseLine  = "\x1b[K"
++	dropRegion = "\x1b[r"
+ )
+ 
+-func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
++// maxTrackedRows bounds the stack storage the scroll detector uses. A taller
++// frame skips the optimization rather than allocate for it.
++const maxTrackedRows = 512
++
++// minScrollRows is the net number of rows a shift must repair before the region
++// sequences pay for themselves.
++const minScrollRows = 3
++
++// appendFrame encodes the difference between terminal, which models what the
++// terminal currently shows, and frame. A scrolling region moves rows the
++// encoder never transmits, so terminal is updated to match: a caller that fails
++// to write the result must discard its model instead of reusing it.
++func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
+ 	width, height := frame.Size()
+-	previousWidth, previousHeight := previous.Size()
+-	full := previous == nil || width != previousWidth || height != previousHeight
++	previousWidth, previousHeight := terminal.Size()
++	repaint := terminal == nil || width != previousWidth || height != previousHeight
+ 	start := len(dst)
++	if synchronized {
++		dst = append(dst, beginSync...)
++	}
+ 	wrote := false
+-	var current render.Style
+-	haveStyle := false
++	var style styleWriter
++	var at cursor
++	var dirty rowBits
++	// Most rows of most frames are untouched, and proving that one row at a time
++	// is far cheaper than proving it one cell at a time. Taller frames fall back
++	// to comparing each row as the diff reaches it.
++	tracked := !repaint && height <= maxTrackedRows
++	if tracked {
++		dirty.mark(frame, terminal, height)
++		if height > 1 && dirty.count >= minScrollRows {
++			if top, bottom, delta, ok := detectScroll(frame, terminal, depth, width, height); ok {
++				// Exposed rows are filled with the active background on terminals
++				// with background-color erase, so the style is reset first.
++				dst = style.reset(dst)
++				dst = appendScrollRegion(dst, top, bottom, delta)
++				terminal.ScrollRows(top, bottom, delta)
++				dirty.mark(frame, terminal, height)
++				at.known = false
++				wrote = true
++			}
++		}
++	}
+ 	for y := 0; y < height; y++ {
++		if tracked && !dirty.has(y) || !tracked && !repaint && frame.EqualRow(terminal, y) {
++			continue
++		}
++		blankFrom := -1
+ 		for x := 0; x < width; {
+ 			cell := frame.Cell(x, y)
+-			if cell.Width == 0 || (!full && equalRenderedCell(frame, previous, x, y, depth)) {
++			if cell.Width == 0 || (!repaint && equalRenderedCell(frame, terminal, x, y, depth)) {
+ 				x++
+ 				continue
+ 			}
++			if blankFrom < 0 {
++				blankFrom = erasableTail(frame, y, width)
++			}
+ 			runStart := x
+ 			for x < width {
+ 				cell = frame.Cell(x, y)
+@@ -35,23 +81,30 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
+ 					x++
+ 					continue
+ 				}
+-				if !full && equalRenderedCell(frame, previous, x, y, depth) {
++				if !repaint && equalRenderedCell(frame, terminal, x, y, depth) {
+ 					break
+ 				}
+ 				x += max(int(cell.Width), 1)
+ 			}
+-			dst = appendCursor(dst, y+1, runStart+1)
++			dst = at.moveTo(dst, runStart, y)
+ 			wrote = true
+-			for column := runStart; column < x; {
++			column, erased := runStart, false
++			for column < x {
++				// Erasing the tail is shorter than transmitting its blanks, and it
++				// also covers every later run on this row, which the frame wants
++				// blank as well.
++				if column >= blankFrom && x-column > len(eraseLine) {
++					dst = style.apply(dst, render.Style{}, depth)
++					dst = append(dst, eraseLine...)
++					erased = true
++					break
++				}
+ 				cell = frame.Cell(column, y)
+ 				if cell.Width == 0 {
+ 					column++
+ 					continue
+ 				}
+-				if !haveStyle || current != cell.Style {
+-					dst = appendStyle(dst, cell.Style, depth)
+-					current, haveStyle = cell.Style, true
+-				}
++				dst = style.apply(dst, cell.Style, depth)
+ 				grapheme := cell.Grapheme
+ 				if grapheme == "" {
+ 					grapheme = " "
+@@ -59,22 +112,23 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
+ 				dst = append(dst, grapheme...)
+ 				column += max(int(cell.Width), 1)
+ 			}
++			at.arrive(column, y, width)
++			if erased {
++				break
++			}
+ 		}
+ 	}
+ 	caretX, caretY, caretOn := frame.Caret()
+-	oldX, oldY, caretWasOn := previous.Caret()
++	oldX, oldY, caretWasOn := terminal.Caret()
+ 	caretMoved := caretOn != caretWasOn || caretOn && (caretX != oldX || caretY != oldY)
+ 	if !wrote && !caretMoved {
+ 		return dst[:start]
+ 	}
+-	if wrote {
+-		dst = append(dst, resetStyle...)
+-	}
+ 	switch {
+ 	case caretOn:
+ 		// Cell runs left the cursor wherever the last run ended, so the caret is
+ 		// repositioned whenever anything was written, not only when it moved.
+-		dst = appendCursor(dst, caretY+1, caretX+1)
++		dst = at.moveTo(dst, caretX, caretY)
+ 		if !caretWasOn {
+ 			dst = append(dst, showCaret...)
+ 		}
+@@ -82,17 +136,257 @@ func appendFrame(dst []byte, frame, previous *render.Buffer, depth capability.Co
+ 		dst = append(dst, hideCaret...)
+ 	}
+ 	if synchronized {
+-		payload := append([]byte("\x1b[?2026h"), dst[start:]...)
+-		payload = append(payload, "\x1b[?2026l"...)
+-		dst = append(dst[:start], payload...)
++		dst = append(dst, endSync...)
+ 	}
+ 	return dst
+ }
+ 
+-func equalRenderedCell(frame, previous *render.Buffer, x, y int, depth capability.ColorDepth) bool {
++// erasableTail returns the first column of the trailing run of default-styled
++// blanks on row y, or width when the row does not end in one. Erase-to-end-of-
++// line is only equivalent to those cells: a background-color-erase terminal
++// fills with the active background, so the encoder resets the style first and
++// refuses tails that carry any style of their own.
++func erasableTail(frame *render.Buffer, y, width int) int {
++	column := width
++	for column > 0 {
++		cell := frame.Cell(column-1, y)
++		if cell.Width != 1 || cell.Style != (render.Style{}) || (cell.Grapheme != " " && cell.Grapheme != "") {
++			break
++		}
++		column--
++	}
++	return column
++}
++
++// rowBits records which rows differ, so the row comparison is paid for once
++// even though both the scroll detector and the diff need the answer.
++type rowBits struct {
++	words [maxTrackedRows / 64]uint64
++	count int
++}
++
++func (r *rowBits) mark(frame, terminal *render.Buffer, height int) {
++	*r = rowBits{}
++	for y := 0; y < height; y++ {
++		if frame.EqualRow(terminal, y) {
++			continue
++		}
++		r.words[y/64] |= 1 << uint(y%64)
++		r.count++
++	}
++}
++
++func (r *rowBits) has(y int) bool { return r.words[y/64]&(1<<uint(y%64)) != 0 }
++
++// detectScroll looks for a vertical shift of full-width rows that the terminal
++// can perform itself. Only full-width row ranges qualify, because a scrolling
++// region has no portable horizontal margins.
++//
++// Rows are compared by hash, so a collision can only cost bytes: the emitted
++// region is applied to the terminal model before the diff runs, and the diff
++// then compares real cells.
++func detectScroll(frame, terminal *render.Buffer, depth capability.ColorDepth, width, height int) (top, bottom, delta int, ok bool) {
++	var frameRows, terminalRows [maxTrackedRows]uint64
++	dirty := false
++	for y := 0; y < height; y++ {
++		frameRows[y] = hashRow(frame, y, width, depth)
++		terminalRows[y] = hashRow(terminal, y, width, depth)
++		dirty = dirty || frameRows[y] != terminalRows[y]
++	}
++	if !dirty {
++		return 0, 0, 0, false
++	}
++	blank := hashBlankRow(width, depth)
++	best := 0
++	for candidate := -(height - 1); candidate <= height-1; candidate++ {
++		if candidate == 0 {
++			continue
++		}
++		first, last := -1, -1
++		for y := max(0, -candidate); y < height && y+candidate < height; y++ {
++			if frameRows[y] == terminalRows[y] || frameRows[y] != terminalRows[y+candidate] {
++				continue
++			}
++			if first < 0 {
++				first = y
++			}
++			last = y
++		}
++		if first < 0 {
++			continue
++		}
++		regionTop, regionBottom := first, last
++		if candidate > 0 {
++			regionBottom = min(last+candidate, height-1)
++		} else {
++			regionTop = max(first+candidate, 0)
++		}
++		score := 0
++		for y := regionTop; y <= regionBottom; y++ {
++			after := blank
++			if source := y + candidate; source >= regionTop && source <= regionBottom {
++				after = terminalRows[source]
++			}
++			switch {
++			case frameRows[y] != terminalRows[y] && frameRows[y] == after:
++				score++
++			case frameRows[y] == terminalRows[y] && frameRows[y] != after:
++				score--
++			}
++		}
++		if score > best {
++			best, top, bottom, delta = score, regionTop, regionBottom, candidate
++		}
++	}
++	return top, bottom, delta, best >= minScrollRows
++}
++
++// appendScrollRegion moves rows inside a scrolling region. Insert- and
++// delete-line are used rather than SU and SD because every terminal this
++// project targets implements them, including the Linux console.
++func appendScrollRegion(dst []byte, top, bottom, delta int) []byte {
++	dst = append(dst, '\x1b', '[')
++	dst = strconv.AppendInt(dst, int64(top+1), 10)
++	dst = append(dst, ';')
++	dst = strconv.AppendInt(dst, int64(bottom+1), 10)
++	dst = append(dst, 'r')
++	dst = appendCursor(dst, top+1, 1)
++	dst = append(dst, '\x1b', '[')
++	dst = strconv.AppendInt(dst, int64(max(delta, -delta)), 10)
++	if delta > 0 {
++		dst = append(dst, 'M')
++	} else {
++		dst = append(dst, 'L')
++	}
++	return append(dst, dropRegion...)
++}
++
++const (
++	hashOffset = 14695981039346656037
++	hashPrime  = 1099511628211
++)
++
++// hashSamples bounds how many cells identify a row. A scroll moves whole rows,
++// so a spread sample distinguishes them well enough, and a collision can only
++// cost bytes: the diff that follows the shift compares real cells.
++const hashSamples = 32
++
++func hashStride(width int) int { return max(1, (width+hashSamples-1)/hashSamples) }
++
++func hashRow(buffer *render.Buffer, y, width int, depth capability.ColorDepth) uint64 {
++	hash := uint64(hashOffset)
++	for x, stride := 0, hashStride(width); x < width; x += stride {
++		cell := buffer.Cell(x, y)
++		hash = hashStyled(hash, cell.Grapheme, cell.Width, cell.Style, depth)
++	}
++	return hash
++}
++
++func hashBlankRow(width int, depth capability.ColorDepth) uint64 {
++	hash := uint64(hashOffset)
++	for x, stride := 0, hashStride(width); x < width; x += stride {
++		hash = hashStyled(hash, render.BlankCell.Grapheme, render.BlankCell.Width, render.BlankCell.Style, depth)
++	}
++	return hash
++}
++
++func hashStyled(hash uint64, grapheme string, width uint8, style render.Style, depth capability.ColorDepth) uint64 {
++	for index := 0; index < len(grapheme); index++ {
++		hash = (hash ^ uint64(grapheme[index])) * hashPrime
++	}
++	hash = (hash ^ uint64(width)) * hashPrime
++	hash = (hash ^ uint64(style.Attrs)) * hashPrime
++	if depth == capability.Monochrome {
++		// Colors are not transmitted, so two rows that differ only in color are
++		// the same row as far as the encoder is concerned.
++		return hash
++	}
++	foregroundMode, foregroundValue := renderedColor(style.Foreground, depth)
++	backgroundMode, backgroundValue := renderedColor(style.Background, depth)
++	hash = (hash ^ uint64(foregroundMode)) * hashPrime
++	hash = (hash ^ uint64(foregroundValue)) * hashPrime
++	hash = (hash ^ uint64(backgroundMode)) * hashPrime
++	return (hash ^ uint64(backgroundValue)) * hashPrime
++}
++
++// cursor tracks where emitted output leaves the terminal cursor so the next
++// move can be relative. It is deliberately conservative: any position the
++// encoder cannot prove is forgotten, and absolute addressing is used instead.
++type cursor struct {
++	x, y  int
++	known bool
++}
++
++func (c *cursor) moveTo(dst []byte, x, y int) []byte {
++	if c.known && c.y == y {
++		from, rewind := c.x, 0
++		if x < from {
++			// A carriage return is the cheapest way back to the left edge.
++			from, rewind = 0, 1
++		}
++		if rewind+forwardCost(x-from) < 4+digits(y+1)+digits(x+1) {
++			if rewind != 0 {
++				dst = append(dst, '\r')
++			}
++			c.x = x
++			return appendForward(dst, x-from)
++		}
++	}
++	c.x, c.y, c.known = x, y, true
++	return appendCursor(dst, y+1, x+1)
++}
++
++// arrive records where printing left the cursor. A run that reached the right
++// edge leaves the terminal in its pending-wrap state, whose column is not
++// portable, so the position is forgotten rather than guessed.
++func (c *cursor) arrive(x, y, width int) {
++	c.x, c.y, c.known = x, y, x < width
++}
++
++func forwardCost(steps int) int {
++	switch {
++	case steps <= 0:
++		return 0
++	case steps == 1:
++		return 3
++	default:
++		return 3 + digits(steps)
++	}
++}
++
++func appendForward(dst []byte, steps int) []byte {
++	if steps <= 0 {
++		return dst
++	}
++	dst = append(dst, '\x1b', '[')
++	if steps > 1 {
++		dst = strconv.AppendInt(dst, int64(steps), 10)
++	}
++	return append(dst, 'C')
++}
++
++func digits(value int) int {
++	count := 1
++	for value >= 10 {
++		value /= 10
++		count++
++	}
++	return count
++}
++
++func equalRenderedCell(frame, terminal *render.Buffer, x, y int, depth capability.ColorDepth) bool {
+ 	current, currentOK := frame.CellOK(x, y)
+-	old, oldOK := previous.CellOK(x, y)
+-	if currentOK != oldOK || !currentOK || current.Grapheme != old.Grapheme || current.Width != old.Width || current.Style.Attrs != old.Style.Attrs {
++	old, oldOK := terminal.CellOK(x, y)
++	if currentOK != oldOK || !currentOK {
++		return false
++	}
++	if current == old {
++		// Identical cells always render identically, and most cells in a frame
++		// are identical, so the downgrade comparison is only reached by the few
++		// that actually differ.
++		return true
++	}
++	if current.Grapheme != old.Grapheme || current.Width != old.Width || current.Style.Attrs != old.Style.Attrs {
+ 		return false
+ 	}
+ 	return equalRenderedColor(current.Style.Foreground, old.Style.Foreground, depth) && equalRenderedColor(current.Style.Background, old.Style.Background, depth)
+@@ -139,28 +433,128 @@ func appendCursor(dst []byte, row, column int) []byte {
+ 	return append(dst, 'H')
+ }
+ 
+-func appendStyle(dst []byte, style render.Style, depth capability.ColorDepth) []byte {
++var attrCodes = [...]struct {
++	mask render.Attr
++	on   string
++	off  string
++}{
++	{render.AttrBold, "1", "22"}, {render.AttrDim, "2", "22"}, {render.AttrItalic, "3", "23"},
++	{render.AttrUnderline, "4", "24"}, {render.AttrBlink, "5", "25"}, {render.AttrReverse, "7", "27"},
++	{render.AttrHidden, "8", "28"}, {render.AttrStrike, "9", "29"},
++}
++
++// intensity is the pair SGR 22 turns off together, so clearing one restates the
++// other.
++const intensity = render.AttrBold | render.AttrDim
++
++// styleWriter emits the shortest SGR that turns the style the terminal already
++// carries into the one a cell needs. A delta is usually shorter than restating
++// the whole style, but not always: clearing several attributes costs more than
++// a reset, so both forms are built and the shorter one is written. The scratch
++// arrays hold the longest form either can produce, so building both is free.
++type styleWriter struct {
++	current  render.Style
++	known    bool
++	fullBuf  [64]byte
++	deltaBuf [64]byte
++}
++
++func (w *styleWriter) apply(dst []byte, style render.Style, depth capability.ColorDepth) []byte {
++	if w.known && w.current == style {
++		return dst
++	}
++	full := appendFullStyle(w.fullBuf[:0], style, depth)
++	if w.known {
++		// An empty delta means the terminal already renders this style at the
++		// active color depth, which is why it is compared before the full form.
++		if delta := appendStyleDelta(w.deltaBuf[:0], w.current, style, depth); len(delta) < len(full) {
++			w.current = style
++			return append(dst, delta...)
++		}
++	}
++	w.current, w.known = style, true
++	return append(dst, full...)
++}
++
++func (w *styleWriter) isDefault() bool { return w.known && w.current == render.Style{} }
++
++// reset puts the terminal back to the default style, which is what an erase or
++// a scrolling region needs before it exposes cells the encoder will not write.
++func (w *styleWriter) reset(dst []byte) []byte {
++	if w.isDefault() {
++		return dst
++	}
++	w.current, w.known = render.Style{}, true
++	return append(dst, resetStyle...)
++}
++
++func appendFullStyle(dst []byte, style render.Style, depth capability.ColorDepth) []byte {
+ 	dst = append(dst, '\x1b', '[', '0')
+-	attrs := [...]struct {
+-		mask render.Attr
+-		code string
+-	}{
+-		{render.AttrBold, "1"}, {render.AttrDim, "2"}, {render.AttrItalic, "3"},
+-		{render.AttrUnderline, "4"}, {render.AttrBlink, "5"}, {render.AttrReverse, "7"},
+-		{render.AttrHidden, "8"}, {render.AttrStrike, "9"},
+-	}
+-	for _, attribute := range attrs {
++	first := false
++	for _, attribute := range attrCodes {
+ 		if style.Attrs&attribute.mask != 0 {
+-			dst = append(dst, ';')
+-			dst = append(dst, attribute.code...)
++			dst = appendParam(dst, &first, attribute.on)
+ 		}
+ 	}
+-	dst = appendColor(dst, style.Foreground, depth, true)
+-	dst = appendColor(dst, style.Background, depth, false)
++	dst = appendColor(dst, &first, style.Foreground, depth, true)
++	dst = appendColor(dst, &first, style.Background, depth, false)
+ 	return append(dst, 'm')
+ }
+ 
+-func appendColor(dst []byte, color render.Color, depth capability.ColorDepth, foreground bool) []byte {
++func appendStyleDelta(dst []byte, from, to render.Style, depth capability.ColorDepth) []byte {
++	start := len(dst)
++	dst = append(dst, '\x1b', '[')
++	first := true
++	cleared, added := from.Attrs&^to.Attrs, to.Attrs&^from.Attrs
++	if cleared&intensity != 0 {
++		dst = appendParam(dst, &first, "22")
++		added |= to.Attrs & intensity
++	}
++	for _, attribute := range attrCodes {
++		if attribute.mask&intensity == 0 && cleared&attribute.mask != 0 {
++			dst = appendParam(dst, &first, attribute.off)
++		}
++	}
++	for _, attribute := range attrCodes {
++		if added&attribute.mask != 0 {
++			dst = appendParam(dst, &first, attribute.on)
++		}
++	}
++	if !equalRenderedColor(from.Foreground, to.Foreground, depth) {
++		dst = appendColorChange(dst, &first, to.Foreground, depth, true)
++	}
++	if !equalRenderedColor(from.Background, to.Background, depth) {
++		dst = appendColorChange(dst, &first, to.Background, depth, false)
++	}
++	if first {
++		return dst[:start]
++	}
++	return append(dst, 'm')
++}
++
++func appendColorChange(dst []byte, first *bool, color render.Color, depth capability.ColorDepth, foreground bool) []byte {
++	if color.Mode == render.ColorDefault {
++		if foreground {
++			return appendParam(dst, first, "39")
++		}
++		return appendParam(dst, first, "49")
++	}
++	return appendColor(dst, first, color, depth, foreground)
++}
++
++func appendParam(dst []byte, first *bool, code string) []byte {
++	return append(appendSeparator(dst, first), code...)
++}
++
++func appendSeparator(dst []byte, first *bool) []byte {
++	if !*first {
++		dst = append(dst, ';')
++	}
++	*first = false
++	return dst
++}
++
++func appendColor(dst []byte, first *bool, color render.Color, depth capability.ColorDepth, foreground bool) []byte {
+ 	if color.Mode == render.ColorDefault || depth == capability.Monochrome {
+ 		return dst
+ 	}
+@@ -169,7 +563,7 @@ func appendColor(dst []byte, color render.Color, depth capability.ColorDepth, fo
+ 		red, green, blue, _ := color.RGB()
+ 		switch depth {
+ 		case capability.TrueColor:
+-			dst = append(dst, ';')
++			dst = appendSeparator(dst, first)
+ 			if foreground {
+ 				dst = append(dst, "38;2;"...)
+ 			} else {
+@@ -189,7 +583,7 @@ func appendColor(dst []byte, color render.Color, depth capability.ColorDepth, fo
+ 		index = indexed16(index)
+ 	}
+ 	if depth >= capability.ANSI256 && (color.Mode == render.ColorIndexed || color.Mode == render.ColorRGB) {
+-		dst = append(dst, ';')
++		dst = appendSeparator(dst, first)
+ 		if foreground {
+ 			dst = append(dst, "38;5;"...)
+ 		} else {
+@@ -205,7 +599,7 @@ func appendColor(dst []byte, color render.Color, depth capability.ColorDepth, fo
+ 	if !foreground {
+ 		code += 10
+ 	}
+-	dst = append(dst, ';')
++	dst = appendSeparator(dst, first)
+ 	return strconv.AppendInt(dst, int64(code), 10)
+ }
+ 
+diff --git a/internal/terminal/encoder_bytes_test.go b/internal/terminal/encoder_bytes_test.go
+new file mode 100644
+index 0000000..abaae4c
+--- /dev/null
++++ b/internal/terminal/encoder_bytes_test.go
+@@ -0,0 +1,414 @@
++package terminal
++
++import (
++	"strconv"
++	"strings"
++	"testing"
++
++	"github.com/lux-tui/lux/capability"
++	"github.com/lux-tui/lux/render"
++)
++
++// present encodes one frame and replays it through the reference grid, so every
++// byte-shape assertion below is also proved to reconstruct the frame exactly.
++func encodeAndVerify(t *testing.T, grid *referenceGrid, frame, previous *render.Buffer, depth capability.ColorDepth) string {
++	t.Helper()
++	data := grid.present(t, frame, previous, depth, false)
++	grid.requireMatches(t, frame, depth)
++	return string(data)
++}
++
++func TestEncoderMovesCursorRelativelyWithinARow(t *testing.T) {
++	frame := render.NewBuffer(40, 10)
++	grid := newReferenceGrid(40, 10)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas := render.NewCanvas(frame)
++	canvas.Put(10, 5, "A", render.Style{})
++	canvas.Put(14, 5, "B", render.Style{})
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if !strings.Contains(data, "\x1b[6;11H") {
++		t.Fatalf("the first run must be addressed absolutely: %q", data)
++	}
++	if !strings.Contains(data, "\x1b[3C") {
++		t.Fatalf("a short forward move must not restate the row: %q", data)
++	}
++}
++
++func TestEncoderKeepsCursorWhenACaretFollowsItsRun(t *testing.T) {
++	frame := render.NewBuffer(40, 10)
++	grid := newReferenceGrid(40, 10)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	render.NewCanvas(frame).Text(4, 7, "typed", render.Style{})
++	frame.SetCaret(9, 7)
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	// The run leaves the cursor exactly on the caret, so no move is needed at all.
++	if want := "\x1b[8;5H\x1b[0mtyped\x1b[?25h"; data != want {
++		t.Fatalf("caret after its own run emitted %q, want %q", data, want)
++	}
++}
++
++func TestEncoderErasesBlankTailInsteadOfTransmittingIt(t *testing.T) {
++	frame := render.NewBuffer(40, 4)
++	canvas := render.NewCanvas(frame)
++	canvas.Text(0, 1, strings.Repeat("X", 30), render.Style{Foreground: render.RGBColor(200, 40, 90)})
++	grid := newReferenceGrid(40, 4)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas.Clear(render.Style{})
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if !strings.Contains(data, eraseLine) {
++		t.Fatalf("a cleared row must be erased, not blanked cell by cell: %q", data)
++	}
++	if strings.Contains(data, strings.Repeat(" ", 4)) {
++		t.Fatalf("blanks were transmitted despite the erase: %q", data)
++	}
++}
++
++func TestEncoderKeepsStyledBlanksOutOfTheErase(t *testing.T) {
++	// Erase-to-end-of-line fills with the active background on terminals with
++	// background-color erase and with the default background on those without,
++	// so a tail that carries its own style must be transmitted instead.
++	frame := render.NewBuffer(40, 2)
++	canvas := render.NewCanvas(frame)
++	canvas.Clear(render.Style{Background: render.IndexedColor(24)})
++	canvas.Text(0, 0, strings.Repeat("X", 30), render.Style{})
++	grid := newReferenceGrid(40, 2)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas.Clear(render.Style{Background: render.IndexedColor(24)})
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if strings.Contains(data, eraseLine) {
++		t.Fatalf("a styled tail must not be erased: %q", data)
++	}
++}
++
++func TestEncoderEmitsStyleDeltas(t *testing.T) {
++	frame := render.NewBuffer(8, 1)
++	canvas := render.NewCanvas(frame)
++	background := render.RGBColor(0, 0, 255)
++	canvas.Put(0, 0, "A", render.Style{Foreground: render.RGBColor(255, 0, 0), Background: background, Attrs: render.AttrBold})
++	canvas.Put(1, 0, "B", render.Style{Foreground: render.RGBColor(0, 255, 0), Background: background, Attrs: render.AttrBold})
++	grid := newReferenceGrid(8, 1)
++	data := encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++	if !strings.Contains(data, "A\x1b[38;2;0;255;0mB") {
++		t.Fatalf("a foreground change must not restate the whole style: %q", data)
++	}
++}
++
++func TestEncoderClearsIntensityWithoutLosingItsPartner(t *testing.T) {
++	// SGR 22 turns bold and dim off together, so dropping bold must restate dim.
++	frame := render.NewBuffer(8, 1)
++	canvas := render.NewCanvas(frame)
++	canvas.Put(0, 0, "A", render.Style{Attrs: render.AttrBold | render.AttrDim | render.AttrUnderline})
++	canvas.Put(1, 0, "B", render.Style{Attrs: render.AttrDim | render.AttrUnderline})
++	grid := newReferenceGrid(8, 1)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++}
++
++func TestEncoderSkipsStyleChangesInvisibleAtTheActiveDepth(t *testing.T) {
++	frame := render.NewBuffer(8, 1)
++	canvas := render.NewCanvas(frame)
++	canvas.Put(0, 0, "a", render.Style{Foreground: render.RGBColor(255, 0, 0)})
++	canvas.Put(1, 0, "b", render.Style{Foreground: render.ANSIColor(9)})
++	grid := newReferenceGrid(8, 1)
++	data := encodeAndVerify(t, grid, frame, nil, capability.ANSI16)
++	if !strings.Contains(data, "ab") {
++		t.Fatalf("colors that downgrade to the same value must not emit an SGR: %q", data)
++	}
++}
++
++// TestEncoderFrameBudget pins the encoded size of two representative frames.
++// It is a regression guard, not a target: a change that grows either number
++// should be a deliberate one.
++func TestEncoderFrameBudget(t *testing.T) {
++	frame := render.NewBuffer(80, 24)
++	paintSample(frame, 0)
++	grid := newReferenceGrid(80, 24)
++	repaint := encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	paintSample(frame, 1)
++	frame.SetCaret(12, 3)
++	diff := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++
++	for _, budget := range []struct {
++		name  string
++		size  int
++		limit int
++	}{
++		{"repaint", len(repaint), 700},
++		{"diff", len(diff), 700},
++	} {
++		if budget.size > budget.limit {
++			t.Fatalf("%s frame is %d bytes, budget is %d", budget.name, budget.size, budget.limit)
++		}
++	}
++	t.Logf("80x24 truecolor: repaint %d bytes, diff %d bytes", len(repaint), len(diff))
++}
++
++func BenchmarkEncodeFrame(b *testing.B) {
++	frame := render.NewBuffer(120, 40)
++	paintSample(frame, 0)
++	previous := frame.Clone()
++	paintSample(frame, 1)
++	scratch := make([]byte, 0, 8192)
++	size := 0
++	b.ReportAllocs()
++	b.ResetTimer()
++	for range b.N {
++		scratch = appendFrame(scratch[:0], frame, previous, capability.TrueColor, false)
++		size = len(scratch)
++	}
++	b.ReportMetric(float64(size), "bytes/frame")
++}
++
++func BenchmarkScanUnchanged(b *testing.B) {
++	frame := render.NewBuffer(120, 40)
++	paintSample(frame, 0)
++	previous := frame.Clone()
++	b.ResetTimer()
++	for range b.N {
++		appendFrame(nil, frame, previous, capability.TrueColor, false)
++	}
++}
++
++// BenchmarkScrollFrame prices a one-row scroll of a 120x40 list. The clone is
++// deliberately inside the loop: appendFrame mutates its terminal buffer when
++// it scrolls, so every iteration needs a pristine predecessor. The clone cost
++// is part of the scroll path's honest price, and an A/B against the legacy
++// encoder must clone symmetrically.
++func BenchmarkScrollFrame(b *testing.B) {
++	base := render.NewBuffer(120, 40)
++	scrollingList(base, 0)
++	frame := base.Clone()
++	scrollingList(frame, 1)
++	scratch := make([]byte, 0, 8192)
++	size := 0
++	b.ReportAllocs()
++	b.ResetTimer()
++	for range b.N {
++		scratch = appendFrame(scratch[:0], frame, base.Clone(), capability.TrueColor, false)
++		size = len(scratch)
++	}
++	b.ReportMetric(float64(size), "bytes/frame")
++}
++
++func TestEncoderRewindsToACaretLeftOfItsRun(t *testing.T) {
++	frame := render.NewBuffer(40, 3)
++	grid := newReferenceGrid(40, 3)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	render.NewCanvas(frame).Text(20, 1, "edited", render.Style{})
++	frame.SetCaret(22, 1)
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if !strings.Contains(data, "\r\x1b[22C") {
++		t.Fatalf("a caret left of its run must rewind, not readdress: %q", data)
++	}
++}
++
++// scrollingList paints a viewport of numbered rows starting at offset, framed
++// by a static header and footer that must survive the scroll untouched.
++func scrollingList(buffer *render.Buffer, offset int) {
++	canvas := render.NewCanvas(buffer)
++	canvas.Clear(render.Style{})
++	_, height := buffer.Size()
++	canvas.Text(0, 0, "HEADER", render.Style{Attrs: render.AttrBold})
++	canvas.Text(0, height-1, "FOOTER", render.Style{Attrs: render.AttrDim})
++	for row := 1; row < height-1; row++ {
++		canvas.Text(0, row, "entry "+strconv.Itoa(offset+row)+" payload text", render.Style{
++			Foreground: render.IndexedColor(uint8(30 + (offset+row)%40)),
++		})
++	}
++}
++
++func TestEncoderScrollsARegionInsteadOfRepainting(t *testing.T) {
++	frame := render.NewBuffer(60, 24)
++	scrollingList(frame, 0)
++	grid := newReferenceGrid(60, 24)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	scrollingList(frame, 1)
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if !strings.Contains(data, "\x1b[2;23r") {
++		t.Fatalf("the scrolled rows must be moved by the terminal: %q", data)
++	}
++	if !strings.Contains(data, "\x1b[1M") {
++		t.Fatalf("a one-row scroll must delete one line: %q", data)
++	}
++	if !strings.Contains(data, dropRegion) {
++		t.Fatalf("the scrolling region must be released: %q", data)
++	}
++	if strings.Contains(data, "HEADER") || strings.Contains(data, "FOOTER") {
++		t.Fatalf("static rows outside the region were retransmitted: %q", data)
++	}
++	if len(data) > 120 {
++		t.Fatalf("a one-row scroll cost %d bytes: %q", len(data), data)
++	}
++}
++
++// A scroll is accepted on a score, not on proof, so a row that already
++// matched before the shift can land on different content: the terminal moves
++// it without comparing it. Its dirty bit was cleared before ScrollRows, so
++// the bitset must be re-marked afterwards or that row is silently skipped.
++// Five rows shift up here, but row 6 keeps the old row 6's bytes, which the
++// shift vacates to a blank.
++func TestEncoderRepaintsRowsThatWereEqualBeforeTheScroll(t *testing.T) {
++	frame := render.NewBuffer(60, 8)
++	canvas := render.NewCanvas(frame)
++	canvas.Text(0, 0, "HEADER", render.Style{Attrs: render.AttrBold})
++	words := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}
++	for row, word := range words {
++		canvas.Text(0, row+1, word, render.Style{})
++	}
++	canvas.Text(0, 7, "FOOTER", render.Style{Attrs: render.AttrDim})
++	grid := newReferenceGrid(60, 8)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas.Clear(render.Style{})
++	canvas.Text(0, 0, "HEADER", render.Style{Attrs: render.AttrBold})
++	for row := 1; row <= 5; row++ {
++		canvas.Text(0, row, words[row], render.Style{})
++	}
++	canvas.Text(0, 6, words[5], render.Style{})
++	canvas.Text(0, 7, "FOOTER", render.Style{Attrs: render.AttrDim})
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if !strings.Contains(data, "\x1b[2;7r") {
++		t.Fatalf("the shifted rows must be moved by the terminal: %q", data)
++	}
++	if strings.Count(data, "zeta") != 1 {
++		t.Fatalf("the row exposed by the scroll must be repainted once: %q", data)
++	}
++	if strings.Contains(data, "alpha") {
++		t.Fatalf("a row scrolled off the screen must not be retransmitted: %q", data)
++	}
++}
++
++func TestEncoderScrollsBackwards(t *testing.T) {
++	frame := render.NewBuffer(60, 24)
++	scrollingList(frame, 8)
++	grid := newReferenceGrid(60, 24)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	for _, step := range []int{7, 4, 0} {
++		previous := frame.Clone()
++		scrollingList(frame, step)
++		data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++		if !strings.Contains(data, "L") {
++			t.Fatalf("scrolling back to offset %d did not insert lines: %q", step, data)
++		}
++	}
++}
++
++func TestEncoderScrollsUnderEveryColorDepth(t *testing.T) {
++	for _, depth := range []capability.ColorDepth{capability.TrueColor, capability.ANSI256, capability.ANSI16, capability.Monochrome} {
++		for _, synchronized := range []bool{false, true} {
++			frame := render.NewBuffer(48, 16)
++			scrollingList(frame, 0)
++			grid := newReferenceGrid(48, 16)
++			grid.present(t, frame, nil, depth, synchronized)
++			grid.requireMatches(t, frame, depth)
++			for step := 1; step <= 5; step++ {
++				previous := frame.Clone()
++				scrollingList(frame, step*step)
++				frame.SetCaret(step, step)
++				grid.present(t, frame, previous, depth, synchronized)
++				grid.requireMatches(t, frame, depth)
++			}
++		}
++	}
++}
++
++func TestEncoderKeepsStyledRowsOutOfAScroll(t *testing.T) {
++	// A scroll exposes rows the encoder never writes. On a terminal with
++	// background-color erase those rows carry the active background, so the
++	// style must be reset before the region moves.
++	frame := render.NewBuffer(40, 12)
++	canvas := render.NewCanvas(frame)
++	canvas.Clear(render.Style{Background: render.IndexedColor(52)})
++	for row := range 12 {
++		canvas.Text(0, row, "line "+strconv.Itoa(row), render.Style{Background: render.IndexedColor(52)})
++	}
++	grid := newReferenceGrid(40, 12)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas.Clear(render.Style{Background: render.IndexedColor(52)})
++	for row := range 12 {
++		canvas.Text(0, row, "line "+strconv.Itoa(row+1), render.Style{Background: render.IndexedColor(52)})
++	}
++	encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++}
++
++func TestEncoderIgnoresScrollsThatDoNotPay(t *testing.T) {
++	frame := render.NewBuffer(40, 12)
++	canvas := render.NewCanvas(frame)
++	canvas.Text(0, 3, "one", render.Style{})
++	grid := newReferenceGrid(40, 12)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	previous := frame.Clone()
++	canvas.Clear(render.Style{})
++	canvas.Text(0, 2, "one", render.Style{})
++	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++	if strings.Contains(data, dropRegion) {
++		t.Fatalf("a shift that repairs two rows is cheaper to repaint: %q", data)
++	}
++}
++
++// TestScrollBudgetIsIndependentOfScreenSize pins the whole point of the
++// scrolling region: moving a list by one row costs the same on a small screen
++// and a large one, because only the exposed rows are transmitted. Without the
++// region the same frames cost 826 and 1434 bytes.
++func TestScrollBudgetIsIndependentOfScreenSize(t *testing.T) {
++	for _, size := range []struct{ w, h int }{{80, 24}, {120, 40}} {
++		frame := render.NewBuffer(size.w, size.h)
++		scrollingList(frame, 0)
++		grid := newReferenceGrid(size.w, size.h)
++		encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++		previous := frame.Clone()
++		scrollingList(frame, 1)
++		one := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++
++		previous = frame.Clone()
++		scrollingList(frame, 6)
++		five := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++
++		if len(one) > 80 {
++			t.Fatalf("%dx%d one-row scroll is %d bytes: %q", size.w, size.h, len(one), one)
++		}
++		if len(five) > 260 {
++			t.Fatalf("%dx%d five-row scroll is %d bytes: %q", size.w, size.h, len(five), five)
++		}
++		t.Logf("%dx%d list: scroll by 1 = %d bytes, scroll by 5 = %d bytes", size.w, size.h, len(one), len(five))
++	}
++}
++
++func TestEncoderDoesNotInheritTheTerminalStyle(t *testing.T) {
++	// A frame must not depend on the SGR state it finds. That matters most for a
++	// scroll: on a terminal with background-color erase the exposed rows are
++	// filled with the active background, which the encoder never chose.
++	frame := render.NewBuffer(40, 12)
++	scrollingList(frame, 0)
++	grid := newReferenceGrid(40, 12)
++	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
++
++	grid.style = render.Style{Background: render.IndexedColor(160), Attrs: render.AttrUnderline}
++	previous := frame.Clone()
++	scrollingList(frame, 1)
++	encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++
++	grid.style = render.Style{Foreground: render.IndexedColor(9), Attrs: render.AttrReverse}
++	previous = frame.Clone()
++	render.NewCanvas(frame).Clear(render.Style{})
++	encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
++}
+diff --git a/internal/terminal/lifecycle_test.go b/internal/terminal/lifecycle_test.go
+index 89fe483..0e61a0b 100644
+--- a/internal/terminal/lifecycle_test.go
++++ b/internal/terminal/lifecycle_test.go
+@@ -1,6 +1,7 @@
+ package terminal
+ 
+ import (
++	"bytes"
+ 	"context"
+ 	"io"
+ 	"os"
+@@ -12,6 +13,10 @@ import (
+ 	"github.com/lux-tui/lux/render"
+ )
+ 
++// hangTimeout only bounds a test that would otherwise hang forever, so a loaded
++// machine cannot turn a stall into a reported logic failure.
++const hangTimeout = 10 * time.Second
++
+ type gatedWriter struct {
+ 	mu      sync.Mutex
+ 	started chan struct{}
+@@ -37,7 +42,7 @@ func TestCanceledPresentNeverCommitsPrevious(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ 	defer func() { _ = output.Close() }()
+-	backend := &Backend{opened: true, output: output, features: capability.Set{Color: capability.TrueColor}}
++	backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
+ 	if err := backend.Present(ctx, render.NewBuffer(2, 1)); err == nil {
+ 		t.Fatal("canceled Present succeeded")
+ 	}
+@@ -83,7 +88,7 @@ func TestGatedWriterFixture(t *testing.T) {
+ 	go func() { done <- writeAllContext(context.Background(), writer, []byte("frame")) }()
+ 	select {
+ 	case <-writer.started:
+-	case <-time.After(time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("writer did not start")
+ 	}
+ 	close(writer.release)
+@@ -91,3 +96,92 @@ func TestGatedWriterFixture(t *testing.T) {
+ 		t.Fatal(err)
+ 	}
+ }
++
++func TestFailedPresentDiscardsTheTerminalModel(t *testing.T) {
++	output, err := os.CreateTemp(t.TempDir(), "output")
++	if err != nil {
++		t.Fatal(err)
++	}
++	backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
++	frame := render.NewBuffer(8, 2)
++	render.NewCanvas(frame).Text(0, 0, "first", render.Style{})
++	if err := backend.Present(context.Background(), frame); err != nil {
++		t.Fatal(err)
++	}
++	if backend.previous == nil {
++		t.Fatal("a presented frame was not retained")
++	}
++	if err := output.Close(); err != nil {
++		t.Fatal(err)
++	}
++	render.NewCanvas(frame).Text(0, 1, "second", render.Style{})
++	if err := backend.Present(context.Background(), frame); err == nil {
++		t.Fatal("writing to a closed file succeeded")
++	}
++	// The encoder mutates its model of the terminal, so a partial write must not
++	// leave that model in use.
++	if backend.previous != nil {
++		t.Fatal("a failed write kept a stale terminal model")
++	}
++}
++
++func TestCloseWritesItsRestoreWhenTheWriterIsIdle(t *testing.T) {
++	output, err := os.CreateTemp(t.TempDir(), "output")
++	if err != nil {
++		t.Fatal(err)
++	}
++	backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
++	frame := render.NewBuffer(8, 2)
++	render.NewCanvas(frame).Text(0, 0, "hello", render.Style{})
++	if err := backend.Present(context.Background(), frame); err != nil {
++		t.Fatal(err)
++	}
++	if err := backend.Close(); err != nil {
++		t.Fatal(err)
++	}
++	written, err := os.ReadFile(output.Name())
++	if err != nil {
++		t.Fatal(err)
++	}
++	if !bytes.HasSuffix(written, []byte(leaveTerminal)) {
++		t.Fatalf("Close did not restore the terminal last: %q", written)
++	}
++	if bytes.Count(written, []byte(leaveTerminal)) != 1 {
++		t.Fatalf("the restore sequence appears more than once: %q", written)
++	}
++}
++
++func TestCloseGivesUpOnAWriterThatStopsDraining(t *testing.T) {
++	reader, writer, err := os.Pipe()
++	if err != nil {
++		t.Fatal(err)
++	}
++	// Nothing drains the pipe, so a large frame fills it and blocks mid-write
++	// while holding the write slot.
++	t.Cleanup(func() { _ = reader.Close() })
++	backend := &Backend{opened: true, output: writer, writer: writer, features: capability.Set{Color: capability.TrueColor}}
++	presented := make(chan error, 1)
++	frame := render.NewBuffer(400, 2000)
++	render.NewCanvas(frame).Clear(render.Style{Foreground: render.RGBColor(1, 2, 3)})
++	go func() { presented <- backend.Present(context.Background(), frame) }()
++
++	deadline := time.Now().Add(hangTimeout)
++	for !backend.writerBusy() {
++		if time.Now().After(deadline) {
++			t.Skip("the pipe accepted the whole frame, so no write was ever blocked")
++		}
++		time.Sleep(time.Millisecond)
++	}
++
++	closed := make(chan error, 1)
++	start := time.Now()
++	go func() { closed <- backend.Close() }()
++	select {
++	case <-closed:
++	case <-time.After(hangTimeout):
++		t.Fatal("Close hung behind a blocked write")
++	}
++	if elapsed := time.Since(start); elapsed > hangTimeout/2 {
++		t.Fatalf("Close took %s to give up", elapsed)
++	}
++}
+diff --git a/internal/terminal/terminal_test.go b/internal/terminal/terminal_test.go
+index 3229865..a55bd76 100644
+--- a/internal/terminal/terminal_test.go
++++ b/internal/terminal/terminal_test.go
+@@ -100,7 +100,7 @@ func TestReadLoopClosesCapturedDoneChannel(t *testing.T) {
+ 	}
+ 	select {
+ 	case <-done:
+-	case <-time.After(time.Second):
++	case <-time.After(hangTimeout):
+ 		t.Fatal("read loop did not close its captured generation channel")
+ 	}
+ }
+@@ -111,7 +111,9 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
+ 	style := render.Style{Foreground: render.RGBColor(1, 2, 3), Background: render.IndexedColor(42), Attrs: render.AttrBold}
+ 	canvas.Text(0, 0, "A界B", style)
+ 	got := string(appendFrame(nil, frame, nil, capability.TrueColor, false))
+-	want := "\x1b[1;1H\x1b[0;1;38;2;1;2;3;48;5;42mA界B\x1b[0m \x1b[0m"
++	// The trailing blank leaves the terminal at the default style, so the frame
++	// needs no closing reset.
++	want := "\x1b[1;1H\x1b[0;1;38;2;1;2;3;48;5;42mA界B\x1b[0m "
+ 	if got != want {
+ 		t.Fatalf("full frame\n got: %q\nwant: %q", got, want)
+ 	}
+@@ -122,7 +124,7 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
+ 	}
+ 	canvas.Put(4, 0, "X", render.Style{})
+ 	got = string(appendFrame(nil, frame, previous, capability.ANSI16, true))
+-	want = "\x1b[?2026h\x1b[1;5H\x1b[0mX\x1b[0m\x1b[?2026l"
++	want = "\x1b[?2026h\x1b[1;5H\x1b[0mX\x1b[?2026l"
+ 	if got != want {
+ 		t.Fatalf("diff\n got: %q\nwant: %q", got, want)
+ 	}
+@@ -143,10 +145,10 @@ func TestANSIFrameSkipsColorsEquivalentAfterDowngrade(t *testing.T) {
+ 
+ func TestColorDowngradeAndPlainFrame(t *testing.T) {
+ 	style := render.Style{Foreground: render.RGBColor(255, 0, 0), Background: render.IndexedColor(21)}
+-	if got, want := string(appendStyle(nil, style, capability.ANSI16)), "\x1b[0;91;104m"; got != want {
++	if got, want := string(appendFullStyle(nil, style, capability.ANSI16)), "\x1b[0;91;104m"; got != want {
+ 		t.Fatalf("ANSI16 style = %q, want %q", got, want)
+ 	}
+-	if got, want := string(appendStyle(nil, style, capability.ANSI256)), "\x1b[0;38;5;196;48;5;21m"; got != want {
++	if got, want := string(appendFullStyle(nil, style, capability.ANSI256)), "\x1b[0;38;5;196;48;5;21m"; got != want {
+ 		t.Fatalf("ANSI256 style = %q, want %q", got, want)
+ 	}
+ 
+diff --git a/internal/terminal/vtgrid_test.go b/internal/terminal/vtgrid_test.go
+index 744381a..e69cd22 100644
+--- a/internal/terminal/vtgrid_test.go
++++ b/internal/terminal/vtgrid_test.go
+@@ -19,6 +19,8 @@ type referenceGrid struct {
+ 	canvas   *render.Canvas
+ 	style    render.Style
+ 	x, y     int
++	top      int
++	bottom   int
+ 	caretOn  bool
+ 	sync     int
+ 	maxSync  int
+@@ -30,7 +32,7 @@ type referenceGrid struct {
+ // changed-run diff verifiable.
+ func newReferenceGrid(width, height int) *referenceGrid {
+ 	buffer := render.NewBuffer(width, height)
+-	grid := &referenceGrid{buffer: buffer}
++	grid := &referenceGrid{buffer: buffer, bottom: height - 1}
+ 	grid.canvas = render.NewCanvas(buffer)
+ 	return grid
+ }
+@@ -47,6 +49,12 @@ func (g *referenceGrid) feed(t *testing.T, data []byte) {
+ 		run.Reset()
+ 	}
+ 	for index := 0; index < len(text); {
++		if text[index] == '\r' {
++			flush()
++			g.x = 0
++			index++
++			continue
++		}
+ 		if text[index] != 0x1b {
+ 			run.WriteByte(text[index])
+ 			index++
+@@ -67,13 +75,59 @@ func (g *referenceGrid) escape(t *testing.T, text string) int {
+ 	if !strings.HasPrefix(text, "\x1b[") {
+ 		return 0
+ 	}
+-	end := strings.IndexAny(text[2:], "Hhlm")
++	end := strings.IndexAny(text[2:], "CHKLMhlmr")
+ 	if end < 0 {
+ 		return 0
+ 	}
+ 	end += 2
+ 	body, final := text[2:end], text[end]
++	width, height := g.buffer.Size()
+ 	switch {
++	case final == 'r':
++		g.top, g.bottom = 0, height-1
++		if body != "" {
++			first, last, ok := strings.Cut(body, ";")
++			if !ok {
++				return 0
++			}
++			top, errTop := strconv.Atoi(first)
++			bottom, errBottom := strconv.Atoi(last)
++			if errTop != nil || errBottom != nil || top < 1 || bottom > height || top >= bottom {
++				return 0
++			}
++			g.top, g.bottom = top-1, bottom-1
++		}
++		// DECSTBM homes the cursor.
++		g.x, g.y = 0, 0
++	case final == 'L' || final == 'M':
++		lines := 1
++		if body != "" {
++			value, err := strconv.Atoi(body)
++			if err != nil || value < 1 {
++				return 0
++			}
++			lines = value
++		}
++		if g.y < g.top || g.y > g.bottom {
++			// Insert and delete line are ignored outside the scrolling region.
++			return end + 1
++		}
++		delta := lines
++		exposedTop, exposedBottom := g.bottom-lines+1, g.bottom
++		if final == 'L' {
++			delta, exposedTop, exposedBottom = -lines, g.y, min(g.y+lines-1, g.bottom)
++		}
++		g.buffer.ScrollRows(g.y, g.bottom, delta)
++		// Background-color erase fills the exposed rows with the active
++		// background, so an encoder that forgets to reset its style is caught.
++		if g.style != (render.Style{}) {
++			for y := max(exposedTop, g.top); y <= exposedBottom; y++ {
++				for x := 0; x < width; x++ {
++					g.canvas.Put(x, y, " ", g.style)
++				}
++			}
++		}
++		g.x = 0
+ 	case final == 'H':
+ 		row, column, ok := strings.Cut(body, ";")
+ 		if !ok {
+@@ -85,6 +139,23 @@ func (g *referenceGrid) escape(t *testing.T, text string) int {
+ 			return 0
+ 		}
+ 		g.x, g.y = x-1, y-1
++	case final == 'C':
++		steps := 1
++		if body != "" {
++			value, err := strconv.Atoi(body)
++			if err != nil || value < 1 {
++				return 0
++			}
++			steps = value
++		}
++		g.x = min(g.x+steps, width-1)
++	case final == 'K':
++		if body != "" && body != "0" {
++			return 0
++		}
++		for x := g.x; x < width; x++ {
++			g.canvas.Put(x, g.y, " ", g.style)
++		}
+ 	case final == 'm':
+ 		if !g.sgr(body) {
+ 			return 0
+@@ -110,6 +181,12 @@ func (g *referenceGrid) sgr(body string) bool {
+ 		"1": render.AttrBold, "2": render.AttrDim, "3": render.AttrItalic, "4": render.AttrUnderline,
+ 		"5": render.AttrBlink, "7": render.AttrReverse, "8": render.AttrHidden, "9": render.AttrStrike,
+ 	}
++	// SGR 22 clears bold and dim together, which is why the encoder restates the
++	// survivor instead of assuming one code per attribute.
++	cleared := map[string]render.Attr{
++		"22": render.AttrBold | render.AttrDim, "23": render.AttrItalic, "24": render.AttrUnderline,
++		"25": render.AttrBlink, "27": render.AttrReverse, "28": render.AttrHidden, "29": render.AttrStrike,
++	}
+ 	for index := 0; index < len(parameters); index++ {
+ 		parameter := parameters[index]
+ 		if parameter == "0" || parameter == "" {
+@@ -120,6 +197,10 @@ func (g *referenceGrid) sgr(body string) bool {
+ 			g.style.Attrs |= attr
+ 			continue
+ 		}
++		if attr, ok := cleared[parameter]; ok {
++			g.style.Attrs &^= attr
++			continue
++		}
+ 		value, err := strconv.Atoi(parameter)
+ 		if err != nil {
+ 			return false
+@@ -132,6 +213,8 @@ func (g *referenceGrid) sgr(body string) bool {
+ 			}
+ 			g.setColor(value == 38, color)
+ 			index += consumed - 1
++		case value == 39 || value == 49:
++			g.setColor(value == 39, render.Color{})
+ 		case value >= 30 && value <= 37:
+ 			g.setColor(true, render.ANSIColor(uint8(value-30)))
+ 		case value >= 40 && value <= 47:
+@@ -291,16 +374,15 @@ func TestReferenceGridMatchesEncodedFrames(t *testing.T) {
+ 				}
+ 
+ 				// Cells change while the caret stays put: the cursor must be
+-				// repositioned anyway, because the runs moved it.
++				// repositioned anyway, because the runs moved it. requireMatches
++				// compares the grid cursor with the frame caret, so an encoder that
++				// only repositions on caret movement fails here.
+ 				previous := frame.Clone()
+ 				caretX, caretY, _ := frame.Caret()
+ 				render.NewCanvas(frame).Put(19, 5, "Z", render.Style{Attrs: render.AttrBold})
+ 				frame.SetCaret(caretX, caretY)
+-				data = grid.present(t, frame, previous, depth.depth, synchronized)
++				grid.present(t, frame, previous, depth.depth, synchronized)
+ 				grid.requireMatches(t, frame, depth.depth)
+-				if want := "\x1b[" + strconv.Itoa(caretY+1) + ";" + strconv.Itoa(caretX+1) + "H"; !strings.Contains(string(data), want) {
+-					t.Fatalf("a stationary caret was not restated after cell runs: %q", data)
+-				}
+ 
+ 				// Erasing content back to blanks must be transmitted too.
+ 				previous = frame.Clone()
+diff --git a/render/buffer.go b/render/buffer.go
+index 4eb67ff..abcdf18 100644
+--- a/render/buffer.go
++++ b/render/buffer.go
+@@ -221,6 +221,55 @@ func (b *Buffer) AppendDiff(changes []Change, previous *Buffer) []Change {
+ // Diff returns cells that differ from previous.
+ func (b *Buffer) Diff(previous *Buffer) []Change { return b.AppendDiff(nil, previous) }
+ 
++// EqualRow reports whether row y is identical in both buffers. It exists
++// because a diff spends most of its time proving that unchanged rows are
++// unchanged, and one comparison per row is far cheaper than one per cell.
++func (b *Buffer) EqualRow(other *Buffer, y int) bool {
++	if b == nil || other == nil || b.width != other.width || y < 0 || y >= b.height || y >= other.height {
++		return false
++	}
++	left, right := b.row(y), other.row(y)
++	for index := range left {
++		if left[index] != right[index] {
++			return false
++		}
++	}
++	return true
++}
++
++// ScrollRows moves the rows in [top, bottom] by delta and fills the rows this
++// vacates with default blanks, which is exactly what a terminal scrolling
++// region does. A positive delta moves content up. It reports whether anything
++// moved; the caret is presentation state and is left alone.
++func (b *Buffer) ScrollRows(top, bottom, delta int) bool {
++	if b == nil || delta == 0 || b.width == 0 {
++		return false
++	}
++	top, bottom = max(top, 0), min(bottom, b.height-1)
++	if top > bottom {
++		return false
++	}
++	steps := min(max(delta, -delta), bottom-top+1)
++	if delta > 0 {
++		for y := top; y+steps <= bottom; y++ {
++			copy(b.row(y), b.row(y+steps))
++		}
++		for y := max(bottom-steps+1, top); y <= bottom; y++ {
++			fillCells(b.row(y), BlankCell)
++		}
++		return true
++	}
++	for y := bottom; y-steps >= top; y-- {
++		copy(b.row(y), b.row(y-steps))
++	}
++	for y := top; y < min(top+steps, bottom+1); y++ {
++		fillCells(b.row(y), BlankCell)
++	}
++	return true
++}
++
++func (b *Buffer) row(y int) []Cell { return b.cells[y*b.width : (y+1)*b.width] }
++
+ func (b *Buffer) put(x, y int, grapheme string, width int, style Style) bool {
+ 	if b == nil || y < 0 || y >= b.height || x < 0 || x >= b.width || width < 1 || width > 2 || x+width > b.width {
+ 		return false
+diff --git a/render/buffer_test.go b/render/buffer_test.go
+new file mode 100644
+index 0000000..18b13be
+--- /dev/null
++++ b/render/buffer_test.go
+@@ -0,0 +1,54 @@
++package render
++
++import "testing"
++
++func TestEqualRowMatchesIdenticalRowsOnly(t *testing.T) {
++	frame := NewBuffer(8, 3)
++	peer := NewBuffer(8, 3)
++	canvas, other := NewCanvas(frame), NewCanvas(peer)
++	canvas.Text(0, 0, "alpha", Style{Attrs: AttrBold})
++	other.Text(0, 0, "alpha", Style{Attrs: AttrBold})
++	canvas.Text(0, 1, "beta", Style{})
++	other.Text(0, 1, "betz", Style{})
++
++	if !frame.EqualRow(peer, 0) {
++		t.Fatal("identical rows must compare equal")
++	}
++	if frame.EqualRow(peer, 1) {
++		t.Fatal("rows differing in one grapheme must compare unequal")
++	}
++	if !frame.EqualRow(peer, 2) {
++		t.Fatal("untouched blank rows must compare equal")
++	}
++
++	other.Text(0, 0, "alpha", Style{Attrs: AttrBold, Foreground: IndexedColor(9)})
++	if frame.EqualRow(peer, 0) {
++		t.Fatal("rows differing only in style must compare unequal")
++	}
++}
++
++func TestEqualRowRejectsUnusableComparisons(t *testing.T) {
++	buffer := NewBuffer(8, 3)
++	var missing *Buffer
++
++	if buffer.EqualRow(missing, 0) {
++		t.Fatal("a nil peer must never compare equal")
++	}
++	if missing.EqualRow(buffer, 0) {
++		t.Fatal("a nil receiver must never compare equal")
++	}
++
++	narrow := NewBuffer(4, 3)
++	if buffer.EqualRow(narrow, 0) || narrow.EqualRow(buffer, 0) {
++		t.Fatal("rows of buffers with different widths must never compare equal")
++	}
++
++	tall := NewBuffer(8, 6)
++	if buffer.EqualRow(tall, 3) || tall.EqualRow(buffer, 3) {
++		t.Fatal("a row outside either buffer must never compare equal")
++	}
++
++	if buffer.EqualRow(buffer, -1) || buffer.EqualRow(buffer, 3) {
++		t.Fatal("out-of-range rows must never compare equal")
++	}
++}
+diff --git a/render/canvas.go b/render/canvas.go
+index 05ce8ce..51c6528 100644
+--- a/render/canvas.go
++++ b/render/canvas.go
+@@ -100,6 +100,16 @@ func (c *Canvas) SetCaret(x, y int) {
+ 	c.buffer.SetCaret(spot.X, spot.Y)
+ }
+ 
++// ClipRect returns the canvas's active clip in terminal-buffer coordinates.
++// Controls drawn through the same canvas share it, which is what lets an
++// interaction layer tell a container's own children from its neighbours.
++func (c *Canvas) ClipRect() Rect {
++	if c == nil || c.buffer == nil {
++		return Rect{}
++	}
++	return c.clip.Intersect(c.buffer.Bounds())
++}
++
+ // Subview returns a canvas whose origin is rect's clipped top-left corner.
+ func (c *Canvas) Subview(rect Rect) *Canvas {
+ 	if c == nil {
+diff --git a/render/render_test.go b/render/render_test.go
+index 3f9fd91..74abac7 100644
+--- a/render/render_test.go
++++ b/render/render_test.go
+@@ -196,3 +196,54 @@ func BenchmarkBufferDiffNoChanges(b *testing.B) {
+ 		changes = back.AppendDiff(changes[:0], front)
+ 	}
+ }
++
++func TestScrollRowsMovesAndBlanksLikeATerminal(t *testing.T) {
++	buffer := NewBuffer(3, 5)
++	canvas := NewCanvas(buffer)
++	for row := range 5 {
++		canvas.Text(0, row, string(rune('a'+row)), Style{Attrs: AttrBold})
++	}
++	rowText := func(y int) string {
++		text := ""
++		for x := 0; x < 3; x++ {
++			text += buffer.Cell(x, y).Grapheme
++		}
++		return text
++	}
++
++	// Scrolling up inside a region leaves the rows outside it untouched.
++	if !buffer.ScrollRows(1, 3, 1) {
++		t.Fatal("ScrollRows reported no movement")
++	}
++	for y, want := range []string{"a  ", "c  ", "d  ", "   ", "e  "} {
++		if got := rowText(y); got != want {
++			t.Fatalf("after scrolling up, row %d = %q, want %q", y, got, want)
++		}
++	}
++	if got := buffer.Cell(0, 3); got != BlankCell {
++		t.Fatalf("an exposed row kept its style: %#v", got)
++	}
++
++	if !buffer.ScrollRows(1, 3, -2) {
++		t.Fatal("ScrollRows reported no movement")
++	}
++	for y, want := range []string{"a  ", "   ", "   ", "c  ", "e  "} {
++		if got := rowText(y); got != want {
++			t.Fatalf("after scrolling down, row %d = %q, want %q", y, got, want)
++		}
++	}
++
++	// A shift at least as large as the region blanks all of it, and impossible
++	// requests move nothing.
++	if !buffer.ScrollRows(0, 4, 9) {
++		t.Fatal("an oversized shift reported no movement")
++	}
++	for y := range 5 {
++		if got := rowText(y); got != "   " {
++			t.Fatalf("row %d survived an oversized shift: %q", y, got)
++		}
++	}
++	if buffer.ScrollRows(1, 3, 0) || buffer.ScrollRows(4, 1, 1) || (*Buffer)(nil).ScrollRows(0, 1, 1) {
++		t.Fatal("ScrollRows moved something it should not have")
++	}
++}
+diff --git a/ui/caret_test.go b/ui/caret_test.go
+index 1103b7d..a687050 100644
+--- a/ui/caret_test.go
++++ b/ui/caret_test.go
+@@ -377,33 +377,166 @@ func TestEnsureOffsetKeepsCaretVisibleAndMinimal(t *testing.T) {
+ 
+ func TestEnsureOffsetStaysLinear(t *testing.T) {
+ 	// Measuring the candidate window inside a loop made this quadratic: a pasted
+-	// 3 KB value took seconds per frame. One absolute bound catches a severe
+-	// regression within a second, and a growth ratio catches a mild one without
+-	// depending on machine speed or the race detector's overhead.
+-	measure := func(clusters, repeats int) (time.Duration, int) {
+-		input := TextInput{Value: strings.Repeat("ab界🙂", clusters)}
+-		input.Cursor, input.Anchor = len(input.Value), len(input.Value)
++	// 3 KB value took seconds per frame. One 10 KB recomputation is a handful of
++	// milliseconds when linear and seconds when quadratic, so a generous bound
++	// separates them. Retrying on a slow reading keeps a loaded machine from
++	// reporting scheduling noise as a regression, since noise can only add time.
++	const bound = 200 * time.Millisecond
++	input := TextInput{Value: strings.Repeat("ab界🙂", 1<<10)}
++	input.Cursor, input.Anchor = len(input.Value), len(input.Value)
++	slowest := time.Duration(0)
++	for range 3 {
++		input.Offset = 0
+ 		started := time.Now()
+-		for range repeats {
+-			input.Offset = 0
+-			input.ensureOffset(20, true)
++		input.ensureOffset(20, true)
++		elapsed := time.Since(started)
++		if input.Offset == 0 || input.Offset > input.Cursor {
++			t.Fatalf("offset = %d for cursor %d", input.Offset, input.Cursor)
+ 		}
+-		return time.Since(started), input.Offset
++		if elapsed <= bound {
++			return
++		}
++		slowest = max(slowest, elapsed)
++	}
++	t.Fatalf("every window recomputation over %d bytes exceeded %s, worst %s", len(input.Value), bound, slowest)
++}
++
++func TestScrollKeysBubbleAtBoundary(t *testing.T) {
++	outer := region{id: "outer", bounds: render.Rect{W: 20, H: 10}, flags: Focusable | Scrollable}
++	inner := region{id: "inner", bounds: render.Rect{X: 4, Y: 2, W: 10, H: 4}, flags: Focusable | Scrollable, atTop: true}
++	var ctx Context
++	presented(&ctx, []region{outer, inner}, modal{})
++	if !ctx.Focus("inner") {
++		t.Fatal("inner viewport must be focusable")
++	}
++
++	// Down still moves the focused viewport.
++	if action, handled := ctx.Handle(event.KeyPress(event.KeyDown, 0)); !handled || action.Target != "inner" || action.Kind != Scroll {
++		t.Fatalf("down = %#v handled=%v", action, handled)
++	}
++	// Up cannot, so the enclosing viewport receives the same key.
++	for _, code := range []event.KeyCode{event.KeyUp, event.KeyPageUp, event.KeyHome} {
++		action, handled := ctx.Handle(event.KeyPress(code, 0))
++		if !handled || action.Target != "outer" || action.Kind != Scroll {
++			t.Fatalf("%v = %#v handled=%v", code, action, handled)
++		}
++	}
++	// Focus stays where it was; only the action was redirected.
++	if !ctx.Focused("inner") {
++		t.Fatalf("bubbling moved focus")
++	}
++
++	// With no enclosing viewport able to move, the key stays on the focused one.
++	var alone Context
++	presented(&alone, []region{
++		{id: "panel", bounds: render.Rect{W: 20, H: 10}, flags: Focusable},
++		{id: "list", bounds: render.Rect{X: 1, Y: 1, W: 8, H: 4}, flags: Focusable | Scrollable, atTop: true},
++	}, modal{})
++	alone.Focus("list")
++	if action, handled := alone.Handle(event.KeyPress(event.KeyUp, 0)); !handled || action.Target != "list" {
++		t.Fatalf("unbubbled key = %#v handled=%v", action, handled)
++	}
++}
++
++func TestScrolledOutControlStaysReachable(t *testing.T) {
++	buffer := render.NewBuffer(20, 8)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	container := ScrollState{}
++
++	// A three-row window over nine rows of content: the last button is painted
++	// outside the viewport, so it clips away entirely.
++	build := func() {
++		ctx.Begin(frame)
++		view := ctx.ScrollViewport("panel", canvas, render.Rect{Y: 1, W: 20, H: 3}, &container, 9, ScrollStyle{Passive: true})
++		top := -container.Offset
++		ctx.Button("first", view, render.Rect{Y: top, W: 8, H: 1}, "one", ButtonStyle{})
++		ctx.Button("last", view, render.Rect{Y: top + 8, W: 8, H: 1}, "two", ButtonStyle{})
+ 	}
+-	single, offset := measure(1<<10, 1)
+-	if offset == 0 {
+-		t.Fatalf("a value far wider than the field must scroll, offset = %d", offset)
++	build()
++	if len(ctx.building) != 3 {
++		t.Fatalf("regions = %d, want the viewport and both buttons", len(ctx.building))
+ 	}
+-	if single > time.Second {
+-		t.Fatalf("one window recomputation over 10 KB took %s", single)
++	hidden := ctx.building[2]
++	if hidden.id != "last" || !hidden.bounds.Empty() || hidden.height != 1 {
++		t.Fatalf("scrolled-out button = %#v", hidden)
+ 	}
+-	small, _ := measure(2<<10, 5)
+-	large, _ := measure(4<<10, 5)
+-	if small < time.Millisecond {
+-		t.Skipf("baseline %s is too small to compare growth", small)
++	presented(&ctx, ctx.building, modal{})
++
++	// Tab reaches it even though it has no hit area, and it cannot be clicked.
++	ctx.Focus("first")
++	if action, handled := ctx.Handle(event.KeyPress(event.KeyTab, 0)); !handled || action.Target != "last" {
++		t.Fatalf("tab = %#v handled=%v", action, handled)
++	}
++	click := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 2, Y: 9, Action: event.MousePress, Button: event.MouseLeft}}
++	if action, _ := ctx.Handle(click); action.Target == "last" {
++		t.Fatalf("a scrolled-out control must not be clickable: %#v", action)
++	}
++
++	// The container is told exactly how far to scroll to reveal it.
++	ctx.Focus("last")
++	delta := ctx.FocusDelta("panel")
++	if delta != 6 {
++		t.Fatalf("focus delta = %d, want 6", delta)
++	}
++	container.Offset += delta
++	build()
++	if revealed := ctx.building[2]; revealed.bounds.Empty() {
++		t.Fatalf("scrolling did not reveal the control: %#v", revealed)
++	}
++	presented(&ctx, ctx.building, modal{})
++	ctx.Focus("last")
++	if again := ctx.FocusDelta("panel"); again != 0 {
++		t.Fatalf("a visible control still asks for %d rows", again)
++	}
++}
++
++func TestFocusDeltaIgnoresUnrelatedContainers(t *testing.T) {
++	var ctx Context
++	presented(&ctx, []region{
++		{id: "panel", bounds: render.Rect{X: 0, Y: 0, W: 10, H: 4}, flags: Focusable | Scrollable},
++		{id: "outside", bounds: render.Rect{X: 12, Y: 9, W: 6, H: 1}, originX: 12, originY: 9, height: 1, flags: Focusable | Activatable},
++	}, modal{})
++	ctx.Focus("outside")
++	if delta := ctx.FocusDelta("panel"); delta != 0 {
++		t.Fatalf("a control in another column asked for %d rows", delta)
++	}
++	if delta := ctx.FocusDelta("missing"); delta != 0 {
++		t.Fatalf("unknown container returned %d", delta)
++	}
++	if delta := ctx.FocusDelta("outside"); delta != 0 {
++		t.Fatalf("a non-scrollable container returned %d", delta)
++	}
++}
++
++func TestRevealIgnoresNeighbourOfNestedViewport(t *testing.T) {
++	buffer := render.NewBuffer(20, 10)
++	canvas := render.NewCanvas(buffer)
++	frame := &lux.Frame{Canvas: canvas}
++	var ctx Context
++	panel := ScrollState{}
++	inner := ScrollState{}
++
++	// A nested viewport with a button below it, both drawn into the panel. The
++	// button is the viewport's neighbour, not its child, even though it sits in
++	// the same columns and below its last row.
++	ctx.Begin(frame)
++	view := ctx.ScrollViewport("panel", canvas, render.Rect{W: 20, H: 4}, &panel, 12, ScrollStyle{Passive: true})
++	ctx.ScrollViewport("inner", view, render.Rect{Y: 0, W: 20, H: 2}, &inner, 40, ScrollStyle{})
++	ctx.Button("below", view, render.Rect{Y: 9, W: 8, H: 1}, "go", ButtonStyle{})
++	regions := ctx.building
++	if len(regions) != 3 {
++		t.Fatalf("regions = %d", len(regions))
++	}
++	presented(&ctx, regions, modal{})
++	ctx.Focus("below")
++
++	if delta := ctx.FocusDelta("inner"); delta != 0 {
++		t.Fatalf("the nested viewport tried to scroll a neighbour into view by %d rows", delta)
+ 	}
+-	if large > 3*small {
+-		t.Fatalf("doubling the text grew the cost from %s to %s, which is not linear", small, large)
++	if delta := ctx.FocusDelta("panel"); delta != 6 {
++		t.Fatalf("panel delta = %d, want 6", delta)
+ 	}
+ }
+ 
+diff --git a/ui/context.go b/ui/context.go
+index a153937..cf753d4 100644
+--- a/ui/context.go
++++ b/ui/context.go
+@@ -60,10 +60,17 @@ type Action struct {
+ }
+ 
+ type region struct {
+-	id            ID
+-	bounds        render.Rect
+-	originX       int
+-	originY       int
++	id     ID
++	bounds render.Rect
++	// originX, originY and height describe the control's own rectangle before
++	// clipping, which is what tells a container how far to scroll to reveal it.
++	originX int
++	originY int
++	height  int
++	// clip is the canvas clip the control was drawn through. A container's own
++	// children share its clip, which distinguishes them from its neighbours even
++	// when a child is scrolled entirely out of view.
++	clip          render.Rect
+ 	flags         Flags
+ 	modal         ID
+ 	contentHeight int
+@@ -111,6 +118,7 @@ type Context struct {
+ 	captured     ID
+ 	captureLeft  bool
+ 	restoreFocus ID
++	revealed     ID
+ 
+ 	pointerKnown bool
+ 	pointerX     int
+@@ -151,34 +159,119 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
+ 		return
+ 	}
+ 	absolute := canvas.GlobalRect(bounds)
+-	if absolute.Empty() {
+-		return
+-	}
++	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
++	own := render.Rect{X: originX, Y: originY, W: max(bounds.W, 0), H: max(bounds.H, 0)}
++	clip := canvas.ClipRect()
+ 	c.mu.Lock()
+ 	defer c.mu.Unlock()
+ 	if !c.begun {
+ 		return
+ 	}
++	if absolute.Empty() {
++		// A control a container has scrolled out of view keeps its identity so
++		// Tab can still reach it; it registers no hit area, and the container
++		// reveals it. Without such a container there is nothing that could bring
++		// it back, so it is dropped as before.
++		if own.Empty() || !scrolledOut(c.building, clip, c.currentModal) {
++			return
++		}
++	}
+ 	for _, existing := range c.building {
+ 		if existing.id == id {
+ 			panic("ui: duplicate control ID " + string(id))
+ 		}
+ 	}
+ 	contentHeight := options.ContentHeight
+-	originX, originY := canvas.GlobalPoint(bounds.X, bounds.Y)
+ 	if contentHeight < 0 {
+ 		contentHeight = -1
+ 	} else {
+ 		// Preserve local row coordinates when the region is clipped at its top.
+ 		contentHeight = min(contentHeight, max(absolute.Bottom()-originY, 0))
+ 	}
+-	next := region{id: id, bounds: absolute, originX: originX, originY: originY, flags: flags, modal: c.currentModal, contentHeight: contentHeight, atTop: options.AtTop, atBottom: options.AtBottom}
++	next := region{id: id, bounds: absolute, originX: originX, originY: originY, height: own.H, clip: clip, flags: flags, modal: c.currentModal, contentHeight: contentHeight, atTop: options.AtTop, atBottom: options.AtBottom}
+ 	c.building = append(c.building, next)
+ 	if c.viewFocus == "" && focusable(next, c.currentModal) {
+ 		c.viewFocus = id
+ 	}
+ }
+ 
++// FocusDelta returns the number of rows a scrollable container must move for the
++// focused control to be fully visible, and zero when nothing is needed.
++// ScrollViewport applies this itself; a hand-rolled container adds the result to
++// its own offset.
++func (c *Context) FocusDelta(container ID) int {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	return c.focusDeltaLocked(container)
++}
++
++// revealDelta answers only while focus has moved since the last presented frame,
++// so scrolling a container away from the focused control is not undone on the
++// next event.
++func (c *Context) revealDelta(container ID) int {
++	c.mu.Lock()
++	defer c.mu.Unlock()
++	if c.focused == c.revealed {
++		return 0
++	}
++	return c.focusDeltaLocked(container)
++}
++
++func (c *Context) focusDeltaLocked(container ID) int {
++	holder, ok := regionByID(c.committed, container)
++	if !ok || holder.flags&Scrollable == 0 || holder.bounds.Empty() {
++		return 0
++	}
++	target, ok := regionByID(c.committed, c.focused)
++	if !ok || target.id == container || target.height <= 0 {
++		return 0
++	}
++	own := render.Rect{X: target.originX, Y: target.originY, W: max(target.bounds.W, 1), H: target.height}
++	if !holdsChild(holder, target) {
++		return 0
++	}
++	if above := own.Y - holder.bounds.Y; above < 0 {
++		return above
++	}
++	if below := own.Bottom() - holder.bounds.Bottom(); below > 0 {
++		return below
++	}
++	return 0
++}
++
++// scrolledOut reports whether an already-registered scrollable region owns the
++// clip a control was drawn through, which is what distinguishes a scrolled-out
++// child from a control that simply does not fit on screen.
++func scrolledOut(building []region, clip render.Rect, activeModal ID) bool {
++	for index := len(building) - 1; index >= 0; index-- {
++		item := building[index]
++		if item.flags&Scrollable == 0 || item.flags&Disabled != 0 {
++			continue
++		}
++		if activeModal != "" && item.modal != activeModal {
++			continue
++		}
++		if containsRect(item.bounds, clip) {
++			return true
++		}
++	}
++	return false
++}
++
++// holdsChild reports whether target was drawn inside holder rather than beside
++// it. Comparing rectangles cannot answer this once a child is scrolled out of
++// view, but the clip a control was drawn through still identifies its container.
++func holdsChild(holder, target region) bool {
++	return containsRect(holder.bounds, target.clip)
++}
++
++func containsRect(outer, inner render.Rect) bool {
++	if outer.Empty() || inner.Empty() {
++		return false
++	}
++	return outer.X <= inner.X && outer.Y <= inner.Y && outer.Right() >= inner.Right() && outer.Bottom() >= inner.Bottom()
++}
++
+ // End binds the registered geometry to this exact presented frame. Dropped,
+ // failed, and pre-resize frames never become interactive.
+ func (c *Context) End(frame *lux.Frame) {
+@@ -203,6 +296,9 @@ func (c *Context) End(frame *lux.Frame) {
+ 	}
+ 	c.currentModal = ""
+ 	c.begun = false
++	// Every container in this frame has had its chance to reveal the focused
++	// control, so the move is accounted for whether or not one was needed.
++	c.revealed = c.focused
+ 	c.mu.Unlock()
+ 
+ 	frame.OnPresented(func() { c.commit(generation, sequence, next) })
+@@ -340,6 +436,9 @@ func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
+ 			return actionFor(target, Input, next), true
+ 		}
+ 		if target.flags&Scrollable != 0 && scrollKey(key.Code) {
++			if scrollTarget, ok := keyScrollTarget(c.committed, target, key.Code); ok {
++				return actionFor(scrollTarget, Scroll, next), true
++			}
+ 			return actionFor(target, Scroll, next), true
+ 		}
+ 	}
+@@ -466,14 +565,59 @@ func wheelTarget(state snapshot, mouse event.MouseEvent) (region, bool) {
+ func canScroll(item region, button event.MouseButton) bool {
+ 	switch button {
+ 	case event.MouseWheelUp:
+-		return !item.atTop
++		return canScrollUp(item, true)
+ 	case event.MouseWheelDown:
+-		return !item.atBottom
++		return canScrollUp(item, false)
+ 	default:
+ 		return true
+ 	}
+ }
+ 
++func canScrollUp(item region, up bool) bool {
++	if up {
++		return !item.atTop
++	}
++	return !item.atBottom
++}
++
++// keyScrollTarget bubbles a scroll key the same way the wheel bubbles: the
++// focused viewport keeps it while it can still move, and otherwise the enclosing
++// viewport that can move receives it. A focused region the container has already
++// scrolled out of view keeps the key, because FocusDelta will reveal it first.
++func keyScrollTarget(state snapshot, focused region, code event.KeyCode) (region, bool) {
++	up, ok := scrollKeyUp(code)
++	if !ok || focused.bounds.Empty() || canScrollUp(focused, up) {
++		return focused, true
++	}
++	for index := len(state.regions) - 1; index >= 0; index-- {
++		item := state.regions[index]
++		if item.id == focused.id || item.flags&Scrollable == 0 || item.flags&Disabled != 0 {
++			continue
++		}
++		if state.modal.id != "" && item.modal != state.modal.id {
++			continue
++		}
++		if !encloses(item.bounds, focused.bounds) {
++			continue
++		}
++		if canScrollUp(item, up) {
++			return item, true
++		}
++	}
++	return focused, true
++}
++
++func scrollKeyUp(code event.KeyCode) (up bool, ok bool) {
++	switch code {
++	case event.KeyUp, event.KeyPageUp, event.KeyHome:
++		return true, true
++	case event.KeyDown, event.KeyPageDown, event.KeyEnd:
++		return false, true
++	default:
++		return false, false
++	}
++}
++
+ func encloses(outer, inner render.Rect) bool {
+ 	return outer.X <= inner.X && outer.Y <= inner.Y && outer.Right() >= inner.Right() && outer.Bottom() >= inner.Bottom()
+ }
+diff --git a/ui/controls.go b/ui/controls.go
+index a04bdc3..6f1e183 100644
+--- a/ui/controls.go
++++ b/ui/controls.go
+@@ -26,15 +26,17 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
+ 		return
+ 	}
+ 	// Draw against the logical rectangle and let the canvas clip it, so a button
+-	// inside a scrolled container keeps its geometry instead of sliding.
+-	if bounds.Intersect(canvas.Bounds()).Empty() {
+-		return
+-	}
++	// inside a scrolled container keeps its geometry instead of sliding. Register
++	// before deciding what is visible: a control a container scrolled out of view
++	// keeps its identity so Tab can still reach it.
+ 	flags := Focusable | Activatable
+ 	if style.Disabled {
+ 		flags |= Disabled
+ 	}
+ 	c.Region(id, canvas, bounds, flags)
++	if bounds.Intersect(canvas.Bounds()).Empty() {
++		return
++	}
+ 	visual := style.Normal
+ 	switch {
+ 	case style.Disabled:
+@@ -158,9 +160,6 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
+ 	}
+ 	// Rows are addressed in the list's own coordinates; clipping is the canvas's
+ 	// job, which keeps a partially scrolled list aligned with its content.
+-	if bounds.Intersect(canvas.Bounds()).Empty() {
+-		return
+-	}
+ 	flags := Focusable | Scrollable | Activatable
+ 	if style.Disabled {
+ 		flags |= Disabled
+@@ -172,6 +171,9 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
+ 		AtTop:         state.Selected <= 0,
+ 		AtBottom:      state.Selected >= len(items)-1,
+ 	})
++	if bounds.Intersect(canvas.Bounds()).Empty() {
++		return
++	}
+ 	canvas = canvas.Clip(bounds)
+ 	canvas.Fill(bounds, " ", style.Normal)
+ 	marker := style.Marker
+diff --git a/ui/scroll.go b/ui/scroll.go
+index 08eac3e..cb636a1 100644
+--- a/ui/scroll.go
++++ b/ui/scroll.go
+@@ -112,6 +112,9 @@ func (c *Context) ScrollViewport(id ID, canvas *render.Canvas, rect render.Rect,
+ 	}
+ 	view := canvas.Subview(rect)
+ 	_, rows := view.Size()
++	// Tab can move focus to a control this viewport has scrolled out of view, so
++	// reveal it before the visible range is measured.
++	state.Offset += c.revealDelta(id)
+ 	visible := state.Range(content, rows)
+ 	flags := Focusable | Scrollable
+ 	if style.Passive {
+diff --git a/ui/textinput.go b/ui/textinput.go
+index dfcff5c..fe81cc4 100644
+--- a/ui/textinput.go
++++ b/ui/textinput.go
+@@ -181,7 +181,9 @@ func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *T
+ 	if style.Disabled {
+ 		flags |= Disabled
+ 	}
+-	c.Region(id, canvas, line, flags)
++	// The field's own rectangle is registered, not the visible remainder, so a
++	// container that scrolled it out of view can still reach and reveal it.
++	c.Region(id, canvas, rect, flags)
+ 	if line.Empty() {
+ 		input.Offset = input.Cursor
+ 		return
