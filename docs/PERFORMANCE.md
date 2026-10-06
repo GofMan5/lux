@@ -142,8 +142,27 @@ rows the shift exposes, so moving a list by one row costs the same 66 bytes on
 an 80×24 screen and on a 120×40 one. `TestEncoderFrameBudget` and
 `TestScrollBudgetIsIndependentOfScreenSize` pin those numbers so a future change
 cannot quietly grow them. Encoding itself is 0 alloc/op; scanning an unchanged
-120×40 frame costs roughly 100 µs on a loaded machine, and that cost is
-unchanged by this work.
+120×40 frame now goes through a per-row bitset of dirty rows and costs about
+25 µs (median, i5-10400F, was roughly 100–210 µs before the bitset), and the
+whole idle Present path — scan plus the no-change skip — costs about 25 µs
+where it previously cost about 102 µs. A 249 B diff frame encodes in about
+75 µs (was 109 µs) and a one-row scroll of a 120×40 list in about 122 µs
+(was 289 µs). The scan lives in the terminal package but compares rows
+through `render.Buffer.EqualRow`, so the row-comparison cost is included in
+the encoder scan numbers above rather than hidden in the render package: a
+standalone 40-row `EqualRow` pass over the same frame costs 33–40 µs, i.e.
+roughly 0.8–1.0 µs per row, and the bitset keeps the full scan below the raw
+40-compare cost. Re-measuring the capability-negotiation tree interleaved
+against the previous commit on this machine (ambient load from a running
+screen recorder) kept every hot-path benchmark within that noise band;
+negotiation adds no per-frame cost.
+
+Startup also negotiates capabilities before entering the alternate screen: a
+terminal that answers finishes as soon as its DA1 and DECRPM replies arrive
+(a few milliseconds, well under the deadline), while a silent terminal costs
+exactly one bounded wait of 150 ms by default, tunable or disableable via
+`LUX_TUI_PROBE_TIMEOUT`. Bytes typed during the probe are replayed into the
+event loop losslessly, so the tax never swallows input.
 
 Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
 show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
