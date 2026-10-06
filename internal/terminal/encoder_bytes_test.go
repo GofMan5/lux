@@ -254,6 +254,44 @@ func TestEncoderScrollsARegionInsteadOfRepainting(t *testing.T) {
 	}
 }
 
+// A scroll is accepted on a score, not on proof, so a row that already
+// matched before the shift can land on different content: the terminal moves
+// it without comparing it. Its dirty bit was cleared before ScrollRows, so
+// the bitset must be re-marked afterwards or that row is silently skipped.
+// Five rows shift up here, but row 6 keeps the old row 6's bytes, which the
+// shift vacates to a blank.
+func TestEncoderRepaintsRowsThatWereEqualBeforeTheScroll(t *testing.T) {
+	frame := render.NewBuffer(60, 8)
+	canvas := render.NewCanvas(frame)
+	canvas.Text(0, 0, "HEADER", render.Style{Attrs: render.AttrBold})
+	words := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}
+	for row, word := range words {
+		canvas.Text(0, row+1, word, render.Style{})
+	}
+	canvas.Text(0, 7, "FOOTER", render.Style{Attrs: render.AttrDim})
+	grid := newReferenceGrid(60, 8)
+	encodeAndVerify(t, grid, frame, nil, capability.TrueColor)
+
+	previous := frame.Clone()
+	canvas.Clear(render.Style{})
+	canvas.Text(0, 0, "HEADER", render.Style{Attrs: render.AttrBold})
+	for row := 1; row <= 5; row++ {
+		canvas.Text(0, row, words[row], render.Style{})
+	}
+	canvas.Text(0, 6, words[5], render.Style{})
+	canvas.Text(0, 7, "FOOTER", render.Style{Attrs: render.AttrDim})
+	data := encodeAndVerify(t, grid, frame, previous, capability.TrueColor)
+	if !strings.Contains(data, "\x1b[2;7r") {
+		t.Fatalf("the shifted rows must be moved by the terminal: %q", data)
+	}
+	if strings.Count(data, "zeta") != 1 {
+		t.Fatalf("the row exposed by the scroll must be repainted once: %q", data)
+	}
+	if strings.Contains(data, "alpha") {
+		t.Fatalf("a row scrolled off the screen must not be retransmitted: %q", data)
+	}
+}
+
 func TestEncoderScrollsBackwards(t *testing.T) {
 	frame := render.NewBuffer(60, 24)
 	scrollingList(frame, 8)
