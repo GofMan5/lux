@@ -1,0 +1,201 @@
+stage 5b — capability negotiation verification
+==============================================
+
+Scope: the uncommitted negotiation slice on top of da6d788:
+negotiate.go, backend.go (probe block in Open, Present snapshot, readLoop
+prefill), encoder.go (appendFrame scrollRegions/synchronized params),
+platform_unix.go, platform_windows.go (readInput semantics),
+capability/capability.go (ScrollRegions field).
+
+1. Production code state
+------------------------
+All three adversarial BUGs and the RISK from the first review are fixed and
+re-verified:
+- BUG 1 prefill deadlock: readLoop takes a prefill parameter, feeds it with
+  parser.feed(prefill, false) before the first read, holds no mutex across
+  event-channel sends. Regression test:
+  TestReadLoopReplaysLargePrefillWithoutDeadlock (cap-8 channel, 200-byte
+  prefill, green, race clean).
+- BUG 2 racy Present read of b.synchronized: field removed; Present snapshots
+  b.features.SynchronizedOutput under mu. Regression test:
+  TestPresentSyncVetoReachesOutput (green, race clean).
+- BUG 3 runaway stream: len(stream) >= maxProbeStream checked after append;
+  TestNegotiateCapsRunawayStream pins 4096.
+- RISK 'c' false positive: isAttributeBody gate + reconciliation rows.
+- NIT (documented, not fixed): writeAllContext failure returns probeReply{},
+  nil — a silent probe is indistinguishable from a write-error probe; both
+  end in the safe default capability set.
+
+2. Windows pipe-wait empirical finding
+--------------------------------------
+Probe program (temp module outside the repo, x/sys v0.35.0,
+WaitForSingleObject on an os.Pipe read handle, 200 ms wait):
+- empty pipe, writer open: result=0x102 WAIT_TIMEOUT, err=nil, wall 210.1 ms
+- pipe with one pending write ("hi"): result=0x102 WAIT_TIMEOUT, err=nil,
+  wall 211.5 ms
+Consequences, folded into the design:
+- WaitForSingleObject never reports failure on pipe handles (no WAIT_FAILED
+  path to handle).
+- Pipe data NEVER signals the wait: the fast answering path is unreachable
+  on Windows pipe input. Production console handles (CONIN$) DO signal, so
+  real terminals are unaffected; a pipe-backed stdin on Windows degrades to
+  the bounded silent wait (~155 ms measured), never a hang.
+- Reply-delivery negotiate tests therefore skip on Windows; timeout/bounded
+  paths run everywhere.
+
+3. Probe startup tax (measured)
+-------------------------------
+Harness: .verification/stage5b-probe-tax.go, copied to
+internal/terminal/zz_probe_tax_test.go during measurement only (the
+dot-directory .verification is ignored by the go tool; the zz copy was
+deleted after the run).
+Command: go test ./internal/terminal -run 'TestProbeTax' -count=1 -v
+Results (raw: stage5b-tax-run.txt):
+- TestProbeTaxSilentTerminalBounded: PASS, 0.15-0.16 s per run across 6 runs
+  (silent terminal pays exactly one bounded ~150 ms wait; the test asserts
+  140 ms <= wall <= 2 s, !answered, empty leftover).
+- TestProbeTaxAnsweringTerminalFast: SKIP on Windows by design (section 2);
+  on Unix a goroutine writes the full reply after 5 ms; the test asserts
+  answered + both supported + empty leftover, wall < 120 ms.
+- LUX_TUI_PROBE_TIMEOUT=off disables negotiation entirely (negotiate is
+  never called): tax 0 ms.
+Doc impact: PERFORMANCE.md gained the "Startup also negotiates ..." note.
+
+4. Hot-path A/B vs da6d788 (no regression)
+------------------------------------------
+BEFORE = git worktree at .verification-worktree-before (a clean da6d788
+checkout, built and benchmarked standalone — this is the executed
+rollback). AFTER = the working tree with the negotiation slice.
+Method: interleaved rounds, -benchtime=1s -count=3, medians per round;
+ambient load included a running screen recorder (OBS), so individual runs
+drift up to +50% randomly on both trees; interleaving cancels the drift.
+Medians (us/op, i5-10400F, GOMAXPROCS=12):
+
+  benchmark              AFTER   BEFORE   committed stage-5
+  ScanUnchanged           28.0    27.6        25.5
+  IdlePresent             25.2      —         24.7*
+  EncodeFrame             95.0    90.2        73.9
+  ScrollFrame            123.0   127.0       122.3
+  BufferDiffNoChanges    102.0   108.0      (render pkg)
+  EqualRowUnchanged       40.0      —          new
+
+  * the stage-5 figure is the harness A/B-idle median; BenchmarkIdlePresent
+  itself is new in this slice (fixture repaired: os.DevNull + Backend
+  literal). IdlePresent ~= bare ScanUnchanged even though Present also
+  locks and snapshots: the snapshot costs nothing measurable.
+  ScrollFrame BEFORE round 1 hit an ambient spike (median 659 us, one
+  sample 1.5 ms); its clean rounds are 127-137. EncodeFrame late rounds
+  drifted to ~139 us on BOTH trees under the same wave.
+
+Cross-package overhead (documented in PERFORMANCE.md): the idle scan calls
+render.Buffer.EqualRow once per row; a standalone 40-row pass costs 33-40 us
+(0.8-1.0 us per row); the bitset keeps the whole scan at ~28 us, below the
+raw 40-compare cost.
+Verdict: every hot-path benchmark matches BEFORE within the ambient noise
+band; the negotiation slice adds no per-frame cost. Raw first-run outputs:
+stage5b-bench-after.txt, stage5b-bench-before.txt (+ -render variants).
+
+5. Known divergences (deliberate)
+----------------------------------
+- DA1 replies are consumed only in the DEC-private shape ESC [ ? <digits> c
+  with a non-empty numeric body — the shape real terminals send. A bare
+  CSI-c (no '?') or an empty body is replayed as input rather than treated
+  as an answer. A false DA1-positive from keystroke noise would be worse
+  (answered=true would veto the probe from real replies). Pinned by
+  TestParseProbeReply rows.
+- negotiate over a Windows pipe stdin degrades to the bounded silent wait
+  (section 2). Not reachable in production (console handles), safe
+  everywhere.
+
+6. Reproduction
+---------------
+- tax:    copy .verification/stage5b-probe-tax.go to
+          internal/terminal/zz_probe_tax_test.go, run
+          go test ./internal/terminal -run 'TestProbeTax' -count=1 -v,
+          then delete the copy.
+- A/B:    git worktree add .verification-worktree-before da6d788, then in
+          both directories:
+          go test ./internal/terminal -run '^$' -bench 'BenchmarkScanUnchanged|BenchmarkIdlePresent|BenchmarkEncodeFrame|BenchmarkScrollFrame' -benchtime=1s -count=3
+          go test ./render -run '^$' -bench 'BenchmarkEqualRowUnchanged|BenchmarkBufferDiffNoChanges' -benchtime=1s -count=3
+          (interleave the two directories round by round; take medians)
+- suite:  gofmt -l . ; go vet ./... ; go test -count=1 ./... ;
+          C:\Users\GofMan3\go\bin\golangci-lint.exe run ./... ;
+          go test -race -count=1 ./... ;
+          go test ./internal/terminal -run '^$' -fuzz=FuzzParserNeverPanics -fuzztime=60s -parallel=1 ;
+          .\lux-stage5-xbuild.ps1 is gone; instead (round 2, after the fixes):
+           go build -trimpath each GOOS twice -> 6 identical-per-OS binaries
+           (hashes in section 9); plus go mod verify.
+
+7. Round-2 adversarial review (fresh subagent, pre-fix tree)
+-----------------------------------------------------------
+Verdict: 0 BUG, 1 RISK-high, 1 RISK, 1 RISK-low, 2 NIT. Findings and
+disposition (all fixed in the working tree, pinned by tests):
+- A (RISK-high) reportEnd window 32 < real DA1: Windows Terminal answers
+  DA1 with a 39-byte report (ESC [ ? 61;4;6;7;14;21;22;23;24;28;32;42;52 c,
+  clipboard 52; 36 bytes without). The 32-byte scan window rejected it:
+  guaranteed full-timeout stall plus a phantom KeyUnknown replay per WT
+  launch. Fix: loop bound 32 -> maxSequence (128, shared with parser.go).
+  Pinned by TestParseProbeReply "Windows Terminal DA1 answer" (39-byte
+  literal -> answered, empty leftover), the full-negotiation row, and
+  TestReportEnd window rows moved to index 127/128 plus the WT literal
+  (final byte at index 38).
+- B (RISK) resize during the probe window was invisible: watchers start
+  only after the probe (Unix has no SIGWINCH registered yet, the Windows
+  poller baselines after the probe). Fix: Open snapshots the size before
+  the probe and, after b.events exists, replays event.ResizeTo when the
+  size differs — the app's first layout sees the real terminal size. The
+  synthesized event rides the 64-slot channel before any reader exists;
+  NextEvent drains it first.
+- C (RISK-low) probeRequest comment claimed DECRQM on DECSTBM; DECSTBM is
+  a CSI, not a DECRQM-queryable mode. Fix: comments now state DECOM is the
+  proxy for scroll regions and why the proxy is sound (the backend never
+  sets DECOM; DECSTBM works with DECOM permanently reset).
+- D (NIT) invalid LUX_TUI_PROBE_TIMEOUT values fell back to the default
+  silently. Fix: one stderr notice (negotiation runs before the alternate
+  screen is entered, so the notice cannot disturb a frame) + doc comment.
+  Behavior of TestProbeTimeoutConfigured unchanged.
+- E (NIT) status 4 (permanently reset) read as supported for mode 2026,
+  where the set-mode wrapper would be a permanent no-op. Fix:
+  featureFromStatus is mode-aware — status 4 rejects mode 2026, keeps
+  supporting mode 6 (DECSTBM still works with DECOM reset). Pinned by
+  new rows: sync status 3 -> supported, status 4 -> rejected.
+Verified-correct in the same verdict (no action): DECRPM arg order,
+byte-order preservation, maxProbeStream bound, bounded leak failure mode,
+probe placement.
+Re-run gates after the fixes: gofmt, vet, go test -count=1 ./...
+(10 packages ok), golangci-lint 0 issues (after errcheck
+encoder_bytes_test.go:216 defer-close and QF1001 capability_test.go:47
+De Morgan cleanups), race terminal+render ok, fuzz green (section 8),
+cross-builds 6/6 (section 9). All five fixes touch Open/probe-only paths;
+none reach per-frame hot code, so the section-4 A/B medians stand.
+
+8. Fuzz incident and clean re-run
+---------------------------------
+First two fuzz attempts (12 default workers) reported
+"fuzzing process hung or terminated unexpectedly: exit status 2" and
+wrote two crasher files:
+testdata/fuzz/FuzzParserNeverPanics/6234f6d368915f9e and
+81af75f3a1a291c9. Both inputs PASS deterministically on re-run
+(-count=1) and no test process survived: the workers were starved by an
+ambient storm of ~45 cargo build processes pinning all 12 cores (the
+same ambient-load class as the section-4 OBS noise). The inputs are
+kept as regression corpus seeds — they pass.
+Clean re-run, single worker: GOMAXPROCS=2
+go test ./internal/terminal -run '^$' -fuzz=FuzzParserNeverPanics
+  -fuzztime=30s -parallel=1
+result: PASS, 437,798 execs (12-17k/sec), 0 failures, 1 new interesting
+input (total corpus 254). Raw logs: stage5b-fuzz-round2.txt (failures),
+stage5b-fuzz-round3.txt (clean). Trap to remember: -fuzz=1s is a pattern
+("1s"), not a duration — it silently matches no target; always pass
+-fuzz=FuzzParserNeverPanics with -fuzztime.
+
+9. Cross-build reproducibility (round 2, after fixes)
+-----------------------------------------------------
+go build -trimpath ./examples/showcase for linux/windows/darwin,
+two passes each (6 binaries), SHA256 pairwise byte-identical per OS:
+  darwin   CD7AAE449B15549399434CF8199B61DD34E089C359E2A42C00F3FD5FD99D0720
+  linux    0E8CA8A8DB7B6C058B4D9F6B5D11A1C9ED66B44704C4621E1D7CA4C375FB5851
+  windows  0A93E06FC9B8BE565D808AA8806CB628DD6F4DF5F5E6BD6F4E5DFBD6849DACA0
+(Binaries under .verification/xbuild/, not committed.) The hashes differ
+from the stage-5 ones on purpose: the negotiation slice changes the
+binary; the gate is pairwise identity across rebuilds, which holds 6/6.
