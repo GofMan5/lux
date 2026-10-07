@@ -119,8 +119,12 @@ func parseRune(data []byte, eof bool) (event.Event, int, bool) {
 		return event.KeyPress(event.KeyEnter, 0), 1, true
 	case '\t':
 		return event.KeyPress(event.KeyTab, 0), 1, true
-	case 0x7f, '\b':
+	case 0x7f:
+		// DEL is the legacy Backspace; kitty distinguishes the ctrl chord
+		// as the bare BS byte, so the two control codes decode apart.
 		return event.KeyPress(event.KeyBackspace, 0), 1, true
+	case '\b':
+		return event.KeyPress(event.KeyBackspace, event.ModCtrl), 1, true
 	}
 	if data[0] < 0x20 {
 		if data[0] == 0 {
@@ -143,6 +147,41 @@ func parseEscape(data []byte, eof bool) (event.Event, int, bool) {
 		if eof {
 			return event.KeyPress(event.KeyEscape, 0), 1, true
 		}
+		return event.Event{}, 0, false
+	}
+	if data[1] == 0x1b {
+		if len(data) == 2 {
+			if eof {
+				// At end of stream resolve the first escape; the loop
+				// rehandles the surviving one below.
+				return event.KeyPress(event.KeyEscape, 0), 1, true
+			}
+			return event.Event{}, 0, false
+		}
+		if data[2] == '[' || data[2] == 'O' {
+			// A doubled escape before a CSI or SS3 opener is Alt-modified
+			// arrow-family keys: Alt+Up is ESC ESC [ A. Decode the inner
+			// sequence once and add the modifier rather than decoding the
+			// second escape as ctrl+[ (the rune the C0 byte spells).
+			next, consumed, complete := parseEscape(data[1:], eof)
+			if !complete {
+				return next, consumed, false
+			}
+			if next.Kind == event.Key {
+				next.Key.Mod |= event.ModAlt
+				return next, consumed + 1, true
+			}
+			// Mouse, focus, and paste markers never follow a doubled
+			// escape; anything else here is terminal junk.
+			return event.KeyPress(event.KeyUnknown, 0), consumed + 1, true
+		}
+		if eof {
+			// A rune or other byte behind the pair: resolve the leading
+			// escape and let the loop decode what follows on its own.
+			return event.KeyPress(event.KeyEscape, 0), 1, true
+		}
+		// Not yet resolvable: a lone-timeout will surface the escapes one
+		// 35 ms tick apart, which is the honest reading of Esc Esc.
 		return event.Event{}, 0, false
 	}
 	if data[1] != '[' && data[1] != 'O' {
@@ -218,7 +257,12 @@ func keySequence(sequence string) (event.KeyCode, event.Mod, bool) {
 	if err != nil {
 		return event.KeyUnknown, 0, false
 	}
-	codes := map[int]event.KeyCode{1: event.KeyHome, 2: event.KeyInsert, 3: event.KeyDelete, 4: event.KeyEnd, 5: event.KeyPageUp, 6: event.KeyPageDown, 7: event.KeyHome, 8: event.KeyEnd, 11: event.KeyF1, 12: event.KeyF2, 13: event.KeyF3, 14: event.KeyF4, 15: event.KeyF5, 17: event.KeyF6, 18: event.KeyF7, 19: event.KeyF8, 20: event.KeyF9, 21: event.KeyF10, 23: event.KeyF11, 24: event.KeyF12}
+	// The 25-34 range is xterm's shifted function keys; kitty re-sends
+	// the same bytes after turning on its protocol, so the table follows
+	// kitty's numbering — 29~ is MENU there, where xterm calls it F16 —
+	// and the gap at 27 (xterm's Escape) stays empty because an Esc
+	// never rides a CSI ~ encoding in practice.
+	codes := map[int]event.KeyCode{1: event.KeyHome, 2: event.KeyInsert, 3: event.KeyDelete, 4: event.KeyEnd, 5: event.KeyPageUp, 6: event.KeyPageDown, 7: event.KeyHome, 8: event.KeyEnd, 11: event.KeyF1, 12: event.KeyF2, 13: event.KeyF3, 14: event.KeyF4, 15: event.KeyF5, 17: event.KeyF6, 18: event.KeyF7, 19: event.KeyF8, 20: event.KeyF9, 21: event.KeyF10, 23: event.KeyF11, 24: event.KeyF12, 25: event.KeyF13, 26: event.KeyF14, 28: event.KeyF15, 29: event.KeyMenu, 31: event.KeyF17, 32: event.KeyF18, 33: event.KeyF19, 34: event.KeyF20}
 	code, ok := codes[value]
 	return code, modifier, ok
 }
@@ -258,13 +302,13 @@ func decodeModifier(value int) event.Mod {
 
 // parseKittyKey decodes one CSI u key event from the kitty keyboard
 // protocol's disambiguate and event-type levels — the two flags the
-// backend enables. At those levels the terminal uses CSI u exclusively
-// for keys legacy encodings could not express unambiguously: Esc and
-// Alt+key, Ctrl-modified letter keys, and Enter/Tab/Backspace carrying
-// modifiers. Plain text and functional keys keep their legacy encodings,
-// so functional codepoints (57344 and up) decode through the unknown
-// guard below rather than as junk runes, because a misbehaving terminal
-// must not inject private-use runes into a text field.
+// backend enables. Text and unambiguous keys keep legacy encodings, but
+// kitty numbers every key that lacks one (functional keys, media keys,
+// keypad keys) inside the Unicode private use area and sends CSI u for
+// them even in otherwise legacy modes, so kittyFunctional's table is the
+// only thing standing between those codepoints and a private-use rune
+// injected into a text field. Codepoints in the block that kitty itself
+// leaves unused still decode as unknown.
 //
 // The event type nests as the second colon sub-parameter of the modifier
 // field — CSI 27;1:3u is a release — and some early implementations
@@ -329,40 +373,138 @@ func parseKittyKey(sequence string) (event.Event, bool) {
 	}
 	switch code {
 	case 27:
-		return kittyKey(event.KeyEscape, mod, action), true
+		return kittyKey(event.KeyEscape, 0, mod, action), true
 	case 13:
-		return kittyKey(event.KeyEnter, mod, action), true
+		return kittyKey(event.KeyEnter, 0, mod, action), true
 	case 127:
-		return kittyKey(event.KeyBackspace, mod, action), true
+		return kittyKey(event.KeyBackspace, 0, mod, action), true
 	case 9:
 		if mod&event.ModShift != 0 {
 			// Shift+Tab normalizes to BackTab without the shift bit so the
 			// event matches the legacy CSI Z encoding of the same key.
-			return kittyKey(event.KeyBackTab, mod&^event.ModShift, action), true
+			return kittyKey(event.KeyBackTab, 0, mod&^event.ModShift, action), true
 		}
-		return kittyKey(event.KeyTab, mod, action), true
+		return kittyKey(event.KeyTab, 0, mod, action), true
 	}
-	// Private use area U+E000..U+F8FF is exactly where the kitty protocol
-	// numbers its functional keys (57344 and up). Functional keys keep
-	// legacy encodings at the disambiguate level, so a codepoint from that
-	// block means a terminal sent something unrequested; decoding it as a
-	// rune would inject a private-use character into text.
-	if code < 32 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) || (code >= 57344 && code <= 63743) {
+	if code >= 57344 && code <= 63743 {
+		// The private use area U+E000..U+F8FF is exactly where the kitty
+		// protocol numbers its functional keys. Modifier keys themselves
+		// (57441-57454) never arrive as events and stay unknown.
+		if functional, r, ok := kittyFunctional(code); ok {
+			return kittyKey(functional, r, mod, action), true
+		}
 		return event.KeyPress(event.KeyUnknown, 0), true
 	}
-	key := kittyKey(event.KeyRune, mod, action)
-	key.Key.Rune = rune(code)
-	return key, true
+	if code < 32 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) {
+		return event.KeyPress(event.KeyUnknown, 0), true
+	}
+	return kittyKey(event.KeyRune, rune(code), mod, action), true
+}
+
+// kittyFunctional maps the kitty protocol's functional-key codepoints from
+// the Unicode private use area onto plain keys. Kitty sends CSI u for
+// these keys even in pure legacy mode, so the mapping is mandatory, not
+// an enhancement. Keypad keys normalize to their non-keypad equivalents —
+// apps care about the typed character, not which pad produced it — which
+// is also why KP_ENTER is Enter and not a distinct code. Codepoints kitty
+// leaves unused (the 57344-57357 hole, KP_BEGIN, the trailing half of the
+// area) return false and surface as unknown keys.
+func kittyFunctional(code int) (event.KeyCode, rune, bool) {
+	switch code {
+	case 57358:
+		return event.KeyCapsLock, 0, true
+	case 57359:
+		return event.KeyScrollLock, 0, true
+	case 57360:
+		return event.KeyNumLock, 0, true
+	case 57361:
+		return event.KeyPrintScreen, 0, true
+	case 57362:
+		return event.KeyPause, 0, true
+	case 57363:
+		return event.KeyMenu, 0, true
+	case 57409:
+		return event.KeyRune, '.', true
+	case 57410:
+		return event.KeyRune, '/', true
+	case 57411:
+		return event.KeyRune, '*', true
+	case 57412:
+		return event.KeyRune, '-', true
+	case 57413:
+		return event.KeyRune, '+', true
+	case 57414:
+		return event.KeyEnter, 0, true
+	case 57415:
+		return event.KeyRune, '=', true
+	case 57416:
+		return event.KeyRune, ',', true
+	case 57417:
+		return event.KeyLeft, 0, true
+	case 57418:
+		return event.KeyRight, 0, true
+	case 57419:
+		return event.KeyUp, 0, true
+	case 57420:
+		return event.KeyDown, 0, true
+	case 57421:
+		return event.KeyPageUp, 0, true
+	case 57422:
+		return event.KeyPageDown, 0, true
+	case 57423:
+		return event.KeyHome, 0, true
+	case 57424:
+		return event.KeyEnd, 0, true
+	case 57425:
+		return event.KeyInsert, 0, true
+	case 57426:
+		return event.KeyDelete, 0, true
+	case 57428:
+		return event.KeyMediaPlay, 0, true
+	case 57429:
+		return event.KeyMediaPause, 0, true
+	case 57430:
+		return event.KeyMediaPlayPause, 0, true
+	case 57431:
+		return event.KeyMediaReverse, 0, true
+	case 57432:
+		return event.KeyMediaStop, 0, true
+	case 57433:
+		return event.KeyMediaFastForward, 0, true
+	case 57434:
+		return event.KeyMediaRewind, 0, true
+	case 57435:
+		return event.KeyMediaTrackNext, 0, true
+	case 57436:
+		return event.KeyMediaTrackPrevious, 0, true
+	case 57437:
+		return event.KeyMediaRecord, 0, true
+	case 57438:
+		return event.KeyVolumeDown, 0, true
+	case 57439:
+		return event.KeyVolumeUp, 0, true
+	case 57440:
+		return event.KeyVolumeMute, 0, true
+	}
+	switch {
+	case code >= 57376 && code <= 57398:
+		return event.KeyF13 + event.KeyCode(code-57376), 0, true
+	case code >= 57399 && code <= 57408:
+		return event.KeyRune, rune('0' + code-57399), true
+	}
+	return 0, 0, false
 }
 
 // kittyKey builds the key event shape every CSI u decode shares. A
-// release reports no presses, so its coalesced repeat count is zero.
-func kittyKey(code event.KeyCode, mod event.Mod, action event.KeyAction) event.Event {
+// release reports no presses, so its coalesced repeat count is zero. The
+// rune stays zero for every functional code; only keypad digits and
+// punctuation normalize onto KeyRune with their typed character.
+func kittyKey(code event.KeyCode, r rune, mod event.Mod, action event.KeyAction) event.Event {
 	repeat := uint16(1)
 	if action == event.ActionRelease {
 		repeat = 0
 	}
-	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Mod: mod, Action: action, Repeat: repeat}}
+	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Rune: r, Mod: mod, Action: action, Repeat: repeat}}
 }
 
 // kittyNumber reads one CSI u parameter, tolerating the colon-separated

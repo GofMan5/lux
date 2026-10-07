@@ -84,11 +84,10 @@ func TestParserLoneEscapeTimeout(t *testing.T) {
 }
 
 // TestParserKittyDisambiguateKeys covers the CSI u decoding of the kitty
-// keyboard protocol's disambiguate level, the only level the backend
-// enables. At that level the terminal uses CSI u exclusively for keys
-// legacy encodings could not express, and keeps everything else legacy, so
-// the mix below with arrow keys and plain runes in the last case is the
-// shape a real enhanced stream takes.
+// keyboard protocol's disambiguate and event-type levels, the two levels
+// the backend enables. The terminal keeps unambiguous keys legacy, so the
+// mix below with arrow keys and plain runes in the last case is the shape
+// a real enhanced stream takes.
 func TestParserKittyDisambiguateKeys(t *testing.T) {
 	kittyRune := func(r rune, mod event.Mod, action event.KeyAction) event.Event {
 		repeat := uint16(1)
@@ -173,15 +172,24 @@ func TestParserKittyDisambiguateKeys(t *testing.T) {
 		{"bare CSI u is unknown", "\x1b[u", event.KeyPress(event.KeyUnknown, 0)},
 		{"code zero is unknown", "\x1b[0u", event.KeyPress(event.KeyUnknown, 0)},
 		{"control codepoint is unknown", "\x1b[3u", event.KeyPress(event.KeyUnknown, 0)},
-		// Functional codepoints cannot arrive at the disambiguate level —
-		// functional keys keep legacy encodings there. The kitty protocol
-		// numbers them inside the Unicode private use area U+E000..U+F8FF,
-		// which is full of otherwise valid runes, so the whole block decodes
-		// as unknown rather than injecting a private-use character into a
-		// text field.
-		{"functional base is unknown", "\x1b[57344u", event.KeyPress(event.KeyUnknown, 0)},
-		{"kitty F1 is unknown", "\x1b[57441u", event.KeyPress(event.KeyUnknown, 0)},
-		{"media key is unknown", "\x1b[57428u", event.KeyPress(event.KeyUnknown, 0)},
+		// Kitty numbers its functional and media keys inside the Unicode
+		// private use area U+E000..U+F8FF and sends CSI u for them even in
+		// pure legacy mode, so the table below maps them onto plain keys.
+		// The codepoints kitty itself leaves unused — the block's base, the
+		// modifier keys (a modifier key never arrives as a key event), and
+		// the trailing half — still decode as unknown rather than
+		// injecting a private-use character into a text field.
+		{"F13 from the kitty table", "\x1b[57376u", event.KeyPress(event.KeyF13, 0)},
+		{"F35 caps the kitty F-row", "\x1b[57398u", event.KeyPress(event.KeyF35, 0)},
+		{"ctrl+F13 keeps modifiers", "\x1b[57376;5u", event.KeyPress(event.KeyF13, event.ModCtrl)},
+		{"keypad digit normalizes to a rune", "\x1b[57400u", event.RuneKey('1', 0)},
+		{"keypad separator normalizes to a rune", "\x1b[57416u", event.RuneKey(',', 0)},
+		{"keypad enter is enter", "\x1b[57414u", event.KeyPress(event.KeyEnter, 0)},
+		{"keypad left is left", "\x1b[57417;3u", event.KeyPress(event.KeyLeft, event.ModAlt)},
+		{"media play/pause decodes with an event type", "\x1b[57430;1:3u", kittyKey(event.KeyMediaPlayPause, 0, event.ActionRelease)},
+		{"unused base of the kitty range is unknown", "\x1b[57344u", event.KeyPress(event.KeyUnknown, 0)},
+		{"kitty modifier key stays unknown", "\x1b[57441u", event.KeyPress(event.KeyUnknown, 0)},
+		{"kitty keypad begin is unknown", "\x1b[57427u", event.KeyPress(event.KeyUnknown, 0)},
 		{"end of the private use area is unknown", "\x1b[63743u", event.KeyPress(event.KeyUnknown, 0)},
 		{"first codepoint past the private use area is a rune", "\x1b[63744u", event.RuneKey(0xF900, 0)},
 		{"surrogate codepoint is unknown", "\x1b[55296u", event.KeyPress(event.KeyUnknown, 0)},
@@ -239,6 +247,48 @@ func TestParserKittyStreamsAcrossReads(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("enhanced stream mixed with legacy keys = %#v, want %#v", got, want)
+	}
+}
+
+// TestParserLegacyFunctionKeysAndC0Splits pins the legacy half of the kitty
+// truth. Terminals re-send xterm's shifted function-key CSI ~ encodings
+// after kitty mode is on (29~ is MENU for kitty, F16 for xterm — kitty
+// wins). The C0 backspace pair splits: DEL is plain Backspace, BS is the
+// ctrl chord, each carrying the alt prefix behind a lone escape. Alt-
+// modified arrow keys arrive with a doubled escape, and a lone doubled
+// escape surfaces as two escapes one timeout tick apart.
+func TestParserLegacyFunctionKeysAndC0Splits(t *testing.T) {
+	input := "\x1b[25~\x1b[34~\x1b[29~\x08\x7f\x1b\x08\x1b\t\x1b\x1b[A"
+	want := []event.Event{
+		event.KeyPress(event.KeyF13, 0),
+		event.KeyPress(event.KeyF20, 0),
+		event.KeyPress(event.KeyMenu, 0),
+		event.KeyPress(event.KeyBackspace, event.ModCtrl),
+		event.KeyPress(event.KeyBackspace, 0),
+		event.KeyPress(event.KeyBackspace, event.ModCtrl|event.ModAlt),
+		event.KeyPress(event.KeyTab, event.ModAlt),
+		event.KeyPress(event.KeyUp, event.ModAlt),
+	}
+	if got := newParser().feed([]byte(input), false); !reflect.DeepEqual(got, want) {
+		t.Fatalf("legacy stream = %#v, want %#v", got, want)
+	}
+
+	// A doubled escape without a follower waits: each timeout tick
+	// surfaces one escape, two ticks apart.
+	parser := newParser()
+	if got := parser.feed([]byte("\x1b\x1b"), false); len(got) != 0 {
+		t.Fatalf("doubled escape resolved early: %#v", got)
+	}
+	got := parser.flushEscape()
+	if len(got) != 1 || !got[0].Key.Is(event.KeyEscape, 0) {
+		t.Fatalf("first timeout = %#v", got)
+	}
+	got = parser.flushEscape()
+	if len(got) != 1 || !got[0].Key.Is(event.KeyEscape, 0) {
+		t.Fatalf("second timeout = %#v", got)
+	}
+	if parser.pendingEscape() {
+		t.Fatal("doubled escape left residue after two timeouts")
 	}
 }
 
@@ -403,6 +453,11 @@ func FuzzParserNeverPanics(f *testing.F) {
 		// pre-standard trailing field) and the lock-state modifier bits.
 		"\x1b[97;1:3u", "\x1b[27;5:2u", "\x1b[13;1:1;13u", "\x1b[97;3:3u", "\x1b[97;3:,u",
 		"\x1b[97;65u", "\x1b[97;129u", "\x1b[97;193u", "\x1b[27;257u",
+		// Functional-table regressions: kitty private-use keys, the C0
+		// backspace split, and the doubled-escape prefix.
+		"\x1b[57376u", "\x1b[57398;5u", "\x1b[57400u", "\x1b[57414;3u", "\x1b[57427u",
+		"\x1b[57430;1:3u", "\x1b[57441;2u", "\x1b[29~", "\x1b[34;5~", "\x08", "\x1b\x08",
+		"\x1b\t", "\x1b\x1b", "\x1b\x1b[A", "\x1b\x1b[Z", "\x1b\x1b[<0;1;1M",
 	}
 	for _, seed := range kittySeeds {
 		seeds = append(seeds, []byte(seed))
