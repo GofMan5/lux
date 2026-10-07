@@ -1,0 +1,102 @@
+LUX TUI stage 6 — «Keyboard truth» — close verification
+UTC: 2026-10-07
+Baseline: 1e59ac5b660dec1dbacfe275cf6c9f3b5c1387b6 (stage 5c close)
+Closed at: 46af744853fc80fb37a7767f12f882675091655c
+
+Goal (ROADMAP.md stage 6): input without ambiguity on every terminal where
+it is achievable — negotiated-downgrade discipline, fuzz, golden tables, no
+kitty-stack leak on panic/exit.
+
+Items, commits, and what landed:
+
+  1. Kitty keyboard protocol — 8d87313 (negotiate + disambiguate flag,
+     push/pop CSI > 1 u, honest refusal on legacy terminals, Esc immediate
+     under kitty instead of the 35 ms escape delay), 0ac8848 (docs),
+     d99d750 (Action press/release/repeat semantics, legacy locks to
+     press, Esc vs Alt+X, Ctrl+I≠Tab / Ctrl+M≠Enter under
+     disambiguate), b843426 + 032b4c3 (F13–F20, media keys,
+     CapsLock/NumLock bitfield, kitty CSI u decode).
+  2. Event semantics — folded into d99d750/b843426 above.
+  3. Mouse 1003 all-motion — 79d4469 (hover everywhere, gated by
+     negotiation), 18f458f + 773925e (kitty pixel-precision mouse SGR
+     1016, opt-in by probe).
+  4. Styled underlines SGR 4:3/4:4/4:5 + 58/59 and OSC 8 hyperlinks —
+     9bf6eb2 (render.Cell Link struct{URI, ID}, capability.Hyperlinks,
+     diff counts link change as style change).
+  5. Sync output by positive probe — 1fd4017 (DECRQM 2026 supported →
+     on; LUX_TUI_SYNC_OUTPUT stays force-on/off override, the bubbletea
+     v2 PR #1542 direction).
+  6. Windows leg — 19dbd32 (win32-input-mode DEC 9001, CSI underscore
+     records, negotiated like every other mode, honest degradation to
+     legacy encodings, kitty wins when both answer so only one enhanced
+     encoding is ever live).
+  7. Multiplexer provenance — 46af744 (DA1/DA2 latched
+     first-answerer-wins, DA2 probe added to the single bounded batch,
+     detectMultiplexer: $TMUX/$STY/$TERM prefixes/DA2 84/DA1 VT100 shape;
+     gateMultiplexerInput: input family "supported"→unknown inside tmux
+     or screen, output family trusted, rejections and silence stand;
+     kitty stays off inside a detected mux until the mux implements it
+     natively — the roadmap's "confirmed passthrough" is impossible in
+     stock tmux, passthrough is output-only, so the gate is categorical).
+
+Acceptance criteria mapping (ROADMAP.md stage 6 «Приёмка»):
+  - «таблица клавиша × терминал × протокол → событие» (golden tests):
+    landed as parser golden tables — terminal_test.go legacy-key
+    coverage, kitty CSI u tables (action/functional/media/locks),
+    win32-input record tables, and the hostile-mux stream table in
+    multiplexer_test.go. The vtgrid + real-terminal runs belong to
+    stage 9 and are deferred there by design; COMPATIBILITY.md marks
+    the per-terminal matrix honestly (validation pending).
+  - «fuzz CSI u»: FuzzParserNeverPanics has covered the kitty CSI u
+    records (and win32 records since slice 6) since they landed; 20 s
+    runs each slice, corpus 449 interesting inputs, 1.16M execs on the
+    last run, 0 crashes; CI pins a 30 s fuzz-smoke.
+  - «kitty-режим даёт Esc немедленно»: escapeDelay drops to 0 when the
+    kitty verdict latches — landed in slice 1, pinned by
+    TestEscapeDelayUnderKitty.
+  - «legacy-путь без регрессий»: full go test ./... -count=1 green on
+    Windows and on the docker Linux lane at every slice; the legacy
+    parser tables are byte-for-byte the pre-stage-6 fixtures.
+  - «presented фреймы не ломаются при отказе протокола»: protocol
+    refusal is negotiated-downgrade — an unanswered probe latches
+    probeUnknown and the encoder never emits the protocol's bytes; the
+    negotiation early-exit and the Close snapshot (kitty pop, win32
+    leave, sync off) are covered by backend tests in slices 1, 5, 6.
+  - kitty-stack leak design exclusion (the bubbletea v2 v2.0.9 bug
+    class): the kitty pop rides the same Write as the frame restore
+    and Close unconditionally resets the modes it enabled — no path
+    enables the stack without owning the disable.
+
+Validation at close (2026-10-07, HEAD 46af744):
+  - gofmt -l . : clean
+  - go vet ./... : PASS
+  - go mod verify : all modules verified
+  - go test ./... -count=1 : PASS (Windows, 11 packages)
+  - docker golang:1.25-alpine go test ./... -count=1 : PASS (Linux; the
+    only lane that executes the pipe-based negotiation tests, including
+    TestNegotiateTmuxStream and the multiplexer-gated streams)
+  - internal/terminal fuzz 20 s: PASS, 1.16M execs, 449 corpus
+  - golangci-lint: NOT RUN — the binary is not installed in this local
+    environment; vet + gofmt + the full sweeps above are the local bar
+    (CI runs the lint matrix on push).
+  - Per-slice evidence: .verification/stage6-slice1.txt …
+    stage6-slice7.txt (commands, spec truths, honesty ledgers).
+
+Honesty ledger:
+  - vtgrid and real-terminal golden runs are deferred to stage 9 per
+    the roadmap; the compatibility matrix states "validation pending"
+    for every row not covered by a source-verified probe contract.
+  - tmux/screen facts rest on a source-reading research pass
+    (3.3a→master, screen ansi.c, tcell v3, bubbletea v2, WezTerm docs),
+    not on live captures; the slice 7 artifact carries the per-fact
+    caveats (SIXEL reply shape, 84-exclusivity characterization, st's
+    DA2 suspicion).
+  - the docker lane used golang:1.25-alpine; CI pins go 1.23.x +
+    stable, so the CI matrix is broader than this local run.
+  - the parser's pixelMouse/win32Input latches are intentionally not
+    reset on Close/plain re-Open (same policy the pre-stage-6 pixel
+    mouse already had); documented in COMPATIBILITY.md.
+
+Stage 6 is closed. Next: stage 7 «Text truth» (uniseg update, width
+policy, Unicode core mode 2027, word wrap, shaped text), per the updated
+README direction.
