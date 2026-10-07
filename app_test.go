@@ -195,7 +195,9 @@ func TestRunWithKeyReleasesDeliversReleases(t *testing.T) {
 	backend := newFakeBackend(20, 5)
 	model := &keyLogModel{}
 	done := make(chan error, 1)
-	go func() { done <- Run(context.Background(), model, WithBackend(backend), WithKeyReleases(true), WithMaxFPS(240)) }()
+	go func() {
+		done <- Run(context.Background(), model, WithBackend(backend), WithKeyReleases(true), WithMaxFPS(240))
+	}()
 	select {
 	case <-backend.presented:
 	case <-time.After(hangTimeout):
