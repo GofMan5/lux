@@ -33,17 +33,24 @@ work and the API may still change.
   (150 ms default) that can only veto `ScrollRegions` and
   `SynchronizedOutput`; `LUX_TUI_PROBE_TIMEOUT` adjusts the budget or disables
   negotiation. Keystrokes that race the probe are replayed, never dropped.
-- Kitty keyboard protocol (disambiguate flag): the startup probe asks
-  `CSI ? u` and waits a 25 ms grace behind the classic reports; a flags reply
-  is the one enable-only verdict and turns `KeyboardEnhanced` on. The push
-  (`CSI > 1 u`) rides the enter write and the pop (`CSI < u`) leads the
-  restore in the same write on every exit path, including panics funneled
-  through `Run`'s deferred close. Enhanced mode decodes kitty `CSI u` keys:
-  Esc is immediate (no escape delay), Ctrl+letter splits from its C0 alias,
-  multi-modifier combos arrive, Shift+Tab normalizes to BackTab, repeat
-  events coalesce, release events and private-use functional codes surface
-  as unknown keys, and lock-state bits are dropped until the event model
-  grows them. Silence keeps the legacy key path untouched.
+- Kitty keyboard protocol (disambiguate + event-type flags): the startup
+  probe asks `CSI ? u` and waits a 25 ms grace behind the classic reports; a
+  flags reply is the one enable-only verdict and turns `KeyboardEnhanced`
+  on. The push (`CSI > 3 u`) rides the enter write and the pop (`CSI < u`)
+  leads the restore in the same write on every exit path, including panics
+  funneled through `Run`'s deferred close. Enhanced mode decodes kitty
+  `CSI u` keys: Esc is immediate (no escape delay), Ctrl+letter splits from
+  its C0 alias, multi-modifier combos arrive, Shift+Tab normalizes to
+  BackTab, and every modifier bit — super, hyper, meta, caps-lock,
+  num-lock included — decodes. Key events carry a press/repeat/release
+  action; releases are filtered by default and delivered with
+  `WithKeyReleases(true)`, while widgets treat them as inert. Kitty's
+  private-use functional-key codes (F13-F35, media and volume keys, keypad)
+  decode onto real keys even in legacy mode, keypad keys normalizing to
+  their non-keypad equivalents. The legacy path follows kitty where
+  emulators diverge: `0x08` is Ctrl+Backspace, `CSI 29 ~` is Menu, a
+  doubled escape prefixes Alt-modified arrows, and `~` codes 25-34 map to
+  F13-F20. Silence keeps the legacy key path untouched.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

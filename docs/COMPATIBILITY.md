@@ -34,7 +34,8 @@ an explicit application-supplied `Clipboard` implementation. No OS adapter is
 bundled; remote OSC 52 remains outside core and needs capability/user policy.
 
 Scoped shortcuts compare exact key code, rune, and modifiers while ignoring
-repeat count. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M) remain
+repeat count and the press/repeat/release action: a shortcut fires on the
+activation, once. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M) remain
 indistinguishable on the legacy path; once the kitty protocol is positively
 negotiated, a terminal that reports the pairs as CSI u decodes them into
 distinct events. Do not rely on the split until the terminal has answered the
@@ -109,10 +110,10 @@ already read are always classified or replayed.
 ## Enhanced keyboard (kitty protocol)
 
 When the kitty query is answered, the backend pushes the protocol's
-disambiguate flag only (`CSI > 1 u`) — no event types, no key-only text
+disambiguate and event-type flags (`CSI > 3 u`) — no key-only text
 reporting. What that buys:
 
-- the flag rides the enter sequence in the same Write, and the pop
+- the flags ride the enter sequence in the same Write, and the pop
   (`CSI < u`) leads the legacy restore in the same Write on every exit path
   — normal Close, the enter-write failure branch, and anything the app
   layer's deferred Close covers. A session that started cannot exit with the
@@ -124,16 +125,40 @@ reporting. What that buys:
   Alt+key, Ctrl+letter vs its C0 alias (Ctrl+I vs Tab, Ctrl+M vs Enter), and
   multi-modifier combos that legacy encodings cannot express;
 - Shift+Tab normalizes to BackTab to match what the legacy `\x1b[Z` path
-  delivers, so apps see one event shape either way.
+  delivers, so apps see one event shape either way;
+- key events carry an action — press, auto-repeat, release — instead of
+  coalescing everything into presses. Repeats arrive as their own
+  activations; releases are decoded in full but filtered by default, and
+  `WithKeyReleases(true)` delivers them for apps that track held keys.
+  Focus-following widgets (text input, lists, scrolling) treat releases as
+  inert either way. Enter, Tab, and Backspace never report releases at
+  these flag levels (the spec's shell-safety exception: a shell reading the
+  same stream must not see Enter eaten by a release);
+- every modifier the protocol can name — shift, alt, ctrl, super, hyper,
+  meta, caps-lock, num-lock — decodes into modifier bits, lock-state
+  included;
+- functional and media keys decode: F13-F35, caps/scroll/num lock,
+  print-screen, pause, menu, the media and volume keys, and the keypad.
+  Kitty numbers these inside the Unicode private-use block and sends CSI u
+  for them even in otherwise legacy modes, so the mapping is not optional
+  for enhanced terminals. Keypad keys normalize to their non-keypad
+  equivalents (digits and punctuation as runes, keypad-Enter as Enter,
+  keypad arrows as arrows); modifier keys themselves and codepoints kitty
+  leaves unused stay unknown rather than injecting private-use runes into
+  text.
 
 What does not change: text-producing keys, unmodified Enter/Tab/Backspace
-keep their legacy encodings; repeat events (event type 2) coalesce into a
-repeat count; release events (type 3) are reported as unknown keys until
-press/release semantics are modeled; kitty functional-key codes (the Unicode
-private-use block, which flag 1 does not deliver anyway) are reported as
-unknown keys rather than injected as text; lock-state modifier bits are
-dropped until the event model can represent them. Enhanced mode never
-changes rendering or the mouse path.
+keep their legacy encodings. Enhanced mode never changes rendering or the
+mouse path.
+
+The legacy path follows kitty's truth where emulators diverge: C0 splits —
+`0x7f` is Backspace, `0x08` is Ctrl+Backspace (a terminal spelling Ctrl+H
+the same byte is indistinguishable on that path); `CSI 29 ~` is Menu for
+kitty and F16 for xterm, and Menu wins; Alt-modified arrow-family keys
+arrive with a doubled escape (`ESC ESC [ A` is Alt+Up) and a bare doubled
+escape surfaces as two Escapes one 35 ms timeout apart. Legacy `~` codes
+25-34 map to F13-F20 with the Menu hole, matching what enhanced terminals
+re-send.
 
 The verdict trusts the first answerer, so a multiplexer answering on behalf
 of a terminal without the protocol (or the reverse) is accepted for now;

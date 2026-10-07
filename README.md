@@ -169,13 +169,15 @@ the open requirements.
 
 ## Direction
 
-Capability negotiation landed, and the first modern-keyboard slice followed:
-the kitty protocol's disambiguate flag is queried at startup and pushed only
-on a positive answer, with a guaranteed pop on every exit path. Next slices
-are the remaining keyboard-truth items (event types, F13+, mouse modes,
-win32-input-mode, multiplexer provenance), variable-height virtualization,
-and semantic accessibility bridges. Graphics protocols follow only after
-these paths are measurable.
+Capability negotiation landed, and the modern-keyboard slices are underway:
+the kitty protocol is queried at startup and pushed (disambiguate +
+event-type flags) only on a positive answer, with a guaranteed pop on every
+exit path. Key events carry press/repeat/release actions, modifier bits up
+through caps/num lock, and kitty's private-use functional-key table
+(F13-F35, media, keypad). Next slices are the remaining keyboard-truth
+items (mouse modes, win32-input-mode, multiplexer provenance),
+variable-height virtualization, and semantic accessibility bridges.
+Graphics protocols follow only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

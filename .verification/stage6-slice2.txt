@@ -1,0 +1,104 @@
+Stage 6, slice 2 — kitty event types, lock modifiers, functional keys — local verification, 2026-10-08
+====================================================================================================
+
+Scope (ROADMAP.md, stage 6 items 1-2 plus their legacy halves): key action
+semantics (press/repeat/release), the full 8-bit modifier set including
+caps-lock/num-lock, release filtering at the app and widget layers, the
+kitty private-use functional-key table (F13-F35, media, volume, keypad),
+and the kitty-truth legacy decodes (C0 backspace split, CSI 29 ~ = Menu,
+doubled-escape Alt prefixes, ~ codes 25-34). Landed as three commits:
+
+  d99d750  feat: model key action semantics and lock modifiers
+           event.KeyEvent grows Action/Repeat; Mod grows super, hyper,
+           meta, caps-lock, num-lock; app filters releases by default with
+           WithKeyReleases(true) opting in; text input, lists, and
+           scrolling treat releases as inert; kitty event-type decode
+           reads the canonical colon sub-parameter first, keeping the
+           pre-standard trailing field as lenient fallback.
+  b843426  feat: decode kitty functional and media keys
+           kittyFunctional maps the private-use table; kittyNumber/kittyKey
+           keep shape; legacy ~ 25-34 and Menu; 0x08 = Ctrl+Backspace with
+           0x7f = Backspace; doubled escape prefixes Alt-modified CSI/SS3
+           keys and surfaces alone as two escapes one timeout apart.
+  (this commit) docs: the COMPATIBILITY.md kitty section, README Direction,
+           and CHANGELOG entry updated to the new truth.
+
+Test evidence (windows/amd64, 2026-10-08):
+  go test ./...      ok, all 10 packages
+  go vet ./...       clean
+  kitty/action-scoped runs, all PASS:
+      TestParserKittyDisambiguateKeys (rewritten table: functional codes
+          F13/F35/KP digits/separator/enter/arrows with modifiers, media
+          play-pause with event type, unused PUA base 57344, modifier key
+          57441, KP_BEGIN 57427, 63743 boundary, 63744 rune, surrogate,
+          overflow, event types canonical and trailing, lock bits)
+      TestParserKittyEscapeIsImmediate, TestParserKittyStreamsAcrossReads
+          (unchanged, still green)
+      TestParserLegacyFunctionKeysAndC0Splits (new: ~ 25/29/34, 0x08 split,
+          \x1b\x08, \x1b\t, \x1b\x1b[A, doubled-escape timeout pair)
+      TestKeyString/TestKeyActionZeroIsPress/TestKeyIsToleratesLockBits
+          (event package: modifier ordering, action zero value, subset
+          matching across lock bits)
+      TestRunFiltersKeyReleasesByDefault, TestRunWithKeyReleasesDeliversReleases
+          (app package, FIFO fake backend)
+      TestContextKeyReleasesAreInert, TestTextInputIgnoresKeyReleases,
+      TestListStateIgnoresKeyReleases, TestScrollStateIgnoresKeyReleases
+          (ui package: repeat passes gates, release is inert)
+
+Linux evidence (docker golang:1.25-alpine, 2026-10-08):
+  go test ./... -count=1    all 10 packages ok
+  includes the negotiation-loop tests that skip on Windows (kitty grace,
+  silent terminal, detects-supports) — same green lane as slice 1.
+
+Fuzz (windows/amd64, post-docs truth):
+  FuzzParserNeverPanics  ./internal/terminal  45 s  PASS
+      4,599,762 execs, 54 new interesting (379 total after this slice's
+      16 new seeds: PUA functional codes with modifiers, ~ 29/34, C0
+      backspace split, doubled-escape prefixes including a doubled mouse
+      sequence).
+  FuzzTextInputInvariants  ./ui  30 s  PASS  41,951 execs, 0 failures
+      (committed commit A's run; the ui input path is untouched since).
+
+Doc-truth cross-check (every claim traced to code before writing):
+  - flags pushed = 0b11: kittyEnter "\x1b[>3u" (backend.go); pop CSI < u
+    unchanged and still leads the restore on every exit path (6.1)
+  - KeyEvent Action/Repeat, kitty release Repeat=0: event.go kittyKey
+  - release filtering: app.go run loop (before applyEvent), opt-in
+    WithKeyReleases; ui gates check Action == ActionRelease only, so
+    ActionRepeat passes (context.go, textinput.go, controls.go, scroll.go)
+  - modifier bits: shift 1, alt 2, ctrl 4, super 8, hyper 16, meta 32,
+    caps-lock 64, num-lock 128 (decodeModifier; event.String order)
+  - kitty sends PUA CSI u even in pure legacy mode (kitty spec RST):
+    kittyFunctional is mandatory, not enhancement-gated — 57344-57357,
+    57427, 57441-57454, 57455-63743 stay unknown
+  - keypad normalization: digits/punctuation as runes, KP_ENTER = Enter,
+    KP arrows = arrows; KP_BEGIN unknown
+  - event-type grammar: colon sub-parameter of field 2 is canonical;
+    trailing semicolon field is the lenient pre-standard spelling; junk or
+    out-of-range values decode unknown (kittyEventType, parseKittyKey)
+  - Enter/Tab/Backspace release absence at flag 0b11 is the spec's
+    shell-safety exception; a rogue release still decodes honestly
+  - 0x08 = Ctrl+Backspace (kitty truth); xterm's Ctrl+H spelled the same
+    byte is indistinguishable on the legacy path — divergence documented
+  - CSI 29 ~ = Menu (kitty) vs F16 (xterm): kitty wins, documented
+  - \x1b\x1b + CSI/SS3 = Alt-modified arrow-family (parseEscape recursion,
+    depth 1); junk (mouse/paste/focus shapes) behind a doubled escape
+    decodes unknown; lone pair surfaces as two escapes 35 ms apart
+    (flushEscape drops one 0x1b per tick)
+  - Scoped shortcuts match Code/Rune/Mod and ignore Action and Repeat
+    (sameShortcutKey); Is() subset matching tolerates lock bits
+
+Known limits (honesty):
+  - real-terminal golden matrix (key x terminal x protocol) is still stage
+    9's lane; Open-level kitty enter/leave writes stay untested at byte
+    level for the same tty-gating reason as slice 1 (Close-level pop and
+    the enter failure branch are covered).
+  - Shifted xterm F1-F12 = F13-F20 remapping deliberately not done (kitty
+    sends true codes; the ~ table covers what arrives).
+  - the docker Linux lane used golang:1.25-alpine (cached locally); CI
+    pins go 1.23.x and stable, so the matrix stays broader than this
+    local run.
+
+Stage 6 is not closed: items 3-7 (mouse 1003 + kitty pixel protocol, SGR
+underline + OSC 8, sync-output enable via DECRQM 2026, win32-input-mode,
+DA1 provenance) are still open. Stage-close artifact lands after item 7.
