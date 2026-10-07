@@ -447,10 +447,14 @@ func TestNegotiateCapsRunawayStream(t *testing.T) {
 }
 
 // TestApplyProbeFeatures pins the direction of every probe verdict. Scroll
-// regions and synchronized output are veto-only: a positive reply never
-// upgrades a set that does not already claim them. The kitty keyboard
-// protocol is the one enable-only verdict — a flags reply turns the enhanced
-// keyboard on wherever it lands, and silence changes nothing.
+// regions stay veto-only: a positive reply never upgrades a set that does
+// not already claim them. Synchronized output is probe-driven both ways
+// under the auto default — a mode 2026 answer that recognizes the mode
+// turns the wrapper on wherever it lands, a rejection turns it off — and
+// the LUX_TUI_SYNC_OUTPUT override replaces the verdict entirely. The
+// kitty keyboard and pixel mouse verdicts are enable-only: enhanced input
+// changes how keys are encoded, and pixel mouse changes how coordinates
+// are encoded, so each is enabled by a positive reply and by nothing else.
 func TestApplyProbeFeatures(t *testing.T) {
 	before := capability.Set{
 		Terminal:           "vt500",
@@ -483,29 +487,77 @@ func TestApplyProbeFeatures(t *testing.T) {
 		name     string
 		features capability.Set
 		reply    probeReply
+		sync     syncOutputMode
 		want     capability.Set
 	}{
-		{"unknown reply keeps defaults", before, probeReply{}, before},
-		{"supported scroll keeps the flag", before, probeReply{answered: true, scroll: probeSupported}, before},
-		{"supported sync keeps the flag", before, probeReply{answered: true, sync: probeSupported}, before},
-		{"rejected scroll clears scroll regions", before, probeReply{answered: true, scroll: probeRejected}, scrollOff},
-		{"rejected sync clears synchronized output", before, probeReply{answered: true, sync: probeRejected}, syncOff},
-		{"both rejected clear both", before, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, bothOff},
-		{"supported scroll and sync never upgrade an empty set", capability.Set{}, probeReply{answered: true, scroll: probeSupported, sync: probeSupported}, capability.Set{}},
-		{"already disabled stays disabled", bothOff, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, bothOff},
-		{"supported kitty turns the keyboard on", before, probeReply{answered: true, keyboard: probeSupported}, keyboardOn},
-		{"kitty support upgrades even an empty set", capability.Set{}, probeReply{answered: true, keyboard: probeSupported}, capability.Set{KeyboardEnhanced: true}},
-		{"rejected kitty changes nothing", before, probeReply{answered: true, keyboard: probeRejected}, before},
-		{"unknown kitty keeps the current state", keyboardOn, probeReply{answered: true}, keyboardOn},
-		{"supported pixel turns the mode on", before, probeReply{answered: true, pixel: probeSupported}, pixelOn},
-		{"pixel support upgrades even an empty set", capability.Set{}, probeReply{answered: true, pixel: probeSupported}, capability.Set{PixelMouse: true}},
-		{"rejected pixel changes nothing", before, probeReply{answered: true, pixel: probeRejected}, before},
-		{"unknown pixel keeps the current state", pixelOn, probeReply{answered: true}, pixelOn},
+		// The auto default: only the 2026 answer moves the flag.
+		{"unknown reply keeps defaults", before, probeReply{}, syncOutputAuto, before},
+		{"supported scroll keeps the flag", before, probeReply{answered: true, scroll: probeSupported}, syncOutputAuto, before},
+		{"supported sync keeps the flag", before, probeReply{answered: true, sync: probeSupported}, syncOutputAuto, before},
+		{"rejected scroll clears scroll regions", before, probeReply{answered: true, scroll: probeRejected}, syncOutputAuto, scrollOff},
+		{"rejected sync clears synchronized output", before, probeReply{answered: true, sync: probeRejected}, syncOutputAuto, syncOff},
+		{"both rejected clear both", before, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, syncOutputAuto, bothOff},
+		{"supported sync upgrades a set that does not claim it", syncOff, probeReply{answered: true, sync: probeSupported}, syncOutputAuto, before},
+		{"supported sync upgrades even an empty set", capability.Set{}, probeReply{answered: true, sync: probeSupported}, syncOutputAuto, capability.Set{SynchronizedOutput: true}},
+		{"rejected sync downgrades even an empty set", capability.Set{}, probeReply{answered: true, sync: probeRejected}, syncOutputAuto, capability.Set{}},
+		{"already disabled stays disabled", bothOff, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, syncOutputAuto, bothOff},
+		// The override replaces the verdict in both directions: it exists
+		// for terminals whose report lies.
+		{"forced on beats a rejection", syncOff, probeReply{answered: true, sync: probeRejected}, syncOutputOn, before},
+		{"forced on upgrades an empty set", capability.Set{}, probeReply{}, syncOutputOn, capability.Set{SynchronizedOutput: true}},
+		{"forced off beats support", before, probeReply{answered: true, sync: probeSupported}, syncOutputOff, syncOff},
+		{"forced off stays off on silence", syncOff, probeReply{}, syncOutputOff, syncOff},
+		// Other verdicts are untouched by the sync mode.
+		{"supported scroll and sync never upgrade scroll in an empty set", capability.Set{}, probeReply{answered: true, scroll: probeSupported, sync: probeSupported}, syncOutputAuto, capability.Set{SynchronizedOutput: true}},
+		{"supported kitty turns the keyboard on", before, probeReply{answered: true, keyboard: probeSupported}, syncOutputAuto, keyboardOn},
+		{"kitty support upgrades even an empty set", capability.Set{}, probeReply{answered: true, keyboard: probeSupported}, syncOutputAuto, capability.Set{KeyboardEnhanced: true}},
+		{"rejected kitty changes nothing", before, probeReply{answered: true, keyboard: probeRejected}, syncOutputAuto, before},
+		{"unknown kitty keeps the current state", keyboardOn, probeReply{answered: true}, syncOutputAuto, keyboardOn},
+		{"supported pixel turns the mode on", before, probeReply{answered: true, pixel: probeSupported}, syncOutputAuto, pixelOn},
+		{"pixel support upgrades even an empty set", capability.Set{}, probeReply{answered: true, pixel: probeSupported}, syncOutputAuto, capability.Set{PixelMouse: true}},
+		{"rejected pixel changes nothing", before, probeReply{answered: true, pixel: probeRejected}, syncOutputAuto, before},
+		{"unknown pixel keeps the current state", pixelOn, probeReply{answered: true}, syncOutputAuto, pixelOn},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := applyProbeFeatures(tt.features, tt.reply); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("applyProbeFeatures(%+v, %+v) = %+v, want %+v", tt.features, tt.reply, got, tt.want)
+			if got := applyProbeFeatures(tt.features, tt.reply, tt.sync); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("applyProbeFeatures(%+v, %+v, %d) = %+v, want %+v", tt.features, tt.reply, tt.sync, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestSyncOutputConfigured pins the override vocabulary: on-words force the
+// wrapper on, off-words force it off, and everything else leaves the
+// decision to the probe. The garbage case must not panic the Open path —
+// it degrades to auto after a one-line stderr notice, which the caller
+// cannot assert here, so the return value alone is pinned.
+func TestSyncOutputConfigured(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  syncOutputMode
+	}{
+		{"empty leaves the probe to decide", "", syncOutputAuto},
+		{"auto keyword", "auto", syncOutputAuto},
+		{"default keyword", "default", syncOutputAuto},
+		{"keyword is case insensitive", "AUTO", syncOutputAuto},
+		{"one forces on", "1", syncOutputOn},
+		{"true forces on", "true", syncOutputOn},
+		{"yes forces on", "yes", syncOutputOn},
+		{"on forces on", "on", syncOutputOn},
+		{"zero forces off", "0", syncOutputOff},
+		{"false forces off", "false", syncOutputOff},
+		{"no forces off", "no", syncOutputOff},
+		{"off forces off", "off", syncOutputOff},
+		{"surrounding spaces are trimmed", " on ", syncOutputOn},
+		{"garbage falls back to auto", "banana", syncOutputAuto},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("LUX_TUI_SYNC_OUTPUT", tt.value)
+			if got := syncOutputConfigured(); got != tt.want {
+				t.Errorf("syncOutputConfigured() with %q = %d, want %d", tt.value, got, tt.want)
 			}
 		})
 	}

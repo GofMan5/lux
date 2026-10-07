@@ -62,8 +62,11 @@ synchronized output, hyperlinks, and graphics. Today:
 - graphics remain cell-based;
 - the terminal cursor stays hidden unless a frame requests a caret, and the
   plain profile ignores caret requests entirely;
-- synchronized output is opt-in with `LUX_TUI_SYNC_OUTPUT=1` (also accepts
-  `true`, `yes`, or `on`);
+- synchronized output turns itself on when the terminal's mode 2026 report
+  recognizes the mode; `LUX_TUI_SYNC_OUTPUT` overrides the report either way
+  (`1`/`true`/`yes`/`on` force the wrapper on, `0`/`false`/`no`/`off` force
+  it off, empty or `auto` leaves the decision to the probe) — the same
+  direction Bubble Tea v2 took;
 - styled underlines (SGR `4:1`-`4:5` shapes and the `58`/`59` underline
   color) are part of the render style — shapes transmit at every color
   depth, the color follows the depth ladder;
@@ -92,12 +95,20 @@ query (`CSI ? u`) — followed by a bounded read:
   runs, terminals that answer nothing — including the kitty query, so it
   doubles as the escape hatch for a misbehaving multiplexer); an invalid value
   falls back to the default after a one-line notice on stderr;
-- the mode probes can only veto: only a mode report that positively rejects a
-  capability removes it from the snapshot (a "permanently reset" mode 2026
-  counts, because the set-mode wrapper would be a permanent no-op). A silent
-  terminal, a lost reply, or a partial report keeps the defaults, so a dead
-  link can never corrupt output;
-- the kitty query is the one enable-only verdict: a flags reply
+- the DECRQM answers are asymmetric by design. The DECOM probe can only
+  veto: only a report that positively rejects the mode removes scroll
+  regions from the snapshot — a silent terminal, a lost reply, or a partial
+  report keeps the defaults, so a dead link can never corrupt output. The
+  mode 2026 probe drives synchronized output in both directions: a report
+  that recognizes the mode (set, reset, or permanently set — the backend
+  wraps each frame explicitly, so the reported state does not matter) turns
+  the wrapper on, a rejection — the mode unrecognized, or "permanently
+  reset", where the set-mode wrapper would be a permanent no-op and the
+  frames would stream unsynchronized anyway — removes it, and silence
+  leaves it off, so an unconfirmed terminal never receives sequences it may
+  not parse. The `LUX_TUI_SYNC_OUTPUT` override stands above this verdict
+  on purpose: it is the escape hatch for a terminal whose report lies;
+- the kitty query is the other enable-only verdict: a flags reply
   (`CSI ? flags u`) turns the enhanced keyboard on; silence or junk keeps the
   legacy path;
 - redirected output and `TERM=dumb` skip the probe and use the portable

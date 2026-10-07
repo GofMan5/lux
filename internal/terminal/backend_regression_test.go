@@ -63,18 +63,19 @@ func TestReadLoopReplaysLargePrefillWithoutDeadlock(t *testing.T) {
 	}
 }
 
-// TestPresentSyncVetoReachesOutput pins the synchronized-output veto on
-// Present. The safe default leaves SynchronizedOutput off (it is opt-in via
-// LUX_TUI_SYNC_OUTPUT and negotiation can only downgrade), so a diff must be
-// written bare, with no mode 2026 wrapper at all; only the opted-in case may
-// wrap the diff in \x1b[?2026h and \x1b[?2026l.
+// TestPresentSyncVetoReachesOutput pins the synchronized-output flag on
+// Present. The safe default leaves SynchronizedOutput off — auto waits for
+// a positive DECRPM 2026 reply, forced-off pins it off — so a diff must be
+// written bare, with no mode 2026 wrapper at all; only a set flag (a
+// positive reply or the LUX_TUI_SYNC_OUTPUT=on override) may wrap the diff
+// in \x1b[?2026h and \x1b[?2026l.
 func TestPresentSyncVetoReachesOutput(t *testing.T) {
 	tests := []struct {
 		name string
 		sync bool
 	}{
-		{"vetoed default writes no mode 2026", false},
-		{"opted in wraps the diff in mode 2026", true},
+		{"unset flag writes no mode 2026", false},
+		{"set flag wraps the diff in mode 2026", true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

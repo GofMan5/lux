@@ -147,12 +147,15 @@ the same handful of bytes whether the screen is 80×24 or 120×40.
 Defaults come from the environment (`TERM`, `COLORTERM`, `NO_COLOR`) and the
 platform. Then a single bounded probe at startup asks the terminal itself
 (device attributes, mode reports for scroll regions and synchronized output,
-and the kitty keyboard query). The mode probes can only veto a capability,
-never invent one: a silent or slow terminal keeps the conservative defaults,
-and redirected output skips the probe entirely for the plain-text profile.
-The kitty query is the one enable-only verdict — a flags reply turns on the
+and the kitty keyboard query). The scroll-mode probe can only veto, never
+invent; a silent or slow terminal keeps the conservative defaults, and
+redirected output skips the probe entirely for the plain-text profile. The
+other two queries are enable-only — a kitty flags reply turns on the
 enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
-its C0 alias. Mouse tracking is all-motion (1003 with SGR 1006): hover states
+its C0 alias; a mode 2026 answer that recognizes the mode turns on the
+frame-synchronization wrapper (silence never does), and
+`LUX_TUI_SYNC_OUTPUT` overrides that verdict in either direction. Mouse
+tracking is all-motion (1003 with SGR 1006): hover states
 follow plain pointer motion, and SGR releases carry the real button.
 `WithPixelMouse` opts into kitty's pixel-position mode (1016) where the probe
 confirms it, carrying `PixelX`/`PixelY` and back/forward buttons. Styles
@@ -188,8 +191,11 @@ cells via the queried cell size, plus back/forward buttons and kitty's
 pointer-leave sentinel. Styled underlines and hyperlinks have landed: the
 kitty underline shapes and underline color ride the style diff at every
 depth, and OSC 8 regions are opt-in with a frame contract that never leaks
-an open region. Next slices are the remaining keyboard-truth
-items (synchronized output enable, win32-input-mode, multiplexer
+an open region. Synchronized output has landed the same way: the probe
+enables mode 2026 wrapping only on a recognized answer, with
+`LUX_TUI_SYNC_OUTPUT` as the force-on/force-off escape hatch. Next slices
+are the remaining keyboard-truth
+items (win32-input-mode, multiplexer
 provenance), variable-height virtualization, and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.

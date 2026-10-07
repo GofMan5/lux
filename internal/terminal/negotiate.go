@@ -320,20 +320,31 @@ func featureFromStatus(mode, status int) probeFeature {
 // itself reported. Unknown answers keep the defaults — a silent terminal is
 // assumed to support what every VT102 descendant supports — and only a
 // positive rejection removes a capability, so a lost reply can never corrupt
-// output. The sync veto mirrors the scroll veto: synchronized output is
-// opt-in via LUX_TUI_SYNC_OUTPUT, but a terminal that answers DECRQM with
-// "mode 2026 unrecognized" would otherwise receive mode-set wrappers it
-// cannot parse. The kitty keyboard and pixel mouse verdicts are the
-// enable-only results: enhanced input changes how keys are encoded, and
-// pixel mouse changes how coordinates are encoded, so each is enabled by a
-// positive reply and by nothing else — a terminal that stays silent keeps
-// the legacy encodings the parser already handles.
-func applyProbeFeatures(features capability.Set, reply probeReply) capability.Set {
+// output. Synchronized output is the one verdict the probe drives in both
+// directions: a DECRPM answer that recognizes mode 2026 turns the frame
+// wrapper on (an unconfirmed terminal never receives it), a rejection turns
+// it off, and silence keeps the safe default. The LUX_TUI_SYNC_OUTPUT
+// override wins over the probe either way — it exists precisely for the
+// terminal whose report lies. The kitty keyboard and pixel mouse verdicts
+// are the other enable-only results: enhanced input changes how keys are
+// encoded, and pixel mouse changes how coordinates are encoded, so each is
+// enabled by a positive reply and by nothing else — a terminal that stays
+// silent keeps the legacy encodings the parser already handles.
+func applyProbeFeatures(features capability.Set, reply probeReply, sync syncOutputMode) capability.Set {
+	switch sync {
+	case syncOutputOn:
+		features.SynchronizedOutput = true
+	case syncOutputOff:
+		features.SynchronizedOutput = false
+	default:
+		if reply.sync == probeSupported {
+			features.SynchronizedOutput = true
+		} else if reply.sync == probeRejected {
+			features.SynchronizedOutput = false
+		}
+	}
 	if reply.scroll == probeRejected {
 		features.ScrollRegions = false
-	}
-	if reply.sync == probeRejected {
-		features.SynchronizedOutput = false
 	}
 	if reply.keyboard == probeSupported {
 		features.KeyboardEnhanced = true

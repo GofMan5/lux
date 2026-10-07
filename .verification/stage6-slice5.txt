@@ -1,0 +1,114 @@
+Stage 6, slice 5 — keyboard truth: synchronized output enabled by the probe — local verification, 2026-10-07
+=============================================================================================================
+
+Scope (ROADMAP.md, stage 6 item 5): synchronized output stops being
+env-var-only opt-in and becomes probe-driven — a positive DECRPM 2026
+answer enables the frame wrapper, a rejection disables it, and
+LUX_TUI_SYNC_OUTPUT remains an override in both directions (force-on /
+force-off). Landed as one commit:
+
+  (this commit) feat: enable synchronized output by probe
+               internal/terminal: syncOutputMode tri-state (auto/on/off) +
+               syncOutputConfigured (empty|auto|default -> auto,
+               1|true|yes|on -> on, 0|false|no|off -> off, anything else ->
+               auto after a one-line stderr notice, the probeTimeoutConfigured
+               pattern); detectCapabilities now claims the flag only for a
+               forced-on override (with negotiation disabled nothing else
+               could enable it); applyProbeFeatures gains the mode argument
+               and drives SynchronizedOutput both ways — supported sets it,
+               rejected clears it, silence keeps the base; the override
+               replaces the verdict entirely in either direction. Present
+               and the encoder are untouched: they already wrap any frame
+               when the flag is set, and already never wrap when it is not.
+
+Design invariants (all preserved):
+  - the safe default: an unconfirmed terminal (silent probe, negotiation
+    disabled) never receives \x1b[?2026h/l; auto starts from false.
+  - the override wins over the report in BOTH directions — it exists for
+    a terminal whose report lies; force-on beats a veto, force-off beats
+    a recognized answer.
+  - the plain profile never sees the wrapper (plain snapshots are
+    newline-delimited, no mode-set involved).
+  - statuses 1/2/3 (set/reset/permanently set) all count as "recognized":
+    the backend wraps each frame explicitly, so the reported current state
+    does not matter; 0 (unrecognized) and 4 (permanently reset) are
+    rejections — with 4 the set-mode wrapper would be a permanent no-op
+    and the frames would stream unsynchronized anyway (unchanged logic in
+    featureFromStatus).
+
+Test evidence (windows/amd64, 2026-10-07):
+  go test ./...      ok, all 10 packages
+  go vet ./...       clean
+  gofmt -l .         clean
+  Reworked/extended tests, all PASS:
+      negotiate_test.go TestApplyProbeFeatures — the table gained the sync
+          mode axis and now pins: supported upgrades a set that does not
+          claim the flag, upgrades even an empty set, rejected downgrades
+          even an empty set, forced-on beats a rejection, forced-on
+          upgrades an empty set with no reply at all, forced-off beats
+          support, forced-off stays off on silence, and the sync mode
+          never touches the other verdicts (scroll stays veto-only, kitty
+          and pixel stay enable-only).
+      negotiate_test.go TestSyncOutputConfigured (new, 14 subtests) — the
+          override vocabulary: empty/auto/default/AUTO -> auto,
+          1/true/yes/on -> on, 0/false/no/off -> off, " on " trimmed,
+          garbage -> auto.
+      backend_regression_test.go TestPresentSyncVetoReachesOutput —
+          unchanged mechanics (unset flag -> no mode 2026 anywhere, set
+          flag -> both halves of the wrapper); only the contract comment
+          was updated to the new enable semantics.
+      Probe-report parsing itself (statuses 0/2/3/4 for mode 2026) was
+          already pinned by the existing parse table tests; this slice
+          changed what the verdicts DO, not how they are parsed.
+
+Linux evidence (docker golang:1.25-alpine, 2026-10-07):
+  go test ./... -count=1    all 10 packages ok
+  (the same lane that runs the pipe-based negotiation tests skipped on
+  Windows.)
+
+Fuzz (windows/amd64, 2026-10-07):
+  FuzzParserNeverPanics  ./internal/terminal  20 s  PASS
+      1,541,536 execs (72,930/sec avg), 4 new interesting entries (444
+      total). The 2026 set/reset pair was already in the corpus from slice
+      4; this slice touched no parser code (verdict application and env
+      parsing only), so the campaign confirms nothing regressed.
+
+Doc-truth cross-check (every claim traced to code or spec first):
+  - direction validated against the market: charmbracelet/bubbletea PR
+    #1542 ("v2: Support mode 2026 (synchronized output updates)", MERGED,
+    fetched from the GitHub API on 2026-10-07): on a ModeReportMsg for the
+    synchronized-output mode the renderer calls setSyncdUpdates(true) —
+    enable-by-mode-report, not opt-in-by-flag. Bubble Tea gates whether
+    the query is even sent with TERM_PROGRAM heuristics (excluding SSH
+    unless known-good); lux-tui instead always asks inside its bounded
+    150 ms probe, which already exists for scroll/kitty/pixel. lux-tui
+    also accepts set/permanently-set (1/3) as recognition, not just the
+    "supported and currently reset" (2) state Bubble Tea waits for — the
+    wrapper is idempotent around an already-set mode.
+  - status meanings: 0 = not recognized, 1 = set, 2 = reset, 3 =
+    permanently set, 4 = permanently reset (DECRPM; already encoded and
+    tested by featureFromStatus since the negotiation slice).
+  - COMPATIBILITY.md/README.md/CHANGELOG.md updated: the capability
+    bullet, the "mode probes can only veto" paragraph (now: DECOM is
+    veto-only, 2026 is driven both ways, kitty is enable-only), the
+    README capabilities paragraph and Direction list (synchronized
+    output enable dropped from the open items).
+  - house style: no raw URLs in COMPATIBILITY.md body (named reference
+    "Bubble Tea v2" only); the PR-number reference stays in ROADMAP.md
+    (item 5) and this artifact carries the verification trace.
+
+Known limits (honesty):
+  - the apply-side tests are pure table tests; the full Open->probe->
+    ->Present path with a real mode-2026-reporting terminal is exercised
+    only through the pipe-based negotiation tests on the Linux lane and
+    the encoder wrapper tests — no live-terminal matrix yet (stage 10).
+  - an invalid LUX_TUI_SYNC_OUTPUT value degrades to auto with a stderr
+    notice; the notice itself is printed by syncOutputConfigured and
+    pinned only by return value (the TestSyncOutputConfigured comment
+    says so).
+  - the docker Linux lane used golang:1.25-alpine (cached locally); CI
+    pins go 1.23.x and stable, so the matrix stays broader than this
+    local run.
+
+Stage 6 is not closed: items 6-7 (win32-input-mode, multiplexer
+provenance) are still open. Stage-close artifact lands after item 7.

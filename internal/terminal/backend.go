@@ -4,6 +4,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -178,7 +179,12 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 		return capability.Set{}, err
 	}
 	b.writer = writer
-	b.features = detectCapabilities(syncOutputConfigured())
+	// Only a forced-on override claims synchronized output upfront: with
+	// the probe disabled there is no reply to enable it, while auto and
+	// forced-off start without the wrapper and let the verdict below (or
+	// the override, which the verdict re-applies) decide.
+	sync := syncOutputConfigured()
+	b.features = detectCapabilities(sync == syncOutputOn)
 	// The size is snapshotted before the probe and compared after it: a
 	// resize inside the probe window is invisible to the watchers, which
 	// start only once the probe returns — Unix has no SIGWINCH handler
@@ -196,7 +202,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	var leftover []byte
 	if timeout, probe := probeTimeoutConfigured(); probe {
 		reply, pending := negotiate(ctx, b.input, b.writer, timeout)
-		b.features = applyProbeFeatures(b.features, reply)
+		b.features = applyProbeFeatures(b.features, reply, sync)
 		leftover = pending
 	}
 	// kitty and pixel are latched before the enter write so every exit path
@@ -725,13 +731,46 @@ func detectCapabilities(syncOutput bool) capability.Set {
 		BracketedPaste:   true,
 		// Scroll regions are the historical baseline every VT102 descendant
 		// implements; negotiation's job is only to veto this default.
+		// Synchronized output is the opposite: unconfirmed terminals must
+		// never receive the mode-set wrapper, so only a forced-on override
+		// claims it here — every other path waits for the probe.
 		ScrollRegions:      true,
 		SynchronizedOutput: syncOutput,
 		Graphics:           capability.GraphicsCells,
 	}
 }
 
-func syncOutputConfigured() bool {
-	value := strings.ToLower(strings.TrimSpace(os.Getenv("LUX_TUI_SYNC_OUTPUT")))
-	return value == "1" || value == "true" || value == "yes" || value == "on"
+// syncOutputMode is the LUX_TUI_SYNC_OUTPUT setting. The probe owns the
+// auto default: a terminal that positively recognizes mode 2026 gets the
+// frame wrapper, and silence never does. The two forced modes are the
+// escape hatch for a report that lies, each overriding the probe verdict.
+type syncOutputMode uint8
+
+const (
+	// syncOutputAuto lets the DECRPM 2026 reply decide.
+	syncOutputAuto syncOutputMode = iota
+	// syncOutputOn forces the wrapper on even when the probe disagrees.
+	syncOutputOn
+	// syncOutputOff forces the wrapper off even when the probe agrees.
+	syncOutputOff
+)
+
+// syncOutputConfigured reads LUX_TUI_SYNC_OUTPUT. Empty, "auto", and
+// "default" leave the decision to the probe; "1", "true", "yes", and "on"
+// force the wrapper on; "0", "false", "no", and "off" force it off.
+// Anything else falls back to auto after printing a one-line notice on
+// stderr — Open runs before the alternate screen is entered, so the notice
+// cannot disturb a frame.
+func syncOutputConfigured() syncOutputMode {
+	switch value := strings.ToLower(strings.TrimSpace(os.Getenv("LUX_TUI_SYNC_OUTPUT"))); value {
+	case "", "auto", "default":
+		return syncOutputAuto
+	case "1", "true", "yes", "on":
+		return syncOutputOn
+	case "0", "false", "no", "off":
+		return syncOutputOff
+	default:
+		fmt.Fprintf(os.Stderr, "lux-tui: invalid LUX_TUI_SYNC_OUTPUT %q, leaving the decision to the probe\n", value)
+		return syncOutputAuto
+	}
 }

@@ -76,6 +76,16 @@ work and the API may still change.
   cell. `WithHyperlinks(true)` opts in because the protocol defines no
   detection mechanism; the default keeps frames byte-identical and a
   link-only change costs zero bytes.
+- Synchronized output enabled by the probe: a DECRPM 2026 answer that
+  recognizes the mode (set, reset, or permanently set) turns on the
+  `\x1b[?2026h`/`\x1b[?2026l` frame wrapper, a rejection (unrecognized, or
+  permanently reset, where the wrapper would be a permanent no-op) turns it
+  off, and silence leaves it off — an unconfirmed terminal never receives
+  the sequence. `LUX_TUI_SYNC_OUTPUT` is now a two-way override
+  (`1`/`true`/`yes`/`on` force on, `0`/`false`/`no`/`off` force off, empty
+  or `auto` leaves the probe to decide; an invalid value degrades to auto
+  after a one-line stderr notice). With negotiation disabled, only a
+  forced-on setting claims the wrapper.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
