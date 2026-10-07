@@ -1,10 +1,68 @@
 # Third-party notices
 
-Snapshot: **2026-08-09**, based on the committed `go.mod` dependency graph.
+Snapshot: **2026-10-07**, based on the committed `go.mod` dependency graph.
 Re-run `go list -m all` and update this file whenever dependencies change.
 
 LUX TUI includes or depends on the software below. These notices do not change
 the license of LUX TUI itself.
+
+## Unicode Character Database 18.0.0 (derived data)
+
+License: Unicode License v3 (see below)
+Copyright (c) 1991-2026 Unicode, Inc.
+Source: <https://www.unicode.org/Public/18.0.0/ucd/>
+
+`render/widthoverlay.go` embeds range tables derived from these 18.0.0 UCD
+files: `EastAsianWidth.txt`, `emoji/emoji-data.txt`, and
+`auxiliary/GraphemeBreakProperty.txt`. The derivation compared every
+codepoint's measured `uniseg` width against a model built from these files
+and recorded only the differences; the tables are a mechanical
+transformation of the Unicode data. The 18.0.0
+`auxiliary/GraphemeBreakTest.txt` was used to record UAX #29 conformance
+results in COMPATIBILITY.md and `.verification/`, and is not embedded in
+code.
+
+```text
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 1991-2026 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+```
 
 ## `github.com/rivo/uniseg` v0.4.7
 

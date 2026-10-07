@@ -19,7 +19,8 @@ machine skips stale animation frames rather than replaying them.
 The Go ecosystem offers excellent event loops, styling libraries, widgets, and
 cell backends. The gap is a single lightweight stack that combines:
 
-- Unicode grapheme correctness from layout through diffing;
+- Unicode grapheme correctness and current-width truth (18.0.0 overlay over
+  uniseg segmentation) from layout through diffing;
 - responsive, content-driven layout without a browser-sized runtime;
 - smooth motion whose timing remains correct when frames are late;
 - conservative capability degradation for local, remote, and redirected output;
@@ -35,7 +36,7 @@ comparative claims require reproducible results.
 | Package | Implemented now |
 |---|---|
 | [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
-| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement |
+| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement, and Unicode 18.0.0 terminal-width truth over uniseg segmentation |
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
 | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |

@@ -1,0 +1,116 @@
+Stage 7, slice 1 — Unicode 18.0.0 terminal-width overlay — local verification, 2026-10-07
+=========================================================================================
+
+Scope (ROADMAP.md, stage 7 item 1): bring cell-width truth to current Unicode
+without replacing the uniseg segmentation engine. Code:
+render/widthoverlay.go (range tables + cluster translation), one call site in
+render/types.go terminalWidth. Tests: render/widthoverlay_test.go.
+Docs: docs/COMPATIBILITY.md ("Terminal width truth" section), CHANGELOG.md,
+README.md, THIRD_PARTY_NOTICES.md (Unicode License v3).
+
+Derivation (offline generator, not committed; sources under .research-unicode/,
+removed before commit):
+  - sources: 18.0.0 UCD EastAsianWidth.txt, emoji/emoji-data.txt,
+    auxiliary/GraphemeBreakProperty.txt; 15.0.0 same files plus 16/17 EAW
+    references for cross-checking promotions
+    https://www.unicode.org/Public/18.0.0/ucd/EastAsianWidth.txt
+    https://www.unicode.org/Public/18.0.0/ucd/emoji/emoji-data.txt
+    https://www.unicode.org/Public/18.0.0/ucd/auxiliary/GraphemeBreakProperty.txt
+  - baseline = ACTUAL uniseg v0.4.7 behavior, measured per codepoint
+    (comment dates in uniseg tables are 15.0.0, but some ranges ship 15.1
+    data, e.g. U+2EBF0 measures 2 — the model compares against behavior,
+    not comments)
+  - model width per codepoint: EAW W/F=2; EAW A=1 (no policy yet, item 2);
+    Extended_Pictographic default 2 via emoji-data; property classes from
+    GBP (Extend=0, Control=0, SpacingMark attaches as spacing)
+  - result recorded only where measured uniseg differs from the 18.0.0
+    model: overlayWide = 33 ranges / 1357 codepoints (I Ching trigrams
+    U+2630-2637 and hexagrams U+4DC0-4DFF from 16.0 EAW promotions,
+    monograms U+1D300-1D356, Tangut/Jurchen supplement blocks, CJK
+    Extension I, new emoji incl. U+1F1AE Tomobiki); overlayZero =
+    53 ranges / 145 codepoints (new Extend/Control assignments: Tulu-
+    Tigalari U+113B8, Vietnamese alternate reading marks, 16.0
+    SpacingMark->Extend reclassifications U+1D166/U+1D16D, new musical
+    marks U+1D127/U+1D128, Latin Ext-D U+1ACF-1AF0)
+  - NARROWER results: 0 (no codepoint got a smaller 18.0.0 width, so no
+    narrow table). NEW Extended_Pictographic: 0 (property stable since
+    15.0, so no VS16/pictographic table needed)
+  - spot-verified against raw UCD lines: 2630, 4DC0, 1D300, 18E00, 1F1AE,
+    2EBF0 (EAW); GBP 16FF0, 1D166, 1D127 (reclassifications vs 15.0.0)
+  - cluster semantics: clusters containing overlay codepoints are measured
+    by translating each overlaid rune to a legacy stand-in of the same
+    class and width (Extend->U+0300, Wide->U+4E00) and calling
+    uniseg.StringWidth, so uniseg's composition rules (RI pairs, Hangul
+    LVT, GB11, VS15/VS16) stay engaged; clusters with no overlay rune
+    keep the raw uniseg result byte-for-byte
+
+Test evidence (windows/amd64, 2026-10-07):
+  go test ./render/ -count=1            ok
+  go test ./... -count=1                ok, all 10 packages, run twice
+  new tests:
+      TestOverlayRune (15 cases: hits 2630/4DFF/1D300/18E00/19191/1F1AE/
+          113B8/1D166/1D127/1ACF, misses 262F/4E00/'a'/9E8C/10FFFF)
+      TestRangeContainsBoundaries (binary-search endpoints)
+      TestTerminalWidthOverlay (19 cases: new 2/0, legacy e-acute=1,
+          CJK=2, flags=2, ZWJ family=2, U+2E3A/2E3B clamp to 2, VS15=1,
+          VS16=2, "e"+U+1D166=1, pictographic+new Extend=2)
+      TestOverlayClusterWidthFastPath (pure-legacy cluster: ok=false)
+      TestTextWidthOverlay ("a"+trigram+new mark+jurchen = 1+2+0+2)
+      TestGraphemeWidthOverlay
+      TestCanvasTextRendersOverlayWidths (golden cells: trigram 2 cells +
+          continuation, new Extend rides the base cell, jurchen 2 cells)
+  full suite: one transient failure of TestShowcaseEndToEndInputAndModal
+  ("matching state timeout") in the run immediately after 45 s of
+  benchmark churn; the showcase state channel drops updates under load
+  (non-blocking send at 240 FPS) — the same flake family stage 4
+  stress-tested and documented (.verification/verification-stage4.txt).
+  Two subsequent full-suite runs green; the failing assertion (rune
+  insertion into the name field) touches no width math, and the rune
+  (U+754C) is legacy-wide in both models.
+
+Benchmarks (i5-10400F, -benchmem, 5 runs each, medians):
+  TextWidth 67-char legacy line (fast path, 2 binary-search misses per
+      cluster): 12.0 us before -> 13.1 us after, 0 allocs/op both
+  TextWidth overlay-hit line (8 hits): 2.6 -> 3.3 us, 3 allocs/op
+      (strings.Builder translation)
+  Canvas.Text overlay line, 120x40 buffer: ~17 us, 2 allocs/op
+  The 64 KiB wrap budget is item 4's acceptance, priced then.
+
+UAX #29 conformance (GraphemeBreakTest, via the generator's runner):
+  15.0.0: 602/602 lines PASS (engine conforms to the data it ships)
+  18.0.0: 827/853 lines pass; 26 fails are the new GB9c-style ConjunctLinker/
+      LinkingConsonant Indic conjunct rules (Unicode 16+) absent from
+      uniseg v0.4.7 — segmentation drift, documented in COMPATIBILITY.md,
+      not fixed by a width-only overlay
+  Known practical drift: ZWJ sequences composed entirely of post-15.0
+      codepoints may split into separate clusters (widths stay correct,
+      glue does not); GB9c Indic conjuncts do not fuse. A future uniseg
+      upgrade absorbs both.
+
+Doc-truth cross-check (every claim traced before writing):
+  - terminalWidth is the only behavior change: overlay hit -> translated
+    cluster width, clamped to [0,2]; miss -> raw uniseg, clamped (the
+    3-cell U+2E3A / 4-cell U+2E3B remain 2 cells)
+  - Canvas.Text consumes terminalWidth (render/canvas.go), so Put/advance
+    and the zero-width appendCombining path inherit the overlay; the
+    golden cell test pins that
+  - TextWidth/firstGrapheme/GraphemeWidth route through the same helpers
+  - uniseg v0.4.7 stays the segmentation engine (go.mod unchanged); the
+    overlay is data-only and adds no dependency
+  - THIRD_PARTY_NOTICES.md carries the canonical Unicode License v3 text
+    fetched from https://www.unicode.org/license.txt (the 18.0.0 UCD
+    files' license), with the derived-table derivation stated
+
+Honesty:
+  - golangci-lint NOT RUN (not installed on this machine)
+  - the overlay generator itself was a temp tool
+    (%TEMP%\luxwidth\main.go) and is not committed; regeneration requires
+    re-downloading the four UCD files and re-measuring uniseg
+  - .research-unicode/ (raw UCD working copies) deleted from the tree
+    after verification (Resolve-Path checked before removal)
+  - EAW Ambiguous still renders 1 cell everywhere; the WidthPolicy item
+    (stage 7 item 2) owns that decision
+
+Stage 7 is not closed: items 2-5 (WidthPolicy, capability-gated core mode
+2027, Canvas.TextWrap/TextMetrics, TextArea + examples/textedit) are still
+open. Stage-close artifact lands after item 5.

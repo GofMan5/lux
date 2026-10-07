@@ -25,9 +25,11 @@ is environment-derived rather than actively probed. Generic VT transports
 provide committed UTF-8 text, not a portable IME preedit/candidate lifecycle.
 PowerShell and cmd remain shells; their host terminal determines behavior.
 
-TextInput is EGC-correct under the currently bundled uniseg Unicode 15.0 data.
-Terminal/font width, RTL visual editing, locale-tailored words, IME preedit,
-password hardening, undo, and multiline are outside the current claim. Paste is
+TextInput is EGC-correct under the currently bundled uniseg Unicode 15.0
+segmentation; cell widths are corrected to Unicode 18.0.0 by the overlay
+described in "Terminal width truth" below. Terminal/font width, RTL visual
+editing, locale-tailored words, IME preedit, password hardening, and
+multiline are outside the current claim. Paste is
 bracketed/bounded by the adapter and then sanitized/bounded again by the field.
 LUX TUI does not read/write OSC 52 automatically; clipboard mutation requires
 an explicit application-supplied `Clipboard` implementation. No OS adapter is
@@ -385,6 +387,62 @@ cell encoding; the option stays inert rather than degrading to a guess.
 Malformed pixel reports — button codes past 511, negative coordinates, the
 reserved 130/131 codes — fall through to the unknown-key escape hatch, and
 the decoder never trusts a zero cell size for mapping.
+
+## Terminal width truth
+
+Cell widths follow a two-layer model: `uniseg` v0.4.7 computes every
+grapheme cluster's width, and a Unicode 18.0.0 overlay corrects the
+codepoints where uniseg's 15.0-era tables disagree with current data. The
+overlay lives in `render/widthoverlay.go` as two range tables derived
+mechanically from the 18.0.0 UCD files (`EastAsianWidth.txt`,
+`emoji/emoji-data.txt`, `auxiliary/GraphemeBreakProperty.txt`) by measuring
+`uniseg.StringWidth` of every codepoint against a 18.0.0 rune-width model:
+
+- 33 wide ranges (1357 codepoints) render two cells: the 16.0 East Asian
+  Width promotions (I Ching trigrams `U+2630..U+2637` and hexagrams
+  `U+4DC0..U+4DFF`, Tangut supplement and Monogram blocks, CJK Extension
+  I), 15.1 additions uniseg missed, and new emoji;
+- 53 zero ranges (145 codepoints) render no cells and ride the combining
+  mark path: new Extend assignments (Tulu-Tigalari, Latin Extended-D,
+  Vietnamese alternate reading marks) and the 16.0 reclassifications from
+  SpacingMark into Extend (`U+1D166`, `U+1D16D`);
+- no codepoint gets narrower and Extended_Pictographic is stable after
+  15.0, so no VS16 presentation table is needed.
+
+A cluster containing an overlay codepoint is measured by translating each
+new codepoint to a legacy stand-in with the same break class and width
+(`Extend -> U+0300`, `Wide -> U+4E00`) and asking uniseg — that keeps
+uniseg's composition rules (regional-indicator pairs, Hangul, VS15/VS16
+presentation switches) engaged on the corrected widths. Clusters without
+overlay codepoints take the raw uniseg width unchanged, including the
+3-cell `U+2E3A` and 4-cell `U+2E3B` (clamped to 2 by the cell model).
+`Canvas.Text`, `TextWidth` and `TextInput` all resolve through this single
+path.
+
+Segmentation is **not** upgraded: boundaries stay uniseg. Conformance
+against the UAX #29 `GraphemeBreakTest`:
+
+- Unicode 15.0.0: 602/602 lines pass — the engine conforms to the data it
+  ships;
+- Unicode 18.0.0: 827/853 lines pass; the 26 failures are all the new
+  GB9c-style Indic conjunct rules (ConjunctLinker/LinkingConsonant classes)
+  introduced after uniseg's data was cut, plus the test file's new
+  ZWJ-sequence lines built from post-15.0 codepoints.
+
+Practical drift while segmentation stays 15.0: a ZWJ emoji whose
+codepoints were all assigned after 15.0 can split into separate clusters
+(each still measured with the correct width, so the total advance only
+differs where the sequence should have glued), and GB9c Indic conjuncts do
+not fuse. A uniseg upgrade will absorb both; the overlay is width-only and
+does not touch boundaries.
+
+Width data sources (Unicode License, © Unicode®, Inc.; see
+THIRD_PARTY_NOTICES.md):
+
+- https://www.unicode.org/Public/18.0.0/ucd/EastAsianWidth.txt
+- https://www.unicode.org/Public/18.0.0/ucd/emoji/emoji-data.txt
+- https://www.unicode.org/Public/18.0.0/ucd/auxiliary/GraphemeBreakProperty.txt
+- https://www.unicode.org/Public/18.0.0/ucd/auxiliary/GraphemeBreakTest.txt
 
 ## Styled underlines
 

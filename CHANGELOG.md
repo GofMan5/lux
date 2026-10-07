@@ -139,6 +139,23 @@ work and the API may still change.
   to tmux's, and its DA2 code 83 was not audited for exclusivity among real
   terminals (the version parameter behind it drifts between builds), so
   `$STY` and a `screen*` `$TERM` are the trusted witnesses there.
+- Terminal-width truth: `uniseg` v0.4.7 remains the grapheme segmentation
+  engine, but every grapheme's cell width now passes a Unicode 18.0.0
+  overlay (range tables derived mechanically from the 18.0.0 UCD
+  EastAsianWidth, emoji-data and GraphemeBreakProperty files). Codepoints
+  uniseg's 15.0-era data still measures as one cell render at their 18.0.0
+  width: the 16.0 East Asian Width promotions (I Ching trigrams and
+  hexagrams, Tangut supplement and Monogram blocks, new emoji such as the
+  Tomobiki symbol and the harp), and new Extend/Control assignments
+  (Tulu-Tigalari marks, Latin Extended-D marks, musical-symbol
+  reclassifications) measure zero cells and ride the existing combining-mark
+  path. Clusters with no overlay codepoint keep the exact raw `uniseg`
+  width, so regional-indicator pairs, Hangul composition, VS15/VS16
+  presentation switches and the 3/4-cell dashes are untouched. Segmentation
+  itself is not upgraded: UAX #29 conformance is 602/602 against the 15.0.0
+  GraphemeBreakTest, and the drift against 18.0.0 (26 failing lines, all new
+  GB9c-style Indic conjunct rules uniseg lacks, plus ZWJ sequences built
+  from post-15.0 codepoints) is documented in COMPATIBILITY.md.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

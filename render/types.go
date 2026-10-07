@@ -224,4 +224,13 @@ func firstGrapheme(text string) (string, int) {
 	return grapheme, terminalWidth(grapheme)
 }
 
-func terminalWidth(grapheme string) int { return min(max(uniseg.StringWidth(grapheme), 0), 2) }
+// WHY: overlayClusterWidth upgrades clusters containing post-15.0 Unicode
+// codepoints to 18.0.0 widths; everything else flows through uniseg exactly
+// as before. The clamp to 2 cells stays: the Canvas cell model can only ever
+// hold a single base rune plus combining marks.
+func terminalWidth(grapheme string) int {
+	if w, ok := overlayClusterWidth(grapheme); ok {
+		return min(max(w, 0), 2)
+	}
+	return min(max(uniseg.StringWidth(grapheme), 0), 2)
+}
