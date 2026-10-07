@@ -478,7 +478,7 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
 	canvas := render.NewCanvas(frame)
 	style := render.Style{Foreground: render.RGBColor(1, 2, 3), Background: render.IndexedColor(42), Attrs: render.AttrBold}
 	canvas.Text(0, 0, "A界B", style)
-	got := string(appendFrame(nil, frame, nil, capability.TrueColor, true, false))
+	got := string(appendFrame(nil, frame, nil, capability.TrueColor, true, false, false))
 	// The trailing blank leaves the terminal at the default style, so the frame
 	// needs no closing reset.
 	want := "\x1b[1;1H\x1b[0;1;38;2;1;2;3;48;5;42mA界B\x1b[0m "
@@ -487,11 +487,11 @@ func TestANSIFrameExactDiffAndWideCells(t *testing.T) {
 	}
 
 	previous := frame.Clone()
-	if got := appendFrame(nil, frame, previous, capability.TrueColor, true, true); len(got) != 0 {
+	if got := appendFrame(nil, frame, previous, capability.TrueColor, true, true, false); len(got) != 0 {
 		t.Fatalf("unchanged synchronized frame = %q", got)
 	}
 	canvas.Put(4, 0, "X", render.Style{})
-	got = string(appendFrame(nil, frame, previous, capability.ANSI16, true, true))
+	got = string(appendFrame(nil, frame, previous, capability.ANSI16, true, true, false))
 	want = "\x1b[?2026h\x1b[1;5H\x1b[0mX\x1b[?2026l"
 	if got != want {
 		t.Fatalf("diff\n got: %q\nwant: %q", got, want)
@@ -503,10 +503,10 @@ func TestANSIFrameSkipsColorsEquivalentAfterDowngrade(t *testing.T) {
 	frame := render.NewBuffer(1, 1)
 	render.NewCanvas(previous).Put(0, 0, "x", render.Style{Foreground: render.RGBColor(255, 0, 0)})
 	render.NewCanvas(frame).Put(0, 0, "x", render.Style{Foreground: render.ANSIColor(9)})
-	if got := appendFrame(nil, frame, previous, capability.ANSI16, true, false); len(got) != 0 {
+	if got := appendFrame(nil, frame, previous, capability.ANSI16, true, false, false); len(got) != 0 {
 		t.Fatalf("equivalent downgraded color emitted diff: %q", got)
 	}
-	if got := appendFrame(nil, frame, previous, capability.TrueColor, true, false); len(got) == 0 {
+	if got := appendFrame(nil, frame, previous, capability.TrueColor, true, false, false); len(got) == 0 {
 		t.Fatal("different true colors did not emit diff")
 	}
 }
@@ -631,6 +631,15 @@ func FuzzParserNeverPanics(f *testing.F) {
 		"\x1b[<0;-1;1M", "\x1b[6;21;10t", "\x1b[6;0;10t", "\x1b[6;21;0t",
 		"\x1b[6;99999999999999999999;10t", "\x1b\x1b[6;21;10t", "\x1b[6;21t",
 		"\x1b[6;21;10;5t", "\x1b[6t",
+		// OSC 8 hyperlinks and styled-underline shapes: terminals echo these
+		// back on some clipboard and debug paths, so the parser must stay
+		// bounded on well-formed, truncated, and unterminated forms, and on
+		// the BEL terminator an OSC may carry instead of ST.
+		"\x1b]8;;http://example.com\x1b\\", "\x1b]8;id=doc;http://example.com\x1b\\",
+		"\x1b]8;;\x1b\\", "\x1b]8;;http://example.com", "\x1b]8;", "\x1b]8",
+		"\x1b]8;;http://e\x07x", "\x1b]0;title\x07", "\x1b]8;;u\x9c",
+		"\x1b[4:3m", "\x1b[4:0m", "\x1b[4;4:2;58;2;1;2;3m", "\x1b[58;5;213m",
+		"\x1b[59m", "\x1b[24m", "\x1b[?2026h", "\x1b[?2026l",
 	}
 	for _, seed := range kittySeeds {
 		seeds = append(seeds, []byte(seed))

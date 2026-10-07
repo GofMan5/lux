@@ -53,15 +53,48 @@ const (
 	AttrStrike
 )
 
+// UnderlineStyle selects the decoration AttrUnderline draws. The zero value is
+// the classic single-line underline, so existing styles keep their meaning;
+// terminals that lack the SGR 4:x sub-parameter degrade to that classic
+// underline rather than losing the attribute.
+type UnderlineStyle uint8
+
+const (
+	UnderlineSingle UnderlineStyle = iota // SGR 4:1
+	UnderlineDouble                       // SGR 4:2
+	UnderlineCurly                        // SGR 4:3
+	UnderlineDotted                       // SGR 4:4
+	UnderlineDashed                       // SGR 4:5
+)
+
 // Style is deliberately comparable so cell diffs need no allocation.
 type Style struct {
 	Foreground Color
 	Background Color
 	Attrs      Attr
+	// UnderlineStyle decorates the underline AttrUnderline draws. It has no
+	// effect while the attribute is clear.
+	UnderlineStyle UnderlineStyle
+	// UnderlineColor colors the underline (SGR 58). The zero Color leaves it
+	// to the terminal default, and it has no effect without AttrUnderline.
+	UnderlineColor Color
 }
 
 // Has reports whether all attributes are present.
 func (s Style) Has(attrs Attr) bool { return s.Attrs&attrs == attrs }
+
+// Link is an OSC 8 hyperlink. The zero Link is no link. ID is the optional
+// stable identifier terminals use to recognize a recurring destination: cells
+// that repeat the same ID share the hover state instead of starting a fresh
+// underline each time. A Link with no URI and no ID is a plain cell.
+type Link struct {
+	URI string
+	ID  string
+}
+
+// Empty reports whether l carries no destination, which is how the renderer
+// and the diff tell "no hyperlink" from one that happens to be blank.
+func (l Link) Empty() bool { return l.URI == "" && l.ID == "" }
 
 // Cell is one terminal grid cell. Width is 1 or 2 for a grapheme's leading
 // cell and 0 for the continuation of a width-2 grapheme.
@@ -69,6 +102,11 @@ type Cell struct {
 	Grapheme string
 	Width    uint8
 	Style    Style
+	// Link is the cell's OSC 8 hyperlink. It participates in cell equality,
+	// so a changed destination repaints the cell. The encoder only writes
+	// OSC 8 sequences when the terminal capability — or an explicit opt-in —
+	// allows it, and the link is never honored without one.
+	Link Link
 }
 
 // BlankCell is the canonical empty terminal cell.

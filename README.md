@@ -42,7 +42,7 @@ comparative claims require reproducible results.
 | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with two enable-only verdicts), streaming input parser with kitty CSI u decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with two enable-only verdicts), streaming input parser with kitty CSI u decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -155,7 +155,11 @@ enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
 its C0 alias. Mouse tracking is all-motion (1003 with SGR 1006): hover states
 follow plain pointer motion, and SGR releases carry the real button.
 `WithPixelMouse` opts into kitty's pixel-position mode (1016) where the probe
-confirms it, carrying `PixelX`/`PixelY` and back/forward buttons.
+confirms it, carrying `PixelX`/`PixelY` and back/forward buttons. Styles
+carry the kitty underline shapes (`4:1`-`4:5`) and underline color
+(`58`/`59`) at every color depth, and `WithHyperlinks(true)` opts into OSC 8
+link regions — undetectable by design, so the default stays byte-identical
+to a links-unaware program.
 Keystrokes that race the probe are replayed in order, never
 dropped. `LUX_TUI_PROBE_TIMEOUT` raises the 150 ms budget or turns
 negotiation off for deterministic runs. Features degrade in this order:
@@ -181,9 +185,12 @@ through caps/num lock, and kitty's private-use functional-key table
 (F13-F35, media, keypad). Mouse truth has landed: all-motion SGR tracking
 with the pixel-position mode (1016) as an opt-in that maps pixel reports to
 cells via the queried cell size, plus back/forward buttons and kitty's
-pointer-leave sentinel. Next slices are the remaining keyboard-truth
-items (hyperlinks and styled underline, synchronized output, win32-input-mode,
-multiplexer provenance), variable-height virtualization, and semantic
+pointer-leave sentinel. Styled underlines and hyperlinks have landed: the
+kitty underline shapes and underline color ride the style diff at every
+depth, and OSC 8 regions are opt-in with a frame contract that never leaks
+an open region. Next slices are the remaining keyboard-truth
+items (synchronized output enable, win32-input-mode, multiplexer
+provenance), variable-height virtualization, and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a

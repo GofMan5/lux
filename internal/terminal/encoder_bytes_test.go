@@ -164,7 +164,7 @@ func BenchmarkEncodeFrame(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		scratch = appendFrame(scratch[:0], frame, previous, capability.TrueColor, true, false)
+		scratch = appendFrame(scratch[:0], frame, previous, capability.TrueColor, true, false, false)
 		size = len(scratch)
 	}
 	b.ReportMetric(float64(size), "bytes/frame")
@@ -176,7 +176,7 @@ func BenchmarkScanUnchanged(b *testing.B) {
 	previous := frame.Clone()
 	b.ResetTimer()
 	for range b.N {
-		appendFrame(nil, frame, previous, capability.TrueColor, true, false)
+		appendFrame(nil, frame, previous, capability.TrueColor, true, false, false)
 	}
 }
 
@@ -195,7 +195,7 @@ func BenchmarkScrollFrame(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for range b.N {
-		scratch = appendFrame(scratch[:0], frame, base.Clone(), capability.TrueColor, true, false)
+		scratch = appendFrame(scratch[:0], frame, base.Clone(), capability.TrueColor, true, false, false)
 		size = len(scratch)
 	}
 	b.ReportMetric(float64(size), "bytes/frame")

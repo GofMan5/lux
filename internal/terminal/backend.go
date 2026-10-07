@@ -73,21 +73,27 @@ type Backend struct {
 	// pixelOpted records the application's WithPixelMouse choice; pixel
 	// latches the mode actually in use, which needs both the opt-in and
 	// a terminal that answered the 1016 probe.
-	pixelOpted   bool
-	pixel        bool
-	features     capability.Set
-	state        *term.State
-	restoreVT    func() error
-	previous     *render.Buffer
-	parser       *parser
-	events       chan event.Event
-	resizes      chan event.Event
-	cancel       context.CancelFunc
-	readDone     chan struct{}
-	resize       resizeWatcher
-	lastResizeW  int
-	lastResizeH  int
-	lastResizeOK bool
+	pixelOpted bool
+	pixel      bool
+	// hyperlinkOpted records the application's Hyperlinks choice; hyperlink
+	// latches the encoder's OSC 8 emission, which needs only the opt-in: the
+	// hyperlink specification defines no detection, so silence cannot be
+	// separated from support.
+	hyperlinkOpted bool
+	hyperlink      bool
+	features       capability.Set
+	state          *term.State
+	restoreVT      func() error
+	previous       *render.Buffer
+	parser         *parser
+	events         chan event.Event
+	resizes        chan event.Event
+	cancel         context.CancelFunc
+	readDone       chan struct{}
+	resize         resizeWatcher
+	lastResizeW    int
+	lastResizeH    int
+	lastResizeOK   bool
 }
 
 // Option configures a Backend at construction time, before any Open.
@@ -102,6 +108,16 @@ type Option func(*Backend)
 // honored per Open, so a second Open after Close re-negotiates.
 func PixelMouse(enabled bool) Option {
 	return func(b *Backend) { b.pixelOpted = enabled }
+}
+
+// Hyperlinks opts into OSC 8 hyperlinks in presented frames. The opt-in is
+// required because the hyperlink specification defines no detection: an
+// answer cannot be separated from silence, so the application decides. On
+// terminals without OSC 8 the regions degrade to plain text, and a program
+// that never opts in encodes frames byte-identical to a build without link
+// support. The choice is honored per Open, like every other Option.
+func Hyperlinks(enabled bool) Option {
+	return func(b *Backend) { b.hyperlinkOpted = enabled }
 }
 
 // New constructs a closed backend. Nil files are allowed for tests and plain
@@ -188,6 +204,10 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// sequences were pushed and must be popped.
 	b.kitty = b.features.KeyboardEnhanced
 	b.pixel = b.pixelOpted && b.features.PixelMouse
+	// OSC 8 has no probe to latch from: the opt-in alone decides, and the
+	// encoder closes every region it opens, so a terminal without support
+	// just renders the text.
+	b.hyperlink = b.hyperlinkOpted
 	// The parser decodes in the mode that is actually entered, from the
 	// very first byte the read loop sees — including the cell-size reply
 	// that enterPixel just put in flight.
@@ -400,7 +420,7 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		b.mu.Unlock()
 		return errors.New("terminal: nil output")
 	}
-	output, plain, synchronized, scrollRegions, features, previous := b.writer, b.plain, b.features.SynchronizedOutput, b.features.ScrollRegions, b.features, b.previous
+	output, plain, synchronized, scrollRegions, links, features, previous := b.writer, b.plain, b.features.SynchronizedOutput, b.features.ScrollRegions, b.hyperlink, b.features, b.previous
 	b.mu.Unlock()
 	// The write slot serializes Present, so the encode scratch and the retained
 	// frame are reused instead of reallocated once per frame.
@@ -408,7 +428,7 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	if plain {
 		data = appendPlain(b.encoded[:0], frame)
 	} else {
-		data = appendFrame(b.encoded[:0], frame, previous, features.Color, scrollRegions, synchronized)
+		data = appendFrame(b.encoded[:0], frame, previous, features.Color, scrollRegions, synchronized, links)
 	}
 	b.encoded = data
 	if len(data) == 0 {

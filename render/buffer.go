@@ -270,7 +270,10 @@ func (b *Buffer) ScrollRows(top, bottom, delta int) bool {
 
 func (b *Buffer) row(y int) []Cell { return b.cells[y*b.width : (y+1)*b.width] }
 
-func (b *Buffer) put(x, y int, grapheme string, width int, style Style) bool {
+// putLink writes a grapheme with style and a hyperlink. Both cells of a width-2
+// grapheme carry the link, because the terminal attributes a printed range as
+// a whole and the diff must see what the wire can show.
+func (b *Buffer) putLink(x, y int, grapheme string, width int, style Style, link Link) bool {
 	if b == nil || y < 0 || y >= b.height || x < 0 || x >= b.width || width < 1 || width > 2 || x+width > b.width {
 		return false
 	}
@@ -279,9 +282,9 @@ func (b *Buffer) put(x, y int, grapheme string, width int, style Style) bool {
 		b.eraseAt(x+1, y)
 	}
 	index := y*b.width + x
-	b.cells[index] = Cell{Grapheme: grapheme, Width: uint8(width), Style: style}
+	b.cells[index] = Cell{Grapheme: grapheme, Width: uint8(width), Style: style, Link: link}
 	if width == 2 {
-		b.cells[index+1] = Cell{Width: 0, Style: style}
+		b.cells[index+1] = Cell{Width: 0, Style: style, Link: link}
 	}
 	return true
 }
@@ -356,7 +359,7 @@ func (b *Buffer) repair() {
 					b.cells[index] = BlankCell
 					continue
 				}
-				b.cells[index+1] = Cell{Width: 0, Style: b.cells[index].Style}
+				b.cells[index+1] = Cell{Width: 0, Style: b.cells[index].Style, Link: b.cells[index].Link}
 				x++
 			default:
 				b.cells[index] = BlankCell

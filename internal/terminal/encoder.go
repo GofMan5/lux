@@ -15,6 +15,11 @@ const (
 	endSync    = "\x1b[?2026l"
 	eraseLine  = "\x1b[K"
 	dropRegion = "\x1b[r"
+	// OSC 8 opens and closes hyperlink regions. The string terminator is the
+	// standard one, and the close form carries empty params and no URI.
+	linkOpen  = "\x1b]8;"
+	linkEnd   = "\x1b\\"
+	linkClose = "\x1b]8;;\x1b\\"
 )
 
 // maxTrackedRows bounds the stack storage the scroll detector uses. A taller
@@ -32,7 +37,12 @@ const minScrollRows = 3
 //
 // scrollRegions gates the DECSTBM path: terminals that do not implement it get
 // a row-diff repaint of the same frame, which is larger but never corrupts.
-func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.ColorDepth, scrollRegions, synchronized bool) []byte {
+//
+// links gates OSC 8 hyperlinks. The hyperlink specification defines no
+// detection, so the caller opts in: frames encoded without links never emit
+// OSC 8 and never let cell links influence the diff, which keeps the output
+// byte-identical to a build that has no link support at all.
+func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.ColorDepth, scrollRegions, synchronized, links bool) []byte {
 	width, height := frame.Size()
 	previousWidth, previousHeight := terminal.Size()
 	repaint := terminal == nil || width != previousWidth || height != previousHeight
@@ -41,7 +51,7 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 		dst = append(dst, beginSync...)
 	}
 	wrote := false
-	var style styleWriter
+	style := styleWriter{links: links}
 	var at cursor
 	var dirty rowBits
 	// Most rows of most frames are untouched, and proving that one row at a time
@@ -70,12 +80,12 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 		blankFrom := -1
 		for x := 0; x < width; {
 			cell := frame.Cell(x, y)
-			if cell.Width == 0 || (!repaint && equalRenderedCell(frame, terminal, x, y, depth)) {
+			if cell.Width == 0 || (!repaint && equalRenderedCell(frame, terminal, x, y, depth, links)) {
 				x++
 				continue
 			}
 			if blankFrom < 0 {
-				blankFrom = erasableTail(frame, y, width)
+				blankFrom = erasableTail(frame, y, width, links)
 			}
 			runStart := x
 			for x < width {
@@ -84,7 +94,7 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 					x++
 					continue
 				}
-				if !repaint && equalRenderedCell(frame, terminal, x, y, depth) {
+				if !repaint && equalRenderedCell(frame, terminal, x, y, depth, links) {
 					break
 				}
 				x += max(int(cell.Width), 1)
@@ -97,7 +107,7 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 				// also covers every later run on this row, which the frame wants
 				// blank as well.
 				if column >= blankFrom && x-column > len(eraseLine) {
-					dst = style.apply(dst, render.Style{}, depth)
+					dst = style.apply(dst, render.Style{}, render.Link{}, depth)
 					dst = append(dst, eraseLine...)
 					erased = true
 					break
@@ -107,7 +117,7 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 					column++
 					continue
 				}
-				dst = style.apply(dst, cell.Style, depth)
+				dst = style.apply(dst, cell.Style, cell.Link, depth)
 				grapheme := cell.Grapheme
 				if grapheme == "" {
 					grapheme = " "
@@ -121,6 +131,10 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 			}
 		}
 	}
+	// The frame never leaves a hyperlink region open: whatever the next
+	// writer does — a later frame, a shell prompt, anything — must not
+	// inherit the link.
+	dst = style.endFrame(dst)
 	caretX, caretY, caretOn := frame.Caret()
 	oldX, oldY, caretWasOn := terminal.Caret()
 	caretMoved := caretOn != caretWasOn || caretOn && (caretX != oldX || caretY != oldY)
@@ -148,12 +162,18 @@ func appendFrame(dst []byte, frame, terminal *render.Buffer, depth capability.Co
 // blanks on row y, or width when the row does not end in one. Erase-to-end-of-
 // line is only equivalent to those cells: a background-color-erase terminal
 // fills with the active background, so the encoder resets the style first and
-// refuses tails that carry any style of their own.
-func erasableTail(frame *render.Buffer, y, width int) int {
+// refuses tails that carry a style — or, with links on, a hyperlink — of
+// their own.
+func erasableTail(frame *render.Buffer, y, width int, links bool) int {
 	column := width
 	for column > 0 {
 		cell := frame.Cell(column-1, y)
 		if cell.Width != 1 || cell.Style != (render.Style{}) || (cell.Grapheme != " " && cell.Grapheme != "") {
+			break
+		}
+		if links && !cell.Link.Empty() {
+			// Erase does not carry a link, so a linked blank would stop
+			// matching the erased cells.
 			break
 		}
 		column--
@@ -282,7 +302,7 @@ func hashRow(buffer *render.Buffer, y, width int, depth capability.ColorDepth) u
 	hash := uint64(hashOffset)
 	for x, stride := 0, hashStride(width); x < width; x += stride {
 		cell := buffer.Cell(x, y)
-		hash = hashStyled(hash, cell.Grapheme, cell.Width, cell.Style, depth)
+		hash = hashStyled(hash, cell.Grapheme, cell.Width, cell.Style, cell.Link, depth)
 	}
 	return hash
 }
@@ -290,17 +310,31 @@ func hashRow(buffer *render.Buffer, y, width int, depth capability.ColorDepth) u
 func hashBlankRow(width int, depth capability.ColorDepth) uint64 {
 	hash := uint64(hashOffset)
 	for x, stride := 0, hashStride(width); x < width; x += stride {
-		hash = hashStyled(hash, render.BlankCell.Grapheme, render.BlankCell.Width, render.BlankCell.Style, depth)
+		hash = hashStyled(hash, render.BlankCell.Grapheme, render.BlankCell.Width, render.BlankCell.Style, render.BlankCell.Link, depth)
 	}
 	return hash
 }
 
-func hashStyled(hash uint64, grapheme string, width uint8, style render.Style, depth capability.ColorDepth) uint64 {
+func hashStyled(hash uint64, grapheme string, width uint8, style render.Style, link render.Link, depth capability.ColorDepth) uint64 {
 	for index := 0; index < len(grapheme); index++ {
 		hash = (hash ^ uint64(grapheme[index])) * hashPrime
 	}
 	hash = (hash ^ uint64(width)) * hashPrime
 	hash = (hash ^ uint64(style.Attrs)) * hashPrime
+	if style.Attrs&render.AttrUnderline != 0 {
+		// The underline shape rides the attribute, so it is part of the
+		// rendered difference exactly when the attribute is on.
+		hash = (hash ^ uint64(style.UnderlineStyle)) * hashPrime
+	}
+	// Links ride the cells whether or not the encoder transmits them: a row
+	// that only changed its link is a different row, and a hash that is blind
+	// to that can only cost bytes through a wasted scroll, never correctness.
+	for index := 0; index < len(link.URI); index++ {
+		hash = (hash ^ uint64(link.URI[index])) * hashPrime
+	}
+	for index := 0; index < len(link.ID); index++ {
+		hash = (hash ^ uint64(link.ID[index])) * hashPrime
+	}
 	if depth == capability.Monochrome {
 		// Colors are not transmitted, so two rows that differ only in color are
 		// the same row as far as the encoder is concerned.
@@ -311,7 +345,15 @@ func hashStyled(hash uint64, grapheme string, width uint8, style render.Style, d
 	hash = (hash ^ uint64(foregroundMode)) * hashPrime
 	hash = (hash ^ uint64(foregroundValue)) * hashPrime
 	hash = (hash ^ uint64(backgroundMode)) * hashPrime
-	return (hash ^ uint64(backgroundValue)) * hashPrime
+	hash = (hash ^ uint64(backgroundValue)) * hashPrime
+	if style.Attrs&render.AttrUnderline != 0 {
+		// The underline color is transmitted like the text colors whenever
+		// the underline is on.
+		underlineMode, underlineValue := renderedColor(style.UnderlineColor, depth)
+		hash = (hash ^ uint64(underlineMode)) * hashPrime
+		hash = (hash ^ uint64(underlineValue)) * hashPrime
+	}
+	return hash
 }
 
 // cursor tracks where emitted output leaves the terminal cursor so the next
@@ -379,7 +421,7 @@ func digits(value int) int {
 	return count
 }
 
-func equalRenderedCell(frame, terminal *render.Buffer, x, y int, depth capability.ColorDepth) bool {
+func equalRenderedCell(frame, terminal *render.Buffer, x, y int, depth capability.ColorDepth, links bool) bool {
 	current, currentOK := frame.CellOK(x, y)
 	old, oldOK := terminal.CellOK(x, y)
 	if currentOK != oldOK || !currentOK {
@@ -393,6 +435,19 @@ func equalRenderedCell(frame, terminal *render.Buffer, x, y int, depth capabilit
 	}
 	if current.Grapheme != old.Grapheme || current.Width != old.Width || current.Style.Attrs != old.Style.Attrs {
 		return false
+	}
+	if links && current.Link != old.Link {
+		return false
+	}
+	if current.Style.Attrs&render.AttrUnderline != 0 {
+		// The underline shape and color ride the attribute: without it they are
+		// invisible, so cells that differ only there still match.
+		if current.Style.UnderlineStyle != old.Style.UnderlineStyle {
+			return false
+		}
+		if !equalRenderedColor(current.Style.UnderlineColor, old.Style.UnderlineColor, depth) {
+			return false
+		}
 	}
 	return equalRenderedColor(current.Style.Foreground, old.Style.Foreground, depth) && equalRenderedColor(current.Style.Background, old.Style.Background, depth)
 }
@@ -452,19 +507,50 @@ var attrCodes = [...]struct {
 // other.
 const intensity = render.AttrBold | render.AttrDim
 
+// underlineCodes maps an UnderlineStyle to its SGR parameter, indexed by the
+// style value. Single keeps the plain code the attribute table already
+// carries; the rest ride the subparameter form, which terminals without styled
+// underlines read as a plain underline when the plain code precedes them.
+var underlineCodes = [...]string{"4", "4:2", "4:3", "4:4", "4:5"}
+
+// underlineCode clamps values outside the enum to the plain underline, which
+// is also what the zero value does.
+func underlineCode(style render.UnderlineStyle) string {
+	if int(style) < len(underlineCodes) {
+		return underlineCodes[style]
+	}
+	return underlineCodes[render.UnderlineSingle]
+}
+
 // styleWriter emits the shortest SGR that turns the style the terminal already
 // carries into the one a cell needs. A delta is usually shorter than restating
 // the whole style, but not always: clearing several attributes costs more than
 // a reset, so both forms are built and the shorter one is written. The scratch
 // arrays hold the longest form either can produce, so building both is free.
+//
+// The writer also models the state SGR cannot reach: the OSC 8 region the
+// terminal is inside, and the underline color it carries. SGR 24 turns the
+// attribute off without resetting the color, and SGR 0 ends neither, so both
+// are tracked as transmitted.
 type styleWriter struct {
 	current  render.Style
+	link     render.Link
+	links    bool
 	known    bool
-	fullBuf  [64]byte
-	deltaBuf [64]byte
+	fullBuf  [96]byte
+	deltaBuf [96]byte
 }
 
-func (w *styleWriter) apply(dst []byte, style render.Style, depth capability.ColorDepth) []byte {
+func (w *styleWriter) apply(dst []byte, style render.Style, link render.Link, depth capability.ColorDepth) []byte {
+	if !w.links {
+		link = render.Link{}
+	}
+	if w.known && w.current == style && w.link == link {
+		return dst
+	}
+	if w.link != link {
+		dst = w.setLink(dst, link)
+	}
 	if w.known && w.current == style {
 		return dst
 	}
@@ -472,12 +558,23 @@ func (w *styleWriter) apply(dst []byte, style render.Style, depth capability.Col
 	if w.known {
 		// An empty delta means the terminal already renders this style at the
 		// active color depth, which is why it is compared before the full form.
-		if delta := appendStyleDelta(w.deltaBuf[:0], w.current, style, depth); len(delta) < len(full) {
+		before := w.current
+		if delta := appendStyleDelta(w.deltaBuf[:0], before, style, depth); len(delta) < len(full) {
 			w.current = style
+			if style.Attrs&render.AttrUnderline == 0 || equalRenderedColor(before.UnderlineColor, style.UnderlineColor, depth) {
+				// No underline color was transmitted, and SGR 24 does not
+				// reset one, so the terminal keeps the color it had.
+				w.current.UnderlineColor = before.UnderlineColor
+			}
 			return append(dst, delta...)
 		}
 	}
 	w.current, w.known = style, true
+	if style.Attrs&render.AttrUnderline == 0 {
+		// SGR 0 reset the underline color, and none is transmitted without
+		// the attribute, so the model records the default.
+		w.current.UnderlineColor = render.Color{}
+	}
 	return append(dst, full...)
 }
 
@@ -486,11 +583,47 @@ func (w *styleWriter) isDefault() bool { return w.known && w.current == render.S
 // reset puts the terminal back to the default style, which is what an erase or
 // a scrolling region needs before it exposes cells the encoder will not write.
 func (w *styleWriter) reset(dst []byte) []byte {
+	if !w.link.Empty() {
+		// SGR 0 does not end a hyperlink region, and the erased or scrolled
+		// cells would otherwise inherit the open link.
+		dst = w.setLink(dst, render.Link{})
+	}
 	if w.isDefault() {
 		return dst
 	}
 	w.current, w.known = render.Style{}, true
 	return append(dst, resetStyle...)
+}
+
+// setLink switches the terminal into link's region, or closes the region when
+// the link is empty. Switching straight from one target to another is legal,
+// so no intermediate close is emitted, and an id travels only when the link
+// carries one.
+func (w *styleWriter) setLink(dst []byte, link render.Link) []byte {
+	w.link = link
+	if !w.links {
+		return dst
+	}
+	if link.Empty() {
+		return append(dst, linkClose...)
+	}
+	dst = append(dst, linkOpen...)
+	if link.ID != "" {
+		dst = append(dst, "id="...)
+		dst = append(dst, link.ID...)
+	}
+	dst = append(dst, ';')
+	dst = append(dst, link.URI...)
+	return append(dst, linkEnd...)
+}
+
+// endFrame closes any hyperlink region the frame opened, so output the encoder
+// does not write inherits nothing.
+func (w *styleWriter) endFrame(dst []byte) []byte {
+	if w.link.Empty() {
+		return dst
+	}
+	return w.setLink(dst, render.Link{})
 }
 
 func appendFullStyle(dst []byte, style render.Style, depth capability.ColorDepth) []byte {
@@ -500,6 +633,14 @@ func appendFullStyle(dst []byte, style render.Style, depth capability.ColorDepth
 		if style.Attrs&attribute.mask != 0 {
 			dst = appendParam(dst, &first, attribute.on)
 		}
+	}
+	if style.Attrs&render.AttrUnderline != 0 {
+		if style.UnderlineStyle != render.UnderlineSingle {
+			// The plain code from the table keeps the underline on terminals
+			// that ignore subparameters; the styled code refines the shape.
+			dst = appendParam(dst, &first, underlineCode(style.UnderlineStyle))
+		}
+		dst = appendUnderlineColor(dst, &first, style.UnderlineColor, depth)
 	}
 	dst = appendColor(dst, &first, style.Foreground, depth, true)
 	dst = appendColor(dst, &first, style.Background, depth, false)
@@ -525,6 +666,26 @@ func appendStyleDelta(dst []byte, from, to render.Style, depth capability.ColorD
 			dst = appendParam(dst, &first, attribute.on)
 		}
 	}
+	// The styled underline is restated whenever the terminal cannot be proven
+	// to already carry it. Subparameters have no off form, so the plain code
+	// leads: a terminal that ignores them keeps a plain underline, and one
+	// that answers them refines the shape. Turning back to the straight
+	// underline re-issues the plain code, which sets the shape as well.
+	fromShape := render.UnderlineSingle
+	if from.Attrs&render.AttrUnderline != 0 {
+		fromShape = from.UnderlineStyle
+	}
+	if to.Attrs&render.AttrUnderline != 0 && to.UnderlineStyle != fromShape {
+		if added&render.AttrUnderline == 0 {
+			dst = appendParam(dst, &first, "4")
+		}
+		if code := underlineCode(to.UnderlineStyle); code != "4" {
+			dst = appendParam(dst, &first, code)
+		}
+	}
+	if to.Attrs&render.AttrUnderline != 0 && !equalRenderedColor(from.UnderlineColor, to.UnderlineColor, depth) {
+		dst = appendUnderlineColorChange(dst, &first, to.UnderlineColor, depth)
+	}
 	if !equalRenderedColor(from.Foreground, to.Foreground, depth) {
 		dst = appendColorChange(dst, &first, to.Foreground, depth, true)
 	}
@@ -545,6 +706,48 @@ func appendColorChange(dst []byte, first *bool, color render.Color, depth capabi
 		return appendParam(dst, first, "49")
 	}
 	return appendColor(dst, first, color, depth, foreground)
+}
+
+// appendUnderlineColorChange is the delta form for SGR 58/59: the underline
+// color follows the same addressing scheme as the text colors, and 59 returns
+// it to the terminal default.
+func appendUnderlineColorChange(dst []byte, first *bool, color render.Color, depth capability.ColorDepth) []byte {
+	if color.Mode == render.ColorDefault {
+		return appendParam(dst, first, "59")
+	}
+	return appendUnderlineColor(dst, first, color, depth)
+}
+
+// appendUnderlineColor transmits the underline color. SGR 58 has no basic
+// form, so unlike a text color it always rides the palette addressing, which
+// every terminal that answers 58 accepts.
+func appendUnderlineColor(dst []byte, first *bool, color render.Color, depth capability.ColorDepth) []byte {
+	if color.Mode == render.ColorDefault || depth == capability.Monochrome {
+		return dst
+	}
+	index := uint8(color.Value)
+	if color.Mode == render.ColorRGB {
+		red, green, blue, _ := color.RGB()
+		switch depth {
+		case capability.TrueColor:
+			dst = appendSeparator(dst, first)
+			dst = append(dst, "58;2;"...)
+			dst = strconv.AppendInt(dst, int64(red), 10)
+			dst = append(dst, ';')
+			dst = strconv.AppendInt(dst, int64(green), 10)
+			dst = append(dst, ';')
+			return strconv.AppendInt(dst, int64(blue), 10)
+		case capability.ANSI256:
+			index = rgb256(red, green, blue)
+		default:
+			index = rgb16(red, green, blue)
+		}
+	} else if color.Mode == render.ColorIndexed && depth == capability.ANSI16 {
+		index = indexed16(index)
+	}
+	dst = appendSeparator(dst, first)
+	dst = append(dst, "58;5;"...)
+	return strconv.AppendInt(dst, int64(index), 10)
 }
 
 func appendParam(dst []byte, first *bool, code string) []byte {

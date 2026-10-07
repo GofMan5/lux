@@ -27,7 +27,7 @@ func scrollGateFixture() (base, frame *render.Buffer) {
 func TestScrollGateEmitsRegionSequencesWhenEnabled(t *testing.T) {
 	base, frame := scrollGateFixture()
 
-	data := appendFrame(nil, frame, base, capability.TrueColor, true, false)
+	data := appendFrame(nil, frame, base, capability.TrueColor, true, false, false)
 
 	if len(regionSequence.FindAllIndex(data, -1)) < 1 {
 		t.Fatalf("the open gate must emit region sequences, got %q", data)
@@ -37,7 +37,7 @@ func TestScrollGateEmitsRegionSequencesWhenEnabled(t *testing.T) {
 func TestScrollGateSuppressesRegionSequencesWhenDisabled(t *testing.T) {
 	base, frame := scrollGateFixture()
 
-	data := appendFrame(nil, frame, base, capability.TrueColor, false, false)
+	data := appendFrame(nil, frame, base, capability.TrueColor, false, false, false)
 
 	if len(data) == 0 {
 		t.Fatal("the closed gate must still repaint the scrolled rows, got no output")
@@ -48,7 +48,7 @@ func TestScrollGateSuppressesRegionSequencesWhenDisabled(t *testing.T) {
 	// Sanity: the same fixture scrolls once the gate opens, so the zero
 	// matches above are the gate suppressing them, not a dead fixture.
 	base, frame = scrollGateFixture()
-	enabled := appendFrame(nil, frame, base, capability.TrueColor, true, false)
+	enabled := appendFrame(nil, frame, base, capability.TrueColor, true, false, false)
 	if !regionSequence.Match(enabled) {
 		t.Fatalf("fixture stopped scrolling, got %q", enabled)
 	}
@@ -63,7 +63,7 @@ func TestScrollGateFallbackReplayMatches(t *testing.T) {
 	grid.present(t, base, nil, capability.TrueColor, false)
 	grid.requireMatches(t, base, capability.TrueColor)
 
-	data := appendFrame(nil, frame, base, capability.TrueColor, false, false)
+	data := appendFrame(nil, frame, base, capability.TrueColor, false, false, false)
 	grid.feed(t, data)
 	grid.requireMatches(t, frame, capability.TrueColor)
 }
@@ -73,7 +73,7 @@ func TestScrollGateUnchangedFrameEmitsNothing(t *testing.T) {
 	scrollingList(base, 0)
 	frame := base.Clone()
 
-	data := appendFrame(nil, frame, base, capability.TrueColor, false, false)
+	data := appendFrame(nil, frame, base, capability.TrueColor, false, false, false)
 
 	if len(data) != 0 {
 		t.Fatalf("an unchanged frame must emit nothing, got %q", data)
@@ -84,7 +84,7 @@ func TestScrollGateFallbackTerminalModelConsistent(t *testing.T) {
 	base, frame := scrollGateFixture()
 	pristine := base.Clone()
 
-	data := appendFrame(nil, frame, base, capability.TrueColor, false, false)
+	data := appendFrame(nil, frame, base, capability.TrueColor, false, false, false)
 
 	if len(data) == 0 {
 		t.Fatal("the fallback must repaint the scrolled rows, got no output")
@@ -112,7 +112,7 @@ func TestScrollGateFallbackTerminalModelConsistent(t *testing.T) {
 	// screen the same way.
 	base, frame = scrollGateFixture()
 	pristine = base.Clone()
-	enabled := appendFrame(nil, frame, base, capability.TrueColor, true, false)
+	enabled := appendFrame(nil, frame, base, capability.TrueColor, true, false, false)
 	if !regionSequence.Match(enabled) {
 		t.Fatalf("fixture stopped scrolling, got %q", enabled)
 	}
@@ -143,7 +143,7 @@ func TestScrollGateSmallFramesStaySimple(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			data := appendFrame(nil, test.frame, test.base, capability.TrueColor, true, false)
+			data := appendFrame(nil, test.frame, test.base, capability.TrueColor, true, false, false)
 			if regionSequence.Match(data) {
 				t.Fatalf("a small frame must not emit region sequences, got %q", data)
 			}

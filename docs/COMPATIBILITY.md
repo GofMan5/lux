@@ -63,7 +63,13 @@ synchronized output, hyperlinks, and graphics. Today:
 - the terminal cursor stays hidden unless a frame requests a caret, and the
   plain profile ignores caret requests entirely;
 - synchronized output is opt-in with `LUX_TUI_SYNC_OUTPUT=1` (also accepts
-  `true`, `yes`, or `on`).
+  `true`, `yes`, or `on`);
+- styled underlines (SGR `4:1`-`4:5` shapes and the `58`/`59` underline
+  color) are part of the render style — shapes transmit at every color
+  depth, the color follows the depth ladder;
+- hyperlinks (OSC 8) are opt-in with `WithHyperlinks(true)`: the protocol
+  defines no detection mechanism, so it cannot be probed, and the default
+  emits frames byte-identical to a links-unaware program.
 
 ## Startup negotiation
 
@@ -229,6 +235,64 @@ cell encoding; the option stays inert rather than degrading to a guess.
 Malformed pixel reports — button codes past 511, negative coordinates, the
 reserved 130/131 codes — fall through to the unknown-key escape hatch, and
 the decoder never trusts a zero cell size for mapping.
+
+## Styled underlines
+
+`render.Style` carries an underline shape (`UnderlineStyle`: single, double,
+curly, dotted, dashed) and an underline color (`UnderlineColor`). The encoder
+follows the kitty underline extension — the SGR underline parameter accepts
+`4:0`-`4:5` next to the plain `4` (plain single for backcompat, `24` the
+off-switch), and the underline color follows `58`/`59` with the same grammar
+as `38`/`48` (`58;5;n` or `58;2;r;g;b`, `59` for the default). The shape
+tables come from kitty's underline documentation and the Wikipedia ANSI
+escape code list.
+
+- shapes transmit at every color depth: a legacy terminal that ignores the
+  colon form still underlines, because its parser reads the bare `4` — the
+  shape degrades to single, it is never dropped;
+- the underline color rides the color ladder: truecolor sends RGB, the
+  256-color depth quantizes to the palette, and ANSI 16/monochrome drop the
+  color while keeping the shape;
+- diffs stay minimal: `4` is re-emitted before a shape change only when the
+  underline bit itself was off, `59` returns to the terminal default, and
+  the curly-to-single transition resets the shape rather than trusting the
+  stale one.
+
+The known hazard is legacy misparse: a terminal that splits colon
+sub-parameters reads `4:3;58;2;1;2;3` as separate SGR parameters, and kitty's
+page documents the stray `58` family landing on unrelated attributes (italic
+on some terminals). The escape sequences are therefore "opt-in by style":
+programs that stay with a plain underline or none emit nothing new.
+
+## Hyperlinks (OSC 8)
+
+`render.Link{URI, ID}` stamps a cell; `Canvas.PutCell` is the public way to
+write one. The encoder opens a region with `OSC 8 ; params ; URI ST`, closes
+with `OSC 8 ; ; ST`, and both cells of a wide grapheme carry the link because
+the terminal attributes a printed range as a whole. The `id=` key is the only
+defined parameter and rides the params field; switching targets directly —
+one open after another — is legal, and an empty URI means closed. The
+wire grammar follows the hyperlink gist by Egmont Koblinger.
+
+There is no detection mechanism in the protocol, so nothing is probed:
+`WithHyperlinks(true)` opts in, and a terminal either renders the links or
+ignores the sequences. When the option is off — the default — frames are
+byte-identical to a links-unaware program, and a link-only cell change costs
+zero bytes, because the diff never consults links it will not transmit.
+
+The frame contract keeps regions honest on every path:
+
+- each frame starts from an unknown terminal state, so the first run of a
+  frame pays the full style right after its link open, and a frame-start
+  erase needs no close (no region is open at that point);
+- a region opened mid-frame closes before the next style reset or erase
+  (`\x1b]8;;\x1b\\\x1b[0m\x1b[K`), so erased cells never inherit the link;
+- endFrame closes a region left open at the last written cell, so no link
+  leaks across frames;
+- blank runs close an active region before printing spaces, and the erasable
+  tail stops at the first linked cell, so a trailing link is never trimmed
+  into ambiguity;
+- the diff compares both URI and ID, so a changed target repaints the cell.
 
 ## Required degradation ladder
 

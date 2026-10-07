@@ -66,6 +66,16 @@ work and the API may still change.
   or silent answer keeps the cell encoding, so the option stays inert.
   Malformed reports (buttons past 511, negative coordinates, the reserved
   130/131 codes) fall through to the unknown-key escape hatch.
+- Styled underlines and opt-in hyperlinks: `render.Style` gains
+  `UnderlineStyle` (single/double/curly/dotted/dashed — SGR `4:1`-`4:5`,
+  shapes transmitted at every color depth) and `UnderlineColor` (the
+  `58`/`59` grammar of `38`/`48`, riding the color ladder). Cells carry a
+  `Link` that the encoder opens and closes as OSC 8 — both cells of a wide
+  grapheme, close before reset/erase, and an endFrame close so no region
+  leaks across frames. `Canvas.PutCell` is the public way to write a full
+  cell. `WithHyperlinks(true)` opts in because the protocol defines no
+  detection mechanism; the default keeps frames byte-identical and a
+  link-only change costs zero bytes.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

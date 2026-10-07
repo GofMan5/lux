@@ -18,6 +18,8 @@ type referenceGrid struct {
 	buffer   *render.Buffer
 	canvas   *render.Canvas
 	style    render.Style
+	link     render.Link
+	links    bool
 	x, y     int
 	top      int
 	bottom   int
@@ -61,6 +63,14 @@ func (g *referenceGrid) feed(t *testing.T, data []byte) {
 			continue
 		}
 		flush()
+		if strings.HasPrefix(text[index:], "\x1b]8;") {
+			consumed := g.osc8(text[index:])
+			if consumed <= 0 {
+				t.Fatalf("reference grid: malformed OSC 8 at %d: %q", index, text[index:min(index+24, len(text))])
+			}
+			index += consumed
+			continue
+		}
 		consumed := g.escape(t, text[index:])
 		if consumed <= 0 {
 			t.Fatalf("reference grid: unsupported sequence at %d: %q", index, text[index:min(index+16, len(text))])
@@ -68,6 +78,31 @@ func (g *referenceGrid) feed(t *testing.T, data []byte) {
 		index += consumed
 	}
 	flush()
+}
+
+// osc8 consumes one hyperlink sequence terminated by ST, which is the only
+// terminator the encoder emits, and switches the region the interpreter is
+// inside. The close form carries empty parameters and no URI; the params
+// field defines exactly one key, id.
+func (g *referenceGrid) osc8(text string) int {
+	rest := strings.TrimPrefix(text, "\x1b]8;")
+	end := strings.Index(rest, "\x1b\\")
+	if end < 0 {
+		return 0
+	}
+	params, uri, ok := strings.Cut(rest[:end], ";")
+	if !ok {
+		return 0
+	}
+	link := render.Link{URI: uri}
+	if params != "" {
+		if !strings.HasPrefix(params, "id=") {
+			return 0
+		}
+		link.ID = params[len("id="):]
+	}
+	g.link = link
+	return len(text) - len(rest) + end + 2
 }
 
 func (g *referenceGrid) escape(t *testing.T, text string) int {
@@ -193,8 +228,22 @@ func (g *referenceGrid) sgr(body string) bool {
 			g.style = render.Style{}
 			continue
 		}
+		if shape, on, ok := parseUnderlineShape(parameter); ok {
+			if on {
+				g.style.Attrs |= render.AttrUnderline
+				g.style.UnderlineStyle = shape
+			} else {
+				g.style.Attrs &^= render.AttrUnderline
+			}
+			continue
+		}
 		if attr, ok := attrs[parameter]; ok {
 			g.style.Attrs |= attr
+			if attr == render.AttrUnderline {
+				// The plain code is a straight underline, whatever shape the
+				// region carried before.
+				g.style.UnderlineStyle = render.UnderlineSingle
+			}
 			continue
 		}
 		if attr, ok := cleared[parameter]; ok {
@@ -213,6 +262,15 @@ func (g *referenceGrid) sgr(body string) bool {
 			}
 			g.setColor(value == 38, color)
 			index += consumed - 1
+		case value == 58:
+			color, consumed, ok := parseExtendedColor(parameters[index:])
+			if !ok {
+				return false
+			}
+			g.style.UnderlineColor = color
+			index += consumed - 1
+		case value == 59:
+			g.style.UnderlineColor = render.Color{}
 		case value == 39 || value == 49:
 			g.setColor(value == 39, render.Color{})
 		case value >= 30 && value <= 37:
@@ -228,6 +286,27 @@ func (g *referenceGrid) sgr(body string) bool {
 		}
 	}
 	return true
+}
+
+// parseUnderlineShape reads the 4:x subparameter form. Semicolons separate
+// parameters, so the colon form survives as one field and is examined before
+// the plain codes. 4:0 removes the underline; 4:1 through 4:5 set the shape.
+func parseUnderlineShape(parameter string) (shape render.UnderlineStyle, on bool, ok bool) {
+	if len(parameter) < 3 || parameter[:2] != "4:" {
+		return render.UnderlineSingle, false, false
+	}
+	value, err := strconv.Atoi(parameter[2:])
+	if err != nil {
+		return render.UnderlineSingle, false, false
+	}
+	if value == 0 {
+		return render.UnderlineSingle, false, true
+	}
+	if value < 1 || value > 5 {
+		return render.UnderlineSingle, false, false
+	}
+	// The wire digit runs 1 through 5 over the enum values 0 through 4.
+	return render.UnderlineStyle(value - 1), true, true
 }
 
 func parseExtendedColor(parameters []string) (render.Color, int, bool) {
@@ -273,7 +352,9 @@ func (g *referenceGrid) print(text string) {
 	for graphemes.Next() {
 		cluster := graphemes.Str()
 		width := render.GraphemeWidth(cluster)
-		g.canvas.Put(g.x, g.y, cluster, g.style)
+		// PutCell is the only public way to attach a link, and it stamps the
+		// continuation cell of a wide grapheme exactly like the encoder does.
+		g.canvas.PutCell(g.x, g.y, render.Cell{Grapheme: cluster, Style: g.style, Link: g.link})
 		g.x += max(width, 1)
 	}
 }
@@ -283,7 +364,7 @@ func (g *referenceGrid) print(text string) {
 // capable terminal sees, while dedicated tests exercise the fallback gate.
 func (g *referenceGrid) present(t *testing.T, frame, previous *render.Buffer, depth capability.ColorDepth, synchronized bool) []byte {
 	t.Helper()
-	data := appendFrame(nil, frame, previous, depth, true, synchronized)
+	data := appendFrame(nil, frame, previous, depth, true, synchronized, g.links)
 	g.feed(t, data)
 	if g.sync != 0 {
 		t.Fatalf("reference grid: unbalanced synchronized output wrapper: %d", g.sync)
@@ -300,7 +381,7 @@ func (g *referenceGrid) requireMatches(t *testing.T, frame *render.Buffer, depth
 	}
 	for y := 0; y < height; y++ {
 		for x := 0; x < width; x++ {
-			if !equalRenderedCell(frame, g.buffer, x, y, depth) {
+			if !equalRenderedCell(frame, g.buffer, x, y, depth, g.links) {
 				t.Fatalf("reference grid: cell (%d,%d) is %#v, frame has %#v", x, y, g.buffer.Cell(x, y), frame.Cell(x, y))
 			}
 		}
@@ -455,7 +536,7 @@ func TestReferenceGridCaretOnlyChange(t *testing.T) {
 	}
 
 	previous = frame.Clone()
-	if data := appendFrame(nil, frame, previous, capability.ANSI256, true, false); len(data) != 0 {
+	if data := appendFrame(nil, frame, previous, capability.ANSI256, true, false, grid.links); len(data) != 0 {
 		t.Fatalf("an unchanged frame must emit nothing, got %q", data)
 	}
 }

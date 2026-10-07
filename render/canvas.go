@@ -167,6 +167,19 @@ func (c *Canvas) Fill(rect Rect, grapheme string, style Style) {
 // Put writes the first grapheme at a local coordinate and returns its cursor
 // advance. Wide graphemes are never split by a canvas or clipping edge.
 func (c *Canvas) Put(x, y int, grapheme string, style Style) int {
+	return c.put(x, y, grapheme, style, Link{})
+}
+
+// PutCell writes a cell's grapheme, style, and hyperlink at a local
+// coordinate and returns the cursor advance. It is the only public way to
+// attach a Link, since the grapheme's terminal width is derived rather than
+// trusted from the cell. Continuation cells have no grapheme and write
+// nothing.
+func (c *Canvas) PutCell(x, y int, cell Cell) int {
+	return c.put(x, y, cell.Grapheme, cell.Style, cell.Link)
+}
+
+func (c *Canvas) put(x, y int, grapheme string, style Style, link Link) int {
 	grapheme, width := firstGrapheme(grapheme)
 	if c == nil || c.buffer == nil || grapheme == "" || !printable(grapheme) {
 		return width
@@ -185,7 +198,7 @@ func (c *Canvas) Put(x, y int, grapheme string, style Style) int {
 	if !c.buffer.replacementFits(c.clip, absoluteX, absoluteY, width) {
 		return width
 	}
-	c.buffer.put(absoluteX, absoluteY, grapheme, width, style)
+	c.buffer.putLink(absoluteX, absoluteY, grapheme, width, style, link)
 	return width
 }
 

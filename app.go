@@ -173,6 +173,15 @@ func WithPixelMouse(enabled bool) Option {
 	return func(config *config) error { config.pixelMouse = enabled; return nil }
 }
 
+// WithHyperlinks opts into OSC 8 hyperlinks. Links attached to cells through
+// Canvas.PutCell then reach terminals that support the sequences; on every
+// other terminal the text renders unchanged, and models that never attach a
+// link see no difference at all. The default is off because some terminals
+// still print or ignore the escape sequences rather than treat them as text.
+func WithHyperlinks(enabled bool) Option {
+	return func(config *config) error { config.hyperlinks = enabled; return nil }
+}
+
 type config struct {
 	backend                       Backend
 	input, output                 *os.File
@@ -181,6 +190,7 @@ type config struct {
 	reducedMotion                 bool
 	keyReleases                   bool
 	pixelMouse                    bool
+	hyperlinks                    bool
 }
 
 func defaultConfig() config {
@@ -206,7 +216,7 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 		}
 	}
 	if settings.backend == nil {
-		settings.backend = terminal.New(settings.input, settings.output, terminal.PixelMouse(settings.pixelMouse))
+		settings.backend = terminal.New(settings.input, settings.output, terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks))
 	}
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

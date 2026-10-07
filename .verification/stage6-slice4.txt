@@ -1,0 +1,145 @@
+Stage 6, slice 4 — keyboard truth: styled underlines and OSC 8 hyperlinks — local verification, 2026-10-07
+============================================================================================================
+
+Scope (ROADMAP.md, stage 6 item 4, both halves): the kitty underline
+extension — SGR 4:1-4:5 shapes with the 58/59 underline color — and OSC 8
+hyperlinks as an opt-in output feature with a leak-free frame contract.
+Landed as one commit:
+
+  (this commit) feat: add styled underlines and hyperlinks
+               render: UnderlineStyle (single/double/curly/dotted/dashed),
+               UnderlineColor, Link{URI, ID} on Cell, BlankCell zero values,
+               buffer.putLink stamps both cells of a wide grapheme and
+               repair() carries the link onto continuations; Canvas.PutCell
+               is the public full-cell write (width derived, never trusted).
+               encoder: underlineCodes 4/4:2/4:3/4:4/4:5 by enum, bare 4 =
+               single for backcompat, 24 off; appendUnderlineColor follows
+               the 38/48 grammar (58;5;n / 58;2;r;g;b, 59 default) and the
+               color ladder; styleWriter tracks the OSC 8 region alongside
+               the SGR state — setLink switches targets directly, reset()
+               closes before resetting style, endFrame() closes a region
+               open at the last cell; hashes include the link (gated on
+               transmission) and the underline shape; erasableTail stops at
+               the first linked cell; delta logic derives fromShape so
+               curly->single and shape-off->on transitions stay minimal.
+               backend/app: Hyperlinks(enabled) / WithHyperlinks — the
+               plain path returns before the latch, so redirected output
+               never sees links; the latch is not probed because the
+               protocol has no detection mechanism.
+
+Test evidence (windows/amd64, 2026-10-07):
+  go test ./...      ok, all 10 packages
+  go vet ./...       clean
+  gofmt -l .         clean
+  New tests, all PASS:
+      render/links_test.go (4): PutCell stamps links on both cells of a
+          wide grapheme and clipping/replacement behave exactly like Put;
+          a cell width is distrusted the same way (width 2 derived from
+          the cluster, a lying cell width clips); a combining sequence
+          joining a cluster adopts the cluster's active link (decomposed
+          "e\u0301" joins onto an "e" with a link and inherits it);
+          zero values — UnderlineStyle(0)=Single, empty UnderlineColor and
+          Link — encode to no extra bytes.
+      internal/terminal/hyperlink_test.go (7):
+          ByteForms — the first run of a frame opens a region and pays the
+          full style after the open
+          ("\x1b]8;;URI\x1b\\\x1b[0mA"), a later switch opens with id= in
+          the params field and no close between targets, exactly three
+          closes (blank runs after each glyph plus the erasable tail);
+          EndFrameClosesTheLastLink — the linked glyph at the last written
+          column is followed immediately by the close, so no region leaks
+          across frames;
+          GateIsOptIn — links=false emits no \x1b]8 and frames without
+          links are byte-identical in both modes; a link-only cell change
+          costs zero bytes when gated off;
+          RepaintsCellsWhoseLinkChanged — the link diff repaints with the
+          full style form after the open (writer unknown at frame start);
+          ClosesHyperlinkBeforeResettingStyle — one frame that opens
+          regions (row 1) and erases (row 2) emits
+          "\x1b]8;;\x1b\\\x1b[0m\x1b[K": close before reset before erase,
+          so erased cells never inherit the region;
+          StyledUnderlineForms — contiguous styled cells emit
+          "\x1b[0;4;4:3;58;2;1;2;3m", then "\x1b[4mb" (delta), then
+          "\x1b[4;4:2;58;2;4;5;6mc", then "\x1b[59md" back to default;
+          ReferenceGridUnderlinesAndLinksRoundTrip — 8 lanes (truecolor/
+          ansi256/ansi16/monochrome x sync on/off), links on: every frame
+          painted through the reference grid matches cell-for-cell
+          (glyph, style, underline shape+color, link, caret); the
+          links-off half of the gate is proven by GateIsOptIn above. At
+          monochrome a full clear may choose the scroll repair over the
+          erase, which the lane accepts as a legal shorter form.
+      vtgrid reference parser: OSC 8 opens (id=-prefixed params, ST-only
+      terminator), SGR 4:x shapes (digit 1-5 over enum 0-4), 58/59 with
+      the extended-color grammar; monochrome never sees 58/59.
+
+Linux evidence (docker golang:1.25-alpine, 2026-10-07):
+  go test ./... -count=1    all 10 packages ok
+  (the same lane that runs the pipe-based negotiation tests skipped on
+  Windows.)
+
+Fuzz (windows/amd64, 2026-10-07):
+  FuzzParserNeverPanics  ./internal/terminal  20 s  PASS
+      1,152,614 execs (55,337/sec avg), 6 new interesting entries (440 total
+      after this slice's new seeds: OSC 8 well-formed with and without id=,
+      truncated, unterminated, BEL-terminated, C1-ST forms, an OSC 0 title
+      payload, SGR colon sub-parameters 4:3/4:0, the 4;4:2;58;2;r;g;b
+      compound, 58;5;n, 59, 24, and the 2026 set/reset pair); the fuzz body
+      drives both the cell and pixel decodes and asserts the 128-byte
+      maxSequence cap.
+
+Doc-truth cross-check (every claim traced to code or spec first):
+  - underline shape table: kitty's underlines page fixes 4:0 no underline,
+    4:1 straight, 4:2 double, 4:3 curly, 4:4 dotted, 4:5 dashed, with
+    plain 4 = straight and 24 = off for backcompat. The encoder's
+    underlineCodes table is indexed by the enum (Single=0..Dashed=4) so
+    the wire digit always matches the spec.
+  - underline color: kitty's underlines page states 58 works exactly like
+    38/48 (58;5;n / 58;2;r;g;b) with 59 as default; the Wikipedia ANSI
+    escape code list documents the same SGR grammar. appendUnderlineColor
+    reuses the 38/48 helper shapes; Default and Monochrome skip.
+  - shapes at every depth: the shape is a monochrome-understandable
+    parameter (a legacy parser reads the bare 4 from 4:3), so
+    equalRenderedCell compares UnderlineStyle ungated by color depth —
+    the shape is transmitted even in the 16-color and monochrome profiles
+    and degrades to single there.
+  - hyperlink grammar: the Egmont Koblinger gist defines
+    OSC 8 ; params ; URI ST (ST = ESC \), the empty close OSC 8 ; ; ST,
+    id= as the only defined params key, and allows switching targets
+    directly without a close. There is no detection mechanism — hence the
+    opt-in flag rather than a probe verdict.
+  - both cells of a wide grapheme carry the link: the terminal attributes
+    the printed range as a whole; the reference grid stamps PutCell runs
+    and the diff compares continuation links, so a repaint cannot leave
+    half a wide glyph linked.
+  - frame-fresh styleWriter: each frame begins with known=false and an
+    empty link, so the first run pays the full style after its link open
+    and a frame-start erase emits no close — the terminal's region is
+    already closed by the previous frame's endFrame. Verified by
+    ByteForms and ClosesHyperlinkBeforeResettingStyle (the close-before-
+    reset fires only when the frame itself opened a region).
+  - zero-value compatibility: hashes gate the link on transmission and
+    the gate test proves byte-identical output for link-free frames; a
+    link-only change under links=false emits zero bytes.
+
+Known limits (honesty):
+  - a legacy terminal that splits colon sub-parameters can misparse
+    "4:3;58;2;..." — kitty documents the stray 58 family landing on other
+    attributes (italic on some terminals). The shapes are opt-in by
+    style, not by flag; COMPATIBILITY.md says so instead of papering over
+    the hazard.
+  - the underline color is tracked exactly even when invisible (underline
+    off), which can cost one needless SGR 0 on a rare transition; noted
+    in the encoder comment.
+  - row hashes include links even when links=false, so a link-only change
+    shifts scroll detection by hash — at worst wasted scroll bytes, never
+    wrong content (the round-trip lanes stay cell-exact).
+  - Open-level byte output for hyperlinks is tested through the
+    encoder/reference-grid pair, not a live terminal; the real-terminal
+    matrix remains a stage-10 item.
+  - the docker Linux lane used golang:1.25-alpine (cached locally); CI
+    pins go 1.23.x and stable, so the matrix stays broader than this
+    local run.
+
+Stage 6 is not closed: item 5 (synchronized output enable — code already
+negotiated, verify + document), items 6-7 (win32-input-mode, multiplexer
+provenance) are still open. Stage-close artifact lands after item 7.
