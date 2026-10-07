@@ -19,7 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        go: ["1.23.x"]
+        go: ["1.23.x", "stable"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -59,3 +59,70 @@ jobs:
       - uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
+
+  cross-compile:
+    name: Cross-compile ${{ matrix.goos }}/${{ matrix.goarch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - run: go mod download
+      - run: go build ./...
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
+  fuzz-smoke:
+    name: Fuzz smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - run: go mod download
+      - name: Fuzz the terminal parser
+        run: go test -run=^$ -fuzz=FuzzParserNeverPanics -fuzztime=30s ./internal/terminal
+      - name: Fuzz the text input invariants
+        run: go test -run=^$ -fuzz=FuzzTextInputInvariants -fuzztime=30s ./ui
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true
+      - run: go mod download
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "stable"
+          cache: true
+      - run: go mod download
+      - run: go test -covermode=atomic -coverprofile=coverage.out ./...
+      - name: Report total coverage
+        run: go tool cover -func=coverage.out | tail -1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 14
