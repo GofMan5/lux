@@ -46,3 +46,15 @@ Known limits (honesty):
     locally; bash in CI is unaffected. Quoted local rerun passed.
 
 Diffs: d7ce72f docs, cf08145 changelog, ci.yml + this file — docs/CI only.
+
+Stage close (e908ae2): no Go source changed since the 5b close —
+  git diff 75bb546..HEAD -- '*.go' go.mod go.sum  is empty.
+Reproducibility spot-check, go build -trimpath with CGO_ENABLED=0,
+two passes on windows/amd64, pairwise byte-identical:
+  C78065AF11CBD02EE9EAE39DFEA6AF2E7C588DBABD266AD608E1676712E0F991
+This hash differs from the 5b-close hash on purpose: Go stamps the
+VCS revision into the binary (go version -m shows
+vcs.revision=e908ae2..., vcs.modified=false), and 5c moved HEAD with
+docs/CI-only commits. The empty *.go diff above is the strong claim;
+the 5b binaries stay the per-frame reference.
+
