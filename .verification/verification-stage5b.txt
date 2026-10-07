@@ -371,4 +371,16 @@ rebuild-and-hash ceremony runs only at stage close; the round-4 change
 does not touch the per-frame path, and no benchmarks were re-run under
 ambient load).
 
+Stage close (75bb546): the full reproducibility ceremony re-run,
+go build -trimpath ./examples/showcase with CGO_ENABLED=0, two passes
+per OS, pairwise byte-identical 6/6:
+  darwin   FA00026AFA96D162A375774E2A9203AB815D601B826D8677C918B73FBA7FE128
+  linux    1B9FFADC27838E3DC5376733165E19F49A01532A583EEECE72904443D580DDCA
+  windows  6D30852A99DB51A50A3E7E9BED7B155C0CDDC730A0416DA99FB055C1C3BC8C57
+(Binaries under .verification/xbuild/, not committed.) Hashes differ
+from the round-2 ones on purpose: rounds 3-4 changed the terminal
+package, hence the binary; the gate is pairwise identity across
+rebuilds, which holds 6/6.
+
+
 
