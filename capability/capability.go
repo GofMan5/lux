@@ -47,6 +47,16 @@ type Set struct {
 	// sequences instead of legacy byte-prefix hacks. The flag stays clear on
 	// terminals that did not answer, which keeps legacy decoding untouched.
 	KeyboardEnhanced bool
+	// Win32Input reports whether the terminal answered the DECRPM query for
+	// win32-input-mode (DEC private mode 9001, the Windows console
+	// keyboard-record encoding). When set — and the terminal lacks the kitty
+	// keyboard protocol, which wins when both answer because it carries more
+	// — the backend enables the mode: key events arrive as complete CSI
+	// underscore records carrying the virtual key code, UnicodeChar, key-down
+	// flag, control-key state, and repeat count, the Windows counterpart of
+	// kitty's disambiguate flag. Terminals that did not answer keep legacy
+	// input decoding untouched.
+	Win32Input bool
 	// ScrollRegions reports whether the terminal implements scroll regions
 	// (DECSTBM with insert/delete lines). Without it, a backend must repaint
 	// scrolled rows instead of asking the terminal to move them.

@@ -27,24 +27,24 @@ const defaultProbeTimeout = 150 * time.Millisecond
 
 // probeRequest is written once. The primary device attributes report proves
 // the input path actually echoes device reports back; the DECRPM queries ask
-// whether DEC private mode 6 (DECOM), mode 2026 (synchronized output), and
-// mode 1016 (pixel-precision mouse) are recognized. Mode 6 is a proxy for
-// DECSTBM scroll regions: DECSTBM is a control sequence, not a mode, so
-// DECRQM cannot ask about it directly, and every terminal family pairs
-// DECSTBM with DECOM — a terminal that rejects DECOM lacks the private-mode
-// machinery scroll regions rely on. The kitty keyboard protocol query goes
-// last: only protocol terminals answer it, and those answers arrive right
-// behind the classic trio.
-const probeRequest = "\x1b[c\x1b[?6$p\x1b[?2026$p\x1b[?1016$p\x1b[?u"
+// whether DEC private mode 6 (DECOM), mode 2026 (synchronized output), mode
+// 1016 (pixel-precision mouse), and mode 9001 (win32-input-mode) are
+// recognized. Mode 6 is a proxy for DECSTBM scroll regions: DECSTBM is a
+// control sequence, not a mode, so DECRQM cannot ask about it directly, and
+// every terminal family pairs DECSTBM with DECOM — a terminal that rejects
+// DECOM lacks the private-mode machinery scroll regions rely on. The kitty
+// keyboard protocol query goes last: only protocol terminals answer it, and
+// those answers arrive right behind the classic quartet.
+const probeRequest = "\x1b[c\x1b[?6$p\x1b[?2026$p\x1b[?1016$p\x1b[?9001$p\x1b[?u"
 
 // kittyGrace bounds how long the probe keeps listening for the kitty flags
-// reply and the pixel-mode report once the classic trio has answered.
-// Terminals answer the queries in write order and back-to-back, so a
-// protocol terminal's reply lands within single-digit milliseconds of the
-// last DECRPM; a terminal without the protocol sends nothing at all and
-// would otherwise pin the probe at the full deadline. Legacy terminals pay
-// this grace once per startup, which keeps kitty detection reliable without
-// taxing every Open.
+// reply and the pixel- and win32-input-mode reports once the classic trio
+// has answered. Terminals answer the queries in write order and
+// back-to-back, so a protocol terminal's reply lands within single-digit
+// milliseconds of the last DECRPM; a terminal without the protocol sends
+// nothing at all and would otherwise pin the probe at the full deadline.
+// Legacy terminals pay this grace once per startup, which keeps kitty
+// detection reliable without taxing every Open.
 const kittyGrace = 25 * time.Millisecond
 
 // maxProbeStream bounds how many bytes a probe inspects. A real terminal sends
@@ -81,6 +81,13 @@ type probeReply struct {
 	// state still means the mode exists, and the backend turns it on
 	// explicitly only when the program opts in.
 	pixel probeFeature
+	// win32 is set by the mode 9001 DECRPM answer; silence leaves it
+	// unknown, which keeps legacy key encodings. Like pixel — and unlike
+	// the classic trio — this mode belongs to the probe-enable family: a
+	// recognized answer turns it on via the backend latch, a rejection or
+	// silence never downgrades anything, because legacy decoding is already
+	// the default.
+	win32 probeFeature
 }
 
 // negotiate probes a terminal and returns its report together with every byte
@@ -105,15 +112,15 @@ func negotiate(ctx context.Context, input *os.File, writer io.Writer, timeout ti
 	deadline := time.Now().Add(timeout)
 	// graceStart is zero until the classic trio (DA1 plus the DECRPM
 	// reports) has answered; from then on the late replies — kitty flags
-	// and the pixel-mode report — have kittyGrace left to arrive before
-	// the probe returns what it knows.
+	// and the pixel- and win32-input-mode reports — have kittyGrace left
+	// to arrive before the probe returns what it knows.
 	var graceStart time.Time
 	var stream []byte
 	buffer := make([]byte, 256)
 	for {
 		reply, leftover := parseProbeReply(stream)
 		classicDone := reply.answered && reply.scroll != probeUnknown && reply.sync != probeUnknown
-		if classicDone && reply.keyboard != probeUnknown && reply.pixel != probeUnknown {
+		if classicDone && reply.keyboard != probeUnknown && reply.pixel != probeUnknown && reply.win32 != probeUnknown {
 			return reply, leftover
 		}
 		if classicDone && graceStart.IsZero() {
@@ -190,6 +197,8 @@ func parseProbeReply(stream []byte) (probeReply, []byte) {
 							reply.sync = featureFromStatus(mode, status)
 						case 1016:
 							reply.pixel = featureFromStatus(mode, status)
+						case 9001:
+							reply.win32 = featureFromStatus(mode, status)
 						}
 						i += end + 1
 						continue
@@ -304,13 +313,16 @@ func parseStatusReport(body []byte) (mode, status int, ok bool) {
 // would be a permanent no-op, so the frames would stream unsynchronized anyway —
 // and for pixel mouse the same reasoning applies: the enable sequence would
 // change nothing, so coordinates would stay cell-precision while the parser
-// believed otherwise. For the DECOM proxy status 4 changes nothing, because
+// believed otherwise. For win32-input-mode the same reasoning applies again:
+// mode 9001 permanently reset means the set-mode write is a no-op, so keys
+// would keep arriving in legacy encodings while the parser waited for
+// CSI underscore records. For the DECOM proxy status 4 changes nothing, because
 // DECSTBM sequences work with origin mode permanently reset and this backend
 // never sets DECOM itself. Status 1-3 mean the mode exists in some state; the
 // backend turns modes on explicitly when it uses them, so the current state is
 // irrelevant here.
 func featureFromStatus(mode, status int) probeFeature {
-	if status == 0 || (status == 4 && (mode == 2026 || mode == 1016)) {
+	if status == 0 || (status == 4 && (mode == 2026 || mode == 1016 || mode == 9001)) {
 		return probeRejected
 	}
 	return probeSupported
@@ -325,11 +337,12 @@ func featureFromStatus(mode, status int) probeFeature {
 // wrapper on (an unconfirmed terminal never receives it), a rejection turns
 // it off, and silence keeps the safe default. The LUX_TUI_SYNC_OUTPUT
 // override wins over the probe either way — it exists precisely for the
-// terminal whose report lies. The kitty keyboard and pixel mouse verdicts
-// are the other enable-only results: enhanced input changes how keys are
-// encoded, and pixel mouse changes how coordinates are encoded, so each is
-// enabled by a positive reply and by nothing else — a terminal that stays
-// silent keeps the legacy encodings the parser already handles.
+// terminal whose report lies. The kitty keyboard, pixel mouse, and
+// win32-input verdicts are the other enable-only results: enhanced input
+// changes how keys are encoded, pixel mouse changes how coordinates are
+// encoded, and win32-input-mode changes key encoding on Windows terminals,
+// so each is enabled by a positive reply and by nothing else — a terminal
+// that stays silent keeps the legacy encodings the parser already handles.
 func applyProbeFeatures(features capability.Set, reply probeReply, sync syncOutputMode) capability.Set {
 	switch sync {
 	case syncOutputOn:
@@ -351,6 +364,9 @@ func applyProbeFeatures(features capability.Set, reply probeReply, sync syncOutp
 	}
 	if reply.pixel == probeSupported {
 		features.PixelMouse = true
+	}
+	if reply.win32 == probeSupported {
+		features.Win32Input = true
 	}
 	return features
 }

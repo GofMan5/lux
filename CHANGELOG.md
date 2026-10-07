@@ -51,6 +51,29 @@ work and the API may still change.
   emulators diverge: `0x08` is Ctrl+Backspace, `CSI 29 ~` is Menu, a
   doubled escape prefixes Alt-modified arrows, and `~` codes 25-34 map to
   F13-F20. Silence keeps the legacy key path untouched.
+- Win32-input-mode keyboard (DEC private mode 9001) — the Windows
+  counterpart of kitty disambiguation, from Microsoft's improved ConPTY
+  keyboard handling: the startup probe asks `CSI ? 9001 $ p`, and a
+  recognizing DECRPM answer turns the mode on (status 0/4 rejects it,
+  silence keeps the legacy encodings, and kitty wins when both answer, so
+  only one enhanced encoding is ever live). Enter sends `CSI ? 9001 h` and
+  every exit path leads its restore with `CSI ? 9001 l`, riding the same
+  write composition as the kitty stack. Enhanced mode decodes the
+  `CSI Vk;Sc;Uc;Kd;Cs;Rc _` records: press, repeat, and release actions
+  with console repeat counts; both ctrl keys (RIGHT_CTRL 0x4 and
+  LEFT_CTRL 0x8) and both alt keys map to the ctrl/alt bits; caps-lock
+  and num-lock state decode; AltGr (LEFT_CTRL|RIGHT_ALT) on a printable
+  translation is a plain rune, not Ctrl+Alt; a printable Uc is the event
+  rune; Shift+Tab normalizes to BackTab; and modifier keys or other
+  unmapped virtual keys surface as unknown-key events with their honest
+  action and modifier state — a Ctrl-up bookend reads as a release,
+  never a phantom press. The scan code is parsed and ignored;
+  SCROLL_LOCK_ON and ENHANCED_KEY are dropped; malformed records (more
+  than six parameters, non-numeric fields, a key-down flag outside 0/1,
+  a repeat past 0xFFFF) fall through to the unknown-key escape hatch.
+  Supported by Windows Terminal, ConPTY's ConHost, and WezTerm
+  (default-on since 20220624); mintty and foot implement kitty instead,
+  which the probe's silence handles honestly.
 - All-motion mouse tracking (`1003` with SGR `1006`): hover states update on
   plain pointer motion. xterm's no-button motion report (SGR button 35)
   decodes as a move instead of a phantom release — only the `m` final byte

@@ -1,0 +1,166 @@
+Stage 6, slice 6 — keyboard truth: win32-input-mode (DEC private mode 9001) — local verification, 2026-10-07
+============================================================================================================
+
+Scope (ROADMAP.md, stage 6 item 6): the Windows leg of keyboard truth.
+win32-input-mode — Microsoft's "improved keyboard handling in ConPTY"
+(DEC private mode 9001, CSI-underscore key records) — becomes the Windows
+equivalent of kitty disambiguation, negotiated like every other mode and
+degrading honestly to the legacy encodings where the terminal does not
+answer. Landed as one commit:
+
+  (this commit) feat: enable win32-input-mode by probe
+               capability: Win32Input flag.
+               negotiate.go: the probe write gains "\x1b[?9001$p" (the
+               DECRQM query rides the classic quartet behind DA1/6/2026/
+               1016), probeReply gains the win32 field, mode 9001
+               DECRPM answers classify through the same featureFromStatus
+               as 2026/1016 (status 0 "not recognized" and 4 "permanently
+               reset" reject; 1/2/3 = recognized), applyProbeFeatures sets
+               Win32Input, and the early-exit condition waits for the
+               win32 verdict too.
+               backend.go: win32Enter "\x1b[?9001h" / win32Leave
+               "\x1b[?9001l"; b.win32 = features.Win32Input && !b.kitty
+               — kitty wins when both answer, so only one enhanced
+               encoding is ever live on the wire; enter composition rides
+               the same Write; the Close snapshot tuple includes win32 and
+               leads the restore with the reset ("if win32 { leave =
+               win32Leave + leave }"), the same LIFO discipline as the
+               kitty pop.
+               parser.go: the parser gate win32Input; parseWin32Key decodes
+               CSI Vk;Sc;Uc;Kd;Cs;Rc _ records (final byte '_', NOT the
+               tcell/charm 'I' — five independent confirmations: the
+               Microsoft spec grammar, ConPTY in-the-wild captures, WezTerm
+               docs, tcell v3 source, charm x/input source).
+               parseEscape order: pasteStart -> mouse -> cellSizeReport ->
+               kitty -> win32 (gated) -> keySequence -> unknown fallback.
+
+Spec truth (double-verified: local copy of the Microsoft spec + a research
+pass over tcell v3, charm x/input, WezTerm, and ConPTY captures; spec:
+https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md):
+  - record CSI Vk;Sc;Uc;Kd;Cs;Rc _ : virtual key, scan code, Unicode
+    translation, key-down, control-key state, repeat count; DECIMAL
+    parameters; defaults 0,0,0,0,0 and REPEAT=1; ";;" skips a field;
+    the spec's own examples use truncated forms.
+  - enable/disable: CSI ? 9001 h / l — a plain DEC private mode, literal
+    set/reset, NO push/pop stack. ConPTY itself always enables 9001 at
+    spawn; the enable is idempotent and the leave matches the session.
+  - ConPTY serializes only KEY_EVENT_RECORDs; VK_PACKET/IME chars bypass
+    the records and arrive as plain characters.
+  - ControlKeyState bits: RIGHT_ALT 0x1, LEFT_ALT 0x2, RIGHT_CTRL 0x4,
+    LEFT_CTRL 0x8, SHIFT 0x10, NUMLOCK_ON 0x20, SCROLLLOCK_ON 0x40,
+    CAPSLOCK_ON 0x80, ENHANCED_KEY 0x100.
+  - Support matrix: Windows Terminal YES, ConPTY ConHost YES, WezTerm YES
+    (default-on for Windows since 20220624-141144), mintty NO (kitty
+    instead), foot NO (kitty instead). Silence => legacy path, honestly.
+
+Decode semantics (parser.go, ~200 lines + tests):
+  - printable Uc (incl. space, unicode.IsPrint) is the text path: KeyRune
+    with the rune verbatim and modifiers intact (Shift+A reads 'A' +
+    ModShift, matching the kitty arm).
+  - AltGr truth: the real chord is LEFT_CTRL|RIGHT_ALT = 0x9, so
+    cs&0x9==0x9 on a printable strips ModCtrl|ModAlt — a Polish 'ą' on
+    AltGr+A is a plain rune; genuine Ctrl+Alt (0xA) stays a combo. (The
+    research report's "AltGr = 0xA" line is self-contradictory: 0xA is
+    LCtrl|LAlt — the spec's own Ctrl+Alt example — and is correctly NOT
+    stripped.)
+  - win32Mods: ctrl = cs&0xC (BOTH ctrl keys), alt = cs&0x3, shift 0x10,
+    caps 0x80, num 0x20; SCROLLLOCK_ON (0x40) and ENHANCED_KEY (0x100)
+    deliberately dropped (documented in the code comment). NOTE: an
+    earlier draft used cs&0x5 (RIGHT_ALT|RIGHT_CTRL!) — missed LEFT_CTRL
+    entirely and read RIGHT_ALT as ctrl; caught by the test run before
+    anything landed.
+  - Uc zero/control => virtual-key path: letters, digits, F1-F24,
+    navigation cluster, Backspace/Tab/Enter/Escape/Pause/CapsLock/
+    PrintScreen/Insert/Delete/Menu, numpad operators, volume/media keys.
+  - modifier bookends and other unmapped VKs (VK_SHIFT family, Win keys,
+    bare numpad digits with Uc==0): well-formed records decode as
+    KeyUnknown CARRYING the record's honest action/repeat/mod — a Ctrl-up
+    bookend reads as a release, never a phantom press (parity with the
+    kitty arm's unknown-modifier handling). Malformed records (>6 params,
+    non-digit, signed, Kd outside {0,1}, rc>0xFFFF) return ok=false and
+    fall through to the EXISTING legacy unknown-key fallback.
+  - Shift+Tab normalizes to BackTab (kitty arm + legacy CSI Z parity).
+  - the scan code is parsed for grammar and then ignored.
+  - press coalesces Repeat = max(rc,1); kd=0 => ActionRelease, Repeat 0.
+    Releases ride the same default filtering / WithKeyReleases(true)
+    delivery as the kitty path.
+
+Charm deviations (deliberate, documented in COMPATIBILITY.md): charm
+requires exactly six parameters — lux accepts <=6 with per-parameter
+defaults because the spec's own examples are truncated; charm reads any
+non-1 key-down as release — lux rejects Kd outside {0,1} as malformed
+(honesty over guessing).
+
+Test evidence (windows/amd64, 2026-10-07):
+  go test ./... -count=1   ok, all 10 packages
+  go vet ./...             clean
+  gofmt -l .               clean
+  terminal_test.go TestParserWin32Records (~45 rows, new) — the spec's
+      Ctrl+F1 / Ctrl+Alt+A / Shift+A bursts record by record (bookends
+      included, with their modifier bits and release actions), truncated
+      spellings, vk-only forms, control-char Uc, identity keys, AltGr
+      (cs=9 plain rune vs cs=10 combo), Ctrl+letter vs C0, repeat-count
+      semantics, malformed records, unknowns, the full burst in one feed,
+      and the gate check (records ignored unless win32Input is latched).
+  negotiate_test.go — win32 rows in TestParseProbeReply (statuses 1-4,
+      full-stream row "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y
+      \x1b[?9001;2$y\x1b[?1u") and win32-on rows in
+      TestApplyProbeFeatures.
+  lifecycle_test.go TestCloseRestoresWin32Mode (new) — latched backend
+      resets before the legacy restore (bytes.HasSuffix(win32Leave +
+      leaveTerminal)), unlatched backend never writes the reset, kitty
+      backend never writes the win32 reset (exclusivity on the exit path
+      too).
+  Grep check: 9001 appears in tests only as probe REPLIES to lux's own
+      query and as explicit latch setup — no fake probe accidentally
+      enables the mode.
+
+Linux evidence (docker golang:1.25-alpine, 2026-10-07):
+  go test ./... -count=1    all 10 packages ok
+  (exit code 1 is the known pwsh NativeCommandError-on-stderr quirk; all
+  package lines say ok — the same lane every stage artifact records. The
+  pipe-based negotiation tests run here and skipped on Windows.)
+
+Fuzz (windows/amd64, 2026-10-07):
+  FuzzParserNeverPanics  ./internal/terminal  20 s  PASS
+      1,341,405 execs (64,303/sec avg), 2 new interesting entries (446
+      total). The win32 gate gives the fuzzer a new record grammar to
+      mangle; no panic, no infinite loop.
+
+Doc-truth cross-check:
+  - COMPATIBILITY.md: matrix rows (Windows Terminal + ConHost now name
+    the mode), capability bullet (kitty-wins exclusivity), negotiation
+    section (the probe write lists mode 9001; the 25 ms grace now covers
+    the kitty/pixel/win32 replies; the win32 bullet as the third
+    enable-only verdict), and a new "Windows keyboard (win32 input
+    mode)" section: grammar, semantics, honest limits, charm deviations,
+    support matrix, spec link.
+  - README.md: package table row, capabilities paragraph, Direction list
+    (win32-input-mode dropped from the open items).
+  - CHANGELOG.md: Unreleased/Added entry with the negotiation, decode
+    semantics, deviations, and support matrix.
+  - ROADMAP.md item 6 wording matched; item 6 remains unchecked (ROADMAP
+    carries no per-item markers — stage-close artifact lands after
+    item 7).
+
+Known limits (honesty):
+  - decode tests are table tests; the full Open->probe->record path on a
+    real ConPTY/WT/WezTerm console is stage-9/10 territory (no live
+    terminal matrix yet).
+  - the win32 probe verdict is not exercised end-to-end through a real
+    Windows console — the negotiation tests are pipe-based (Linux lane).
+  - ConPTY always emits ?9001h itself at spawn; lux's enable is
+    idempotent and the leave is unconditional on the latched path, so a
+    session that started cannot exit with the mode set — but the
+    interaction "ConPTY set it, lux never latched it, other processes
+    depend on it" is out of scope: the leave only fires when lux's own
+    enable fired.
+  - the docker Linux lane used golang:1.25-alpine (cached locally); CI
+    pins go 1.23.x and stable, so the matrix stays broader than this
+    local run.
+  - .research-win32-input/ (the research scratch: spec copy, WezTerm
+    sources, report) was deleted before the commit; the verified facts
+    live in this artifact, the code comments, and the spec URL.
+
+Stage 6 is not closed: item 7 (multiplexer provenance) is still open.
+Stage-close artifact lands after item 7.

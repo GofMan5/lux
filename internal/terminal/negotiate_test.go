@@ -85,6 +85,15 @@ func TestParseProbeReply(t *testing.T) {
 		// cannot be turned on, so pixel coordinates would never arrive and
 		// enabling the decode would only misread cell reports.
 		{"pixel mouse permanently reset", "\x1b[?6c\x1b[?1016;4$y", probeReply{answered: true, pixel: probeRejected}, ""},
+		{"win32 input rejected", "\x1b[?6c\x1b[?9001;0$y", probeReply{answered: true, win32: probeRejected}, ""},
+		{"win32 input set", "\x1b[?6c\x1b[?9001;1$y", probeReply{answered: true, win32: probeSupported}, ""},
+		{"win32 input reset but settable", "\x1b[?6c\x1b[?9001;2$y", probeReply{answered: true, win32: probeSupported}, ""},
+		{"win32 input permanently set", "\x1b[?6c\x1b[?9001;3$y", probeReply{answered: true, win32: probeSupported}, ""},
+		// Status 4 for mode 9001 matches the other enable-only modes: a
+		// permanently reset mode can never carry the CSI underscore
+		// records, so gating the decode on it would only mislabel the
+		// legacy stream it actually sends.
+		{"win32 input permanently reset", "\x1b[?6c\x1b[?9001;4$y", probeReply{answered: true, win32: probeRejected}, ""},
 		// Windows Terminal answers DA1 with a 39-byte report; the reportEnd
 		// window must accept it or every WT launch stalls for the full probe
 		// timeout and replays the reply as a phantom keystroke.
@@ -126,6 +135,11 @@ func TestParseProbeReply(t *testing.T) {
 			name:   "full negotiation answer with kitty flags",
 			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?1u",
 			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported, keyboard: probeSupported},
+		},
+		{
+			name:   "full negotiation answer with win32 input",
+			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?9001;2$y\x1b[?1u",
+			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported, win32: probeSupported, keyboard: probeSupported},
 		},
 		{"kitty query shape without digits is replayed", "\x1b[?u", probeReply{}, "\x1b[?u"},
 		{"kitty reply with junk flags is replayed", "\x1b[?6c\x1b[?,u", probeReply{answered: true}, "\x1b[?,u"},
@@ -452,9 +466,10 @@ func TestNegotiateCapsRunawayStream(t *testing.T) {
 // under the auto default — a mode 2026 answer that recognizes the mode
 // turns the wrapper on wherever it lands, a rejection turns it off — and
 // the LUX_TUI_SYNC_OUTPUT override replaces the verdict entirely. The
-// kitty keyboard and pixel mouse verdicts are enable-only: enhanced input
-// changes how keys are encoded, and pixel mouse changes how coordinates
-// are encoded, so each is enabled by a positive reply and by nothing else.
+// kitty keyboard, pixel mouse, and win32-input verdicts are enable-only:
+// enhanced input and win32-input change how keys are encoded, and pixel
+// mouse changes how coordinates are encoded, so each is enabled by a
+// positive reply and by nothing else.
 func TestApplyProbeFeatures(t *testing.T) {
 	before := capability.Set{
 		Terminal:           "vt500",
@@ -483,6 +498,8 @@ func TestApplyProbeFeatures(t *testing.T) {
 	keyboardOn.KeyboardEnhanced = true
 	pixelOn := before
 	pixelOn.PixelMouse = true
+	win32On := before
+	win32On.Win32Input = true
 	tests := []struct {
 		name     string
 		features capability.Set
@@ -517,6 +534,10 @@ func TestApplyProbeFeatures(t *testing.T) {
 		{"pixel support upgrades even an empty set", capability.Set{}, probeReply{answered: true, pixel: probeSupported}, syncOutputAuto, capability.Set{PixelMouse: true}},
 		{"rejected pixel changes nothing", before, probeReply{answered: true, pixel: probeRejected}, syncOutputAuto, before},
 		{"unknown pixel keeps the current state", pixelOn, probeReply{answered: true}, syncOutputAuto, pixelOn},
+		{"supported win32 turns the mode on", before, probeReply{answered: true, win32: probeSupported}, syncOutputAuto, win32On},
+		{"win32 support upgrades even an empty set", capability.Set{}, probeReply{answered: true, win32: probeSupported}, syncOutputAuto, capability.Set{Win32Input: true}},
+		{"rejected win32 changes nothing", before, probeReply{answered: true, win32: probeRejected}, syncOutputAuto, before},
+		{"unknown win32 keeps the current state", win32On, probeReply{answered: true}, syncOutputAuto, win32On},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

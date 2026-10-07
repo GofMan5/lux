@@ -205,6 +205,83 @@ func TestCloseRestoresTheKittyStack(t *testing.T) {
 	})
 }
 
+// TestCloseRestoresWin32Mode pins the reset half of the win32-input-mode
+// deal: a backend that turned mode 9001 on must reset it in the same
+// Write as the legacy restore, a backend that never turned it on must not
+// emit a stray reset, and the kitty-only backend is the exclusivity check
+// — win32 never latches beside kitty, so its reset must never appear.
+func TestCloseRestoresWin32Mode(t *testing.T) {
+	t.Run("latched backend resets before the legacy restore", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}, win32: true}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasSuffix(written, []byte(win32Leave+leaveTerminal)) {
+			t.Fatalf("Close did not reset win32 mode before restoring: %q", written)
+		}
+		if bytes.Count(written, []byte(win32Leave)) != 1 {
+			t.Fatalf("the win32 reset appears more than once: %q", written)
+		}
+	})
+	t.Run("unlatched backend never writes the reset", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(written, []byte(win32Leave)) {
+			t.Fatalf("Close reset a win32 mode it never enabled: %q", written)
+		}
+	})
+	t.Run("kitty backend never writes the win32 reset", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}, kitty: true}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(written, []byte(win32Leave)) {
+			t.Fatalf("Close reset win32 mode on a kitty backend: %q", written)
+		}
+	})
+}
+
 func TestCloseGivesUpOnAWriterThatStopsDraining(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {

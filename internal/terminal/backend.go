@@ -52,8 +52,23 @@ const (
 	// including the enter failure below and Close — so the terminal's
 	// flag stack cannot leak a frame behind the program, the bubbletea
 	// v2.0.9 failure mode.
-	kittyEnter  = "\x1b[>3u"
-	kittyLeave  = "\x1b[<u"
+	kittyEnter = "\x1b[>3u"
+	kittyLeave = "\x1b[<u"
+	// win32Enter turns on win32-input-mode, the Windows terminal
+	// counterpart of kitty's disambiguate flag: DEC private mode 9001
+	// makes a Windows terminal report key events as CSI-underscore
+	// records carrying the raw KEY_EVENT_RECORD fields, so ambiguous
+	// compositions (Ctrl+letters, Alt pairs, releases, AltGr text)
+	// arrive labeled instead of pre-encoded. Unlike the kitty protocol
+	// this is a plain DEC private mode — a literal set and reset with no
+	// flag stack to push or pop — so the leave is an unconditional mode
+	// reset. The mode is only entered when the terminal answered the 9001
+	// probe and kitty did not answer: kitty carries the same
+	// disambiguation plus releases on keys 9001 leaves shell-safe and
+	// alternate-key detail 9001 cannot express, so kitty wins when both
+	// are available and 9001 fills the gap on terminals without it.
+	win32Enter  = "\x1b[?9001h"
+	win32Leave  = "\x1b[?9001l"
 	escapeDelay = 35 * time.Millisecond
 )
 
@@ -71,6 +86,10 @@ type Backend struct {
 	opened    bool
 	plain     bool
 	kitty     bool
+	// win32 latches win32-input-mode use: it needs a probe answer for
+	// mode 9001 and the kitty protocol being absent, and every exit path
+	// uses it to decide whether the mode reset belongs in the restore.
+	win32 bool
 	// pixelOpted records the application's WithPixelMouse choice; pixel
 	// latches the mode actually in use, which needs both the opt-in and
 	// a terminal that answered the 1016 probe.
@@ -210,6 +229,11 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// sequences were pushed and must be popped.
 	b.kitty = b.features.KeyboardEnhanced
 	b.pixel = b.pixelOpted && b.features.PixelMouse
+	// win32-input-mode is the Windows stand-in for kitty disambiguation
+	// and never runs alongside it: kitty's CSI u carries the same
+	// disambiguation plus releases on the text-safe keys, so it wins when
+	// both are available and 9001 fills the gap on terminals without it.
+	b.win32 = b.features.Win32Input && !b.kitty
 	// OSC 8 has no probe to latch from: the opt-in alone decides, and the
 	// encoder closes every region it opens, so a terminal without support
 	// just renders the text.
@@ -218,6 +242,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// very first byte the read loop sees — including the cell-size reply
 	// that enterPixel just put in flight.
 	b.parser.pixelMouse = b.pixel
+	b.parser.win32Input = b.win32
 	enter, leave := enterTerminal, leaveTerminal
 	if b.pixel {
 		enter, leave = enterPixel, leavePixel
@@ -225,6 +250,10 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	if b.kitty {
 		enter += kittyEnter
 		leave = kittyLeave + leave
+	}
+	if b.win32 {
+		enter += win32Enter
+		leave = win32Leave + leave
 	}
 	b.opened = true
 	if err := writeAll(b.writer, []byte(enter)); err != nil {
@@ -525,11 +554,12 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT, kitty, pixel := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.pixel
+	plain, writer, input, state, restoreVT, kitty, win32, pixel := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
 	b.kitty = false
+	b.win32 = false
 	b.pixel = false
 	b.previous = nil
 	b.lastResizeOK = false
@@ -549,14 +579,19 @@ func (b *Backend) Close() error {
 		if !plain && b.acquireWriteSlot(restoreGrace) {
 			// The kitty pop leads the legacy restore so the stack is unwound
 			// before the modes it was layered on, mirroring the enter order.
-			// Sharing one Write with leaveTerminal is what guarantees the pop
-			// happens wherever the restore does.
+			// The win32 reset rides in front of it — the mode has no stack,
+			// so this is a plain reset — and sharing one Write with
+			// leaveTerminal is what guarantees each restore happens wherever
+			// the others do.
 			leave := leaveTerminal
 			if pixel {
 				leave = leavePixel
 			}
 			if kitty {
 				leave = kittyLeave + leave
+			}
+			if win32 {
+				leave = win32Leave + leave
 			}
 			result = errors.Join(result, writeAll(writer, []byte(leave)))
 			<-b.writeSlotChan()

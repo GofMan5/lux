@@ -366,7 +366,165 @@ func TestParserKittyDisambiguateKeys(t *testing.T) {
 	}
 }
 
-// TestParserKittyEscapeIsImmediate pins the stage 6 acceptance: in enhanced
+// win32Parser returns a parser decoding a stream this backend switched to
+// win32-input-mode: the CSI-underscore records of DEC private mode 9001.
+func win32Parser() *parser {
+	parser := newParser()
+	parser.win32Input = true
+	return parser
+}
+
+// TestParserWin32Records covers the mode 9001 decode: full and truncated
+// records from the specification's own worked examples (the Ctrl+F1,
+// Ctrl+Alt+A, and Shift+A bursts), the key-down flag, the repeat count,
+// the AltGr reconstruction, and the deliberate unknowns — modifier-key
+// records, the numpad digit block, and malformed shapes.
+func TestParserWin32Records(t *testing.T) {
+	release := func(e event.Event) event.Event {
+		e.Key.Action = event.ActionRelease
+		e.Key.Repeat = 0
+		return e
+	}
+	repeatN := func(e event.Event, n uint16) event.Event {
+		e.Key.Repeat = n
+		return e
+	}
+	tests := []struct {
+		name  string
+		input string
+		want  event.Event
+	}{
+		// The specification's Ctrl+F1 burst, record by record: the Ctrl
+		// down/up bookends are modifier-key records and surface as unknown
+		// keys — the API expresses modifiers as Mod bits on the keys they
+		// modify, never as standalone presses — while the F1 pair carries
+		// the composition. The bookends still report their own state, so
+		// the down record keeps its ctrl bit and the up record is a
+		// release, not a phantom press.
+		{"ctrl down from the F1 burst", "\x1b[17;29;0;1;8;1_", event.KeyPress(event.KeyUnknown, event.ModCtrl)},
+		{"ctrl+F1 down", "\x1b[112;59;0;1;8;1_", event.KeyPress(event.KeyF1, event.ModCtrl)},
+		{"F1 up keeps the modifier", "\x1b[112;59;0;0;8;1_", release(event.KeyPress(event.KeyF1, event.ModCtrl))},
+		{"ctrl up from the F1 burst", "\x1b[17;29;0;0;0;1_", release(event.KeyPress(event.KeyUnknown, 0))},
+		// The Ctrl+Alt+A burst: Alt is another modifier record, the letter
+		// arrives with Uc zero because the pair pre-empts translation.
+		{"alt down from the Ctrl+Alt+A burst", "\x1b[18;56;0;1;10;1_", event.KeyPress(event.KeyUnknown, event.ModCtrl|event.ModAlt)},
+		{"ctrl+alt+A down with Uc zero", "\x1b[65;30;0;1;10;1_", event.RuneKey('a', event.ModCtrl|event.ModAlt)},
+		{"ctrl+alt+A up", "\x1b[65;30;0;0;10;1_", release(event.RuneKey('a', event.ModCtrl|event.ModAlt))},
+		{"alt up from the Ctrl+Alt+A burst", "\x1b[18;56;0;0;8;1_", release(event.KeyPress(event.KeyUnknown, event.ModCtrl))},
+		// The Shift+A burst: the down record carries the translated
+		// character, and the up record of an unshifted release reports the
+		// lowercase translation the console produced.
+		{"shift down from the Shift+A burst", "\x1b[16;42;0;1;16;1_", event.KeyPress(event.KeyUnknown, event.ModShift)},
+		{"shift+A down carries the translated character", "\x1b[65;30;65;1;16;1_", event.RuneKey('A', event.ModShift)},
+		{"A up reports the unshifted character", "\x1b[65;30;97;0;0;1_", release(event.RuneKey('a', 0))},
+		{"shift up from the Shift+A burst", "\x1b[16;42;0;0;0;1_", release(event.KeyPress(event.KeyUnknown, 0))},
+		// The specification's truncated spellings: every parameter is
+		// optional, an omitted key-down flag means release, and an omitted
+		// repeat count means one.
+		{"truncated ctrl down", "\x1b[17;29;;1;8_", event.KeyPress(event.KeyUnknown, event.ModCtrl)},
+		{"truncated F1 down", "\x1b[112;59;;1;8_", event.KeyPress(event.KeyF1, event.ModCtrl)},
+		{"truncated F1 up with the default key-down", "\x1b[112;59;;;8_", release(event.KeyPress(event.KeyF1, event.ModCtrl))},
+		{"vk-only ctrl record is a release", "\x1b[17;29_", release(event.KeyPress(event.KeyUnknown, 0))},
+		{"truncated ctrl+alt+A down", "\x1b[65;30;;1;10_", event.RuneKey('a', event.ModCtrl|event.ModAlt)},
+		{"truncated ctrl+alt+A up", "\x1b[65;30;;;10_", release(event.RuneKey('a', event.ModCtrl|event.ModAlt))},
+		{"truncated alt up", "\x1b[18;56;;;8_", release(event.KeyPress(event.KeyUnknown, event.ModCtrl))},
+		{"truncated ctrl up", "\x1b[17;29;;_", release(event.KeyPress(event.KeyUnknown, 0))},
+		{"truncated shift down", "\x1b[16;42;;1;16_", event.KeyPress(event.KeyUnknown, event.ModShift)},
+		{"truncated shift up", "\x1b[16;42_", release(event.KeyPress(event.KeyUnknown, 0))},
+		{"truncated A up", "\x1b[65;30;97_", release(event.RuneKey('a', 0))},
+		{"truncated A down with the default repeat", "\x1b[65;30;97;1_", event.RuneKey('a', 0)},
+		// Composition and identity.
+		{"ctrl+A arrives as a control character", "\x1b[65;30;1;1;8;1_", event.RuneKey('a', event.ModCtrl)},
+		{"alt+A arrives with Uc zero", "\x1b[65;30;0;1;2;1_", event.RuneKey('a', event.ModAlt)},
+		{"enter release is reported", "\x1b[13;0;13;0;0;1_", release(event.KeyPress(event.KeyEnter, 0))},
+		{"backspace with its control character", "\x1b[8;0;8;1;0;1_", event.KeyPress(event.KeyBackspace, 0)},
+		{"escape with its control character", "\x1b[27;0;27;1;0;1_", event.KeyPress(event.KeyEscape, 0)},
+		{"shift+tab normalizes to backtab", "\x1b[9;0;9;1;16;1_", event.KeyPress(event.KeyBackTab, 0)},
+		{"ctrl+space with Uc zero", "\x1b[32;57;0;1;8;1_", event.RuneKey(' ', event.ModCtrl)},
+		{"left arrow", "\x1b[37;0;0;1;0;1_", event.KeyPress(event.KeyLeft, 0)},
+		{"up arrow with alt", "\x1b[38;0;0;1;2;1_", event.KeyPress(event.KeyUp, event.ModAlt)},
+		{"home", "\x1b[36;0;0;1;0;1_", event.KeyPress(event.KeyHome, 0)},
+		{"end", "\x1b[35;0;0;1;0;1_", event.KeyPress(event.KeyEnd, 0)},
+		{"page up", "\x1b[33;0;0;1;0;1_", event.KeyPress(event.KeyPageUp, 0)},
+		{"page down", "\x1b[34;0;0;1;0;1_", event.KeyPress(event.KeyPageDown, 0)},
+		{"insert", "\x1b[45;0;0;1;0;1_", event.KeyPress(event.KeyInsert, 0)},
+		{"delete", "\x1b[46;0;0;1;0;1_", event.KeyPress(event.KeyDelete, 0)},
+		{"pause", "\x1b[19;0;0;1;0;1_", event.KeyPress(event.KeyPause, 0)},
+		{"caps lock key", "\x1b[20;0;20;1;0;1_", event.KeyPress(event.KeyCapsLock, 0)},
+		{"print screen", "\x1b[44;0;0;1;0;1_", event.KeyPress(event.KeyPrintScreen, 0)},
+		{"menu key", "\x1b[93;0;0;1;0;1_", event.KeyPress(event.KeyMenu, 0)},
+		{"F24 caps the F row", "\x1b[135;0;0;1;0;1_", event.KeyPress(event.KeyF24, 0)},
+		{"numpad multiply with Uc zero", "\x1b[106;0;0;1;0;1_", event.RuneKey('*', 0)},
+		{"numpad divide with Uc zero", "\x1b[111;0;0;1;0;1_", event.RuneKey('/', 0)},
+		{"volume mute", "\x1b[173;0;0;1;0;1_", event.KeyPress(event.KeyVolumeMute, 0)},
+		{"media play/pause", "\x1b[179;0;0;1;0;1_", event.KeyPress(event.KeyMediaPlayPause, 0)},
+		// Modifier state: both ctrl positions collapse into one bit, caps
+		// and num lock ride along as kitty reports them, and the AltGr
+		// pair (right-alt plus left-ctrl) is synthetic and stripped.
+		{"right ctrl alone is ctrl", "\x1b[65;30;0;1;4;1_", event.RuneKey('a', event.ModCtrl)},
+		{"left ctrl alone is ctrl", "\x1b[65;30;0;1;8;1_", event.RuneKey('a', event.ModCtrl)},
+		{"caps lock state rides along", "\x1b[65;30;97;1;128;1_", event.RuneKey('a', event.ModCapsLock)},
+		{"shift and caps lock together", "\x1b[65;30;97;1;144;1_", event.RuneKey('a', event.ModShift|event.ModCapsLock)},
+		{"num lock state rides along", "\x1b[65;30;0;1;32;1_", event.RuneKey('a', event.ModNumLock)},
+		{"AltGr pair is stripped", "\x1b[65;30;229;1;9;1_", event.RuneKey('å', 0)},
+		{"AltGr with shift keeps shift", "\x1b[65;30;197;1;25;1_", event.RuneKey('Å', event.ModShift)},
+		// Repeat counts: the terminal-reported count coalesces into one
+		// press event, zero clamps to one (an event must still claim a
+		// press happened), and the WORD cap is the last honest value.
+		{"auto-repeat count survives", "\x1b[65;30;97;1;0;3_", repeatN(event.RuneKey('a', 0), 3)},
+		{"maximum repeat count", "\x1b[65;30;97;1;0;65535_", repeatN(event.RuneKey('a', 0), 65535)},
+		{"zero repeat count clamps to one", "\x1b[65;30;97;1;0;0_", event.RuneKey('a', 0)},
+		// Malformed and deliberately unknown shapes.
+		{"seven parameters is unknown", "\x1b[65;30;97;1;0;1;9_", event.KeyPress(event.KeyUnknown, 0)},
+		{"key-down flag of two is unknown", "\x1b[65;30;97;2;0_", event.KeyPress(event.KeyUnknown, 0)},
+		{"repeat count past the WORD is unknown", "\x1b[65;30;97;1;0;65536_", event.KeyPress(event.KeyUnknown, 0)},
+		{"negative parameter is unknown", "\x1b[-1;1_", event.KeyPress(event.KeyUnknown, 0)},
+		{"non-digit parameter is unknown", "\x1b[1.1;1_", event.KeyPress(event.KeyUnknown, 0)},
+		{"overflowing parameter is unknown", "\x1b[99999999999999999999;1_", event.KeyPress(event.KeyUnknown, 0)},
+		{"empty record body is unknown", "\x1b[_", release(event.KeyPress(event.KeyUnknown, 0))},
+		{"all-empty parameters stay unknown", "\x1b[;;;;;_", release(event.KeyPress(event.KeyUnknown, 0))},
+		{"windows key is unknown", "\x1b[91;0;0;1;0;1_", event.KeyPress(event.KeyUnknown, 0)},
+		{"generic left-shift key is unknown", "\x1b[160;0;0;1;16;1_", event.KeyPress(event.KeyUnknown, event.ModShift)},
+		{"numpad digit with Uc zero is unknown", "\x1b[96;0;0;1;0;1_", event.KeyPress(event.KeyUnknown, 0)},
+		{"unmapped vk is unknown", "\x1b[145;0;0;1;0;1_", event.KeyPress(event.KeyUnknown, 0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := win32Parser().feed([]byte(tt.input), false)
+			if len(got) != 1 || got[0] != tt.want {
+				t.Fatalf("feed(%q) = %#v, want %#v", tt.input, got, tt.want)
+			}
+		})
+	}
+	// A full burst in one feed: the four Ctrl+F1 records decode in order
+	// with nothing swallowed and nothing doubled.
+	burst := "\x1b[17;29;0;1;8;1_\x1b[112;59;0;1;8;1_\x1b[112;59;0;0;8;1_\x1b[17;29;0;0;0;1_"
+	want := []event.Event{
+		event.KeyPress(event.KeyUnknown, event.ModCtrl),
+		event.KeyPress(event.KeyF1, event.ModCtrl),
+		release(event.KeyPress(event.KeyF1, event.ModCtrl)),
+		release(event.KeyPress(event.KeyUnknown, 0)),
+	}
+	got := win32Parser().feed([]byte(burst), false)
+	if len(got) != len(want) {
+		t.Fatalf("burst decoded %d events, want %d: %#v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("burst event %d = %#v, want %#v", i, got[i], want[i])
+		}
+	}
+	// The gate mirrors the negotiation: outside mode 9001 the '_' final
+	// byte belongs to no encoding this backend speaks, so the same records
+	// surface as unknown keys instead of being decoded as wins.
+	for _, gated := range []string{"\x1b[112;59;0;1;8;1_", "\x1b[65;30;97;1;0_"} {
+		plain := newParser().feed([]byte(gated), false)
+		if len(plain) != 1 || plain[0].Kind != event.Key || !plain[0].Key.Is(event.KeyUnknown, 0) {
+			t.Fatalf("ungated record %q decoded as %#v", gated, plain)
+		}
+	}
+}
+
 // mode Esc arrives as the complete CSI 27 u sequence, which ends on a final
 // byte, so it decodes the moment its last byte lands and never waits out
 // the 35 ms lone-escape delay.

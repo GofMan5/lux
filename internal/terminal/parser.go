@@ -3,6 +3,7 @@ package terminal
 import (
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/lux-tui/lux/event"
@@ -28,14 +29,23 @@ type parser struct {
 	// stay zero until the reply lands, and pixel reports map to cells
 	// only once both are positive.
 	cellW, cellH int
+	// win32Input mirrors the backend's win32-input-mode latch (DEC private
+	// mode 9001): key events arrive as CSI underscore records carrying the
+	// full Windows KEY_EVENT_RECORD. It stays false elsewhere, where a '_'
+	// final byte is not part of any encoding this backend speaks and its
+	// sequences surface as unknown keys.
+	win32Input bool
 }
 
-// mouseMode is the decode context parseMouse and the CSI-t arm need: whether
-// coordinates arrive as pixels and how large a cell is for the conversion.
-type mouseMode struct {
+// decodeMode is the decode context parseEscape hands its CSI arms: whether
+// coordinates arrive as pixels and how large a cell is for the conversion
+// (parseMouse and the CSI-t reply arm), and whether the terminal sends
+// win32-input-mode records (the CSI-underscore arm).
+type decodeMode struct {
 	pixel bool
 	cellW int
 	cellH int
+	win32 bool
 }
 
 func newParser() *parser { return &parser{} }
@@ -71,7 +81,7 @@ func (p *parser) feed(data []byte, eof bool) []event.Event {
 			continue
 		}
 		if p.buffer[0] == 0x1b {
-			next, consumed, complete := parseEscape(p.buffer, eof, mouseMode{p.pixelMouse, p.cellW, p.cellH})
+			next, consumed, complete := parseEscape(p.buffer, eof, decodeMode{p.pixelMouse, p.cellW, p.cellH, p.win32Input})
 			if !complete {
 				if len(p.buffer) <= maxSequence {
 					break
@@ -112,7 +122,7 @@ func (p *parser) feed(data []byte, eof bool) []event.Event {
 		}
 		for len(p.buffer) > 0 {
 			if p.buffer[0] == 0x1b {
-				next, consumed, complete := parseEscape(p.buffer, true, mouseMode{p.pixelMouse, p.cellW, p.cellH})
+				next, consumed, complete := parseEscape(p.buffer, true, decodeMode{p.pixelMouse, p.cellW, p.cellH, p.win32Input})
 				if complete {
 					if next.Kind == event.None {
 						p.absorbCellSize(next)
@@ -179,7 +189,7 @@ func parseRune(data []byte, eof bool) (event.Event, int, bool) {
 	return event.RuneKey(r, 0), size, true
 }
 
-func parseEscape(data []byte, eof bool, mode mouseMode) (event.Event, int, bool) {
+func parseEscape(data []byte, eof bool, mode decodeMode) (event.Event, int, bool) {
 	if len(data) == 1 {
 		if eof {
 			return event.KeyPress(event.KeyEscape, 0), 1, true
@@ -258,6 +268,16 @@ func parseEscape(data []byte, eof bool, mode mouseMode) (event.Event, int, bool)
 	}
 	if key, ok := parseKittyKey(sequence); ok {
 		return key, len(sequence), true
+	}
+	if mode.win32 {
+		// The win32-input-mode record arm, gated like the cell-size reply:
+		// records only arrive on a terminal this backend turned mode 9001
+		// on with, so outside the mode a '_' final byte belongs to no
+		// encoding this backend speaks and falls through to the unknown-key
+		// escape hatch below.
+		if key, ok := parseWin32Key(sequence); ok {
+			return key, len(sequence), true
+		}
 	}
 	code, modifiers, ok := keySequence(sequence)
 	if ok {
@@ -612,7 +632,7 @@ func parseCellSizeReport(sequence string) (int, int, bool) {
 // verbatim in PixelX/PixelY while X/Y hold the cell the pointer is in,
 // derived by floor division once the cell-size reply has landed — before
 // that, or when the terminal's pointer-leave report fires, X/Y are -1.
-func parseMouse(sequence string, mode mouseMode) (event.MouseEvent, bool) {
+func parseMouse(sequence string, mode decodeMode) (event.MouseEvent, bool) {
 	if !strings.HasPrefix(sequence, "\x1b[<") {
 		return event.MouseEvent{}, false
 	}
@@ -718,4 +738,229 @@ func parseMouse(sequence string, mode mouseMode) (event.MouseEvent, bool) {
 		}
 	}
 	return mouse, true
+}
+
+// parseWin32Key decodes one win32-input-mode record — the DEC private mode
+// 9001 encoding Windows terminals send when the backend enables it, the
+// Windows counterpart of kitty's CSI u. A record is
+//
+//	CSI Vk;Sc;Uc;Kd;Cs;Rc _
+//
+// carrying a KEY_EVENT_RECORD: the virtual key code, the diagnostic scan
+// code, the translated UnicodeChar, the key-down flag, the control-key
+// state, and the repeat count. Every parameter is optional on the wire:
+// an omitted or empty field defaults to zero — except the repeat count,
+// which defaults to one, the wire spelling of "this record is one press".
+//
+// The grammar is deliberately stricter than the kitty arm: parameters are
+// plain semicolon-separated numbers, so a record with more than six
+// fields, a signed or non-numeric field, a key-down flag outside the
+// boolean pair, or a repeat count past the WORD a console can report is
+// malformed — charm reads any non-zero key-down as a release, but a flag
+// that malformed signals a broken encoder, so lux rejects the record and
+// lets it surface as an unknown key rather than guessing.
+func parseWin32Key(sequence string) (event.Event, bool) {
+	if len(sequence) < 3 || !strings.HasPrefix(sequence, "\x1b[") || sequence[len(sequence)-1] != '_' {
+		return event.Event{}, false
+	}
+	fields := strings.Split(sequence[2:len(sequence)-1], ";")
+	if len(fields) > 6 {
+		return event.Event{}, false
+	}
+	// The scan code (second parameter) is diagnostic-only: identity,
+	// state, and text all live in the other fields, so it is read for
+	// grammar and then ignored.
+	values := [6]int{0, 0, 0, 0, 0, 1}
+	for i, field := range fields {
+		if field == "" {
+			continue
+		}
+		for j := 0; j < len(field); j++ {
+			if field[j] < '0' || field[j] > '9' {
+				return event.Event{}, false
+			}
+		}
+		value, err := strconv.Atoi(field)
+		if err != nil {
+			return event.Event{}, false
+		}
+		values[i] = value
+	}
+	vk, _, uc, kd, cs, rc := values[0], values[1], values[2], values[3], values[4], values[5]
+	if kd != 0 && kd != 1 {
+		return event.Event{}, false
+	}
+	if rc > 0xFFFF {
+		return event.Event{}, false
+	}
+	action, repeat := event.ActionRelease, uint16(0)
+	if kd == 1 {
+		// A press coalesces the terminal-reported repeat count; a count of
+		// zero on a press is a broken record clamped to one, never an
+		// event that claims no presses happened.
+		action, repeat = event.ActionPress, uint16(max(rc, 1))
+	}
+	mod := win32Mods(cs)
+	// A printable UnicodeChar — including space — is the text path: the
+	// rune survives verbatim with its modifiers, mirroring how the kitty
+	// arm reports modified text keys (Shift stays, so Shift+A reads as
+	// 'A' plus the shift bit).
+	if r := rune(uc); uc > 0 && unicode.IsPrint(r) {
+		// AltGr arrives as right-alt plus left-ctrl in the control-key
+		// state while the character itself is the accented rune. The
+		// pair is synthetic, so strip it and report the rune plain — or
+		// every European layout would read as Ctrl+Alt+<rune>.
+		if cs&0x9 == 0x9 {
+			mod &^= event.ModCtrl | event.ModAlt
+		}
+		return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: r, Mod: mod, Action: action, Repeat: repeat}}, true
+	}
+	// UnicodeChar zero or a control character means the key is functional
+	// or modifier-composed: the virtual key code carries its identity,
+	// exactly what the CSI u code does for kitty.
+	code, r, ok := win32VirtualKey(vk)
+	if !ok {
+		// An unmapped virtual key — a modifier bookend, a windows key, a
+		// bare numpad digit — is still a well-formed record, so it decodes
+		// as an unknown key carrying the record's own action, repeat, and
+		// modifiers instead of falling back to the legacy unknown press:
+		// a Ctrl-up bookend reads as a release, never a phantom key.
+		return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyUnknown, Mod: mod, Action: action, Repeat: repeat}}, true
+	}
+	// Shift+Tab normalizes to backtab, mirroring the kitty arm and the
+	// legacy CSI Z spelling.
+	if code == event.KeyTab && mod&event.ModShift != 0 {
+		code, mod = event.KeyBackTab, mod&^event.ModShift
+	}
+	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Rune: r, Mod: mod, Action: action, Repeat: repeat}}, true
+}
+
+// win32Mods maps the control-key state half of a record onto event
+// modifiers. Both ctrl positions and both alt positions collapse into
+// their single event bit — apps act on "ctrl", not on which hand — and
+// caps-lock and num-lock ride along exactly as kitty's modifier field
+// reports them. SCROLLLOCK_ON (0x40) and ENHANCED_KEY (0x100) are
+// deliberately dropped: the event vocabulary has no scroll-lock bit, and
+// the enhanced-key note distinguishes duplicates the VK already names
+// (numpad Enter against the main Enter), so neither changes an app-level
+// key identity.
+func win32Mods(cs int) event.Mod {
+	var mod event.Mod
+	// RIGHT_CTRL (0x4) and LEFT_CTRL (0x8) both map to the single ctrl
+	// bit, so the ctrl mask is 0xC while the alt pair (RIGHT_ALT 0x1,
+	// LEFT_ALT 0x2) is 0x3 — mixing halves would read right-alt as ctrl.
+	if cs&0xC != 0 {
+		mod |= event.ModCtrl
+	}
+	if cs&0x3 != 0 {
+		mod |= event.ModAlt
+	}
+	if cs&0x10 != 0 {
+		mod |= event.ModShift
+	}
+	if cs&0x80 != 0 {
+		mod |= event.ModCapsLock
+	}
+	if cs&0x20 != 0 {
+		mod |= event.ModNumLock
+	}
+	return mod
+}
+
+// win32VirtualKey maps the virtual key code onto the event vocabulary.
+// The holes are deliberate: modifier-key records (the VK_SHIFT family,
+// 0x10/0x11/0x12/0xA0-0xA5) are bookkeeping this API expresses as Mod
+// bits on the keys they modify, so they decode as unknown rather than
+// inventing phantom presses; the windows keys (0x5B/0x5C) have no event
+// slot, matching kitty's handling of its own modifier codes; and numpad
+// digits (0x60-0x69) only reach this table with a zero UnicodeChar —
+// num-locked numpad presses arrive as their printable rune on the text
+// path, and a bare numpad-digit record is a shape real consoles do not
+// send (they report the navigation VKs instead), so it stays unknown
+// rather than guessing which digit was meant.
+func win32VirtualKey(vk int) (event.KeyCode, rune, bool) {
+	switch {
+	case vk >= 0x41 && vk <= 0x5A:
+		// Letters: the base layout identity, independent of what the
+		// console translated it into — Ctrl+A arrives as Uc=1, Alt+A as
+		// Uc=0, and both should read as the letter plus their modifiers.
+		return event.KeyRune, rune(vk - 0x41 + 'a'), true
+	case vk >= 0x30 && vk <= 0x39:
+		return event.KeyRune, rune(vk - 0x30 + '0'), true
+	case vk >= 0x70 && vk <= 0x87:
+		return event.KeyF1 + event.KeyCode(vk-0x70), 0, true
+	}
+	switch vk {
+	case 0x08:
+		return event.KeyBackspace, 0, true
+	case 0x09:
+		return event.KeyTab, 0, true
+	case 0x0D:
+		return event.KeyEnter, 0, true
+	case 0x1B:
+		return event.KeyEscape, 0, true
+	case 0x13:
+		return event.KeyPause, 0, true
+	case 0x14:
+		return event.KeyCapsLock, 0, true
+	case 0x20:
+		// Ctrl+Space keeps the console's zero UnicodeChar; the virtual
+		// key names the character it is.
+		return event.KeyRune, ' ', true
+	case 0x21:
+		return event.KeyPageUp, 0, true
+	case 0x22:
+		return event.KeyPageDown, 0, true
+	case 0x23:
+		return event.KeyEnd, 0, true
+	case 0x24:
+		return event.KeyHome, 0, true
+	case 0x25:
+		return event.KeyLeft, 0, true
+	case 0x26:
+		return event.KeyUp, 0, true
+	case 0x27:
+		return event.KeyRight, 0, true
+	case 0x28:
+		return event.KeyDown, 0, true
+	case 0x2C:
+		return event.KeyPrintScreen, 0, true
+	case 0x2D:
+		return event.KeyInsert, 0, true
+	case 0x2E:
+		return event.KeyDelete, 0, true
+	case 0x5D:
+		return event.KeyMenu, 0, true
+	// Numpad operators, num-locked or not: the keys are distinct from
+	// their main-row twins on every Windows layout, but the characters
+	// they type are the same, so they normalize onto KeyRune exactly as
+	// the kitty keypad punctuation does.
+	case 0x6A:
+		return event.KeyRune, '*', true
+	case 0x6B:
+		return event.KeyRune, '+', true
+	case 0x6C:
+		return event.KeyRune, ',', true
+	case 0x6D:
+		return event.KeyRune, '-', true
+	case 0x6E:
+		return event.KeyRune, '.', true
+	case 0x6F:
+		return event.KeyRune, '/', true
+	case 0xAD:
+		return event.KeyVolumeMute, 0, true
+	case 0xAE:
+		return event.KeyVolumeDown, 0, true
+	case 0xAF:
+		return event.KeyVolumeUp, 0, true
+	case 0xB0:
+		return event.KeyMediaTrackNext, 0, true
+	case 0xB1:
+		return event.KeyMediaTrackPrevious, 0, true
+	case 0xB2:
+		return event.KeyMediaStop, 0, true
+	case 0xB3:
+		return event.KeyMediaPlayPause, 0, true
+	}
+	return 0, 0, false
 }

@@ -10,8 +10,8 @@ behavior; **planned validation** = plausible path without current evidence.
 
 | Environment | Current status | Expected behavior / limit |
 |---|---|---|
-| Windows Terminal + ConPTY | implemented, validation pending | VT output, raw input through `x/term`, 100 ms resize polling |
-| Windows 10+ ConHost in cmd/PowerShell | degraded, validation pending | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; modern mouse/input behavior depends on console support |
+| Windows Terminal + ConPTY | implemented, validation pending | VT output, raw input through `x/term`, win32-input-mode keyboard when the mode 9001 probe answers, 100 ms resize polling |
+| Windows 10+ ConHost in cmd/PowerShell | degraded, validation pending | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; answers the mode 9001 probe with full win32-input support, so the keyboard path matches Windows Terminal there; modern mouse behavior depends on console support |
 | Windows 7/8 legacy console | not supported | no published fallback to classic screen-buffer rendering |
 | Unix PTYs on Linux/macOS/BSD | implemented, validation pending | termios raw mode, VT output, `SIGWINCH` resize |
 | tmux | planned validation | legacy VT path should work; the probe hears whatever answers first — inside tmux that can be tmux itself — so a kitty flags reply is trusted as-is, and the backend does not yet distinguish the outer emulator from the multiplexer |
@@ -55,6 +55,11 @@ synchronized output, hyperlinks, and graphics. Today:
 - the enhanced (kitty) keyboard stays off until the probe's kitty query is
   positively answered — nothing about the legacy key path changes before
   that;
+- on Windows the win32-input mode (DEC private mode 9001) takes the
+  disambiguation role the kitty protocol plays elsewhere: the probe asks
+  `CSI ? 9001 $ p`, a recognizing answer turns it on unless kitty answered
+  too — kitty wins when both do, because its encoding is the richer one —
+  and without that answer the keyboard stays on the legacy encodings;
 - `NO_COLOR` disables color;
 - `COLORTERM=truecolor` or `24bit` selects true color;
 - a `TERM` containing `256color` selects the 256-color palette;
@@ -80,16 +85,17 @@ Open probes an interactive terminal once, in raw mode, before the alternate
 screen is entered, so the probe meets a quiet stream: the only reports in
 flight are the ones it asked for. One write — primary device attributes
 (`CSI c`) plus DECRQM for DEC private mode 6 (DECOM, the proxy for DECSTBM
-scroll regions) and mode 2026 (synchronized output), plus the kitty keyboard
-query (`CSI ? u`) — followed by a bounded read:
+scroll regions), mode 2026 (synchronized output), mode 1016 (pixel mouse),
+and mode 9001 (win32 input), plus the kitty keyboard query (`CSI ? u`) —
+followed by a bounded read:
 
 - the default budget is 150 ms; terminals that answer usually do so in
   single-digit milliseconds, and a terminal that answers DA1 but not DECRQM
   keeps the probe alive until the deadline, which startup pays once;
-- once the classic trio (DA1 and both mode reports) has answered, a 25 ms
-  grace replaces the rest of the budget for the kitty reply: fragmented
-  replies still land, while a protocol-less terminal pays one extra 25 ms
-  instead of the full window;
+- once the classic trio (DA1 and the DECOM and 2026 reports) has answered, a
+  25 ms grace replaces the rest of the budget for the kitty, pixel-mouse,
+  and win32-input replies: fragmented answers still land, while a
+  protocol-less terminal pays one extra 25 ms instead of the full window;
 - `LUX_TUI_PROBE_TIMEOUT` sets the budget in milliseconds; `0`, a negative
   number, `off`, `false`, or `no` disables negotiation entirely (deterministic
   runs, terminals that answer nothing — including the kitty query, so it
@@ -111,6 +117,13 @@ query (`CSI ? u`) — followed by a bounded read:
 - the kitty query is the other enable-only verdict: a flags reply
   (`CSI ? flags u`) turns the enhanced keyboard on; silence or junk keeps the
   legacy path;
+- the mode 9001 query is the Windows counterpart and another enable-only
+  verdict: a DECRPM answer that recognizes the mode — set, reset, or
+  permanently set — turns the win32 input mode on; a status of 0
+  (unrecognized) or 4 (permanently reset, where the enable write would be a
+  no-op) rejects it; silence leaves the legacy key path. When kitty answered
+  too, the win32 mode is not entered, so only one enhanced encoding is ever
+  active on the wire;
 - redirected output and `TERM=dumb` skip the probe and use the portable
   plain-text profile.
 
@@ -181,6 +194,75 @@ The verdict trusts the first answerer, so a multiplexer answering on behalf
 of a terminal without the protocol (or the reverse) is accepted for now;
 distinguishing them is deferred to DA1-based provenance. Disabling
 negotiation with `LUX_TUI_PROBE_TIMEOUT=off` restores the pure legacy path.
+
+## Windows keyboard (win32 input mode)
+
+The kitty protocol has no Windows footprint — mintty and foot, the
+kitty-mode terminals of the POSIX world, are not the Windows story — so the
+Windows equivalent of keyboard disambiguation is Microsoft's own
+win32-input-mode (DEC private mode 9001, the "improved keyboard handling in
+ConPTY" spec). Windows Terminal and ConPTY's ConHost answer for it; WezTerm
+implements it on every platform and defaults it on for Windows since the
+20220624 build; mintty and foot implement kitty instead and ignore 9001,
+which the probe treats as silence and honest legacy degradation.
+
+When the mode 9001 probe is answered and kitty did not answer, the backend
+sends `CSI ? 9001 h` on enter and `CSI ? 9001 l` on every exit path — the
+same write composition and the same snapshot discipline as the kitty stack.
+ConPTY itself enables 9001 unconditionally when it spawns, so the mode may
+already be set; the enable is idempotent and the leave matches what the
+session set. What the mode buys:
+
+- every key event arrives as a structured record
+  `CSI Vk;Sc;Uc;Kd;Cs;Rc _` — virtual key, scan code, Unicode translation,
+  key-down flag, control key state, repeat count — so press/repeat/release
+  truth exists before any C0 collision matters;
+- releases are decoded in full and follow the same default filtering and
+  `WithKeyReleases(true)` delivery as the kitty path;
+- ambiguous pairs split: Ctrl+letter vs its C0 alias, Esc vs Alt+key, and
+  multi-modifier combos the legacy encodings cannot express, all from the
+  control-key-state field rather than byte guessing;
+- modifier truth follows the console: the ctrl bit reads both RIGHT_CTRL
+  (0x4) and LEFT_CTRL (0x8), the alt bit both alt keys (0x1/0x2), shift
+  0x10, caps-lock (0x80) and num-lock (0x20) as lock state, riding along
+  exactly as the kitty arm reports them;
+- AltGr is honest: the real AltGr chord is LEFT_CTRL|RIGHT_ALT (0x9), so
+  that state on a printable translation is a plain character (a Polish `ą`
+  on AltGr+A, for instance), not Ctrl+Alt spam — while genuine
+  Ctrl+Alt (0xA, left of both) still decodes as a combo;
+- a printable Unicode translation (Uc) becomes the rune of the event, so
+  text keys are native and IME/VK_PACKET input that bypasses the records
+  still arrives as plain characters on the legacy path;
+- the repeat count from the console drives the repeat action, so OS-side
+  auto-repeat arrives as `Repeat`-action events rather than synthesized
+  presses.
+
+The limits are deliberate. Modifier keys themselves — the Ctrl down/up
+bookends that bracket every composition — surface as unknown-key events
+carrying their own action and modifier state rather than standalone
+modifier presses: the API expresses modifiers as bits on the keys they
+modify. The scan code parameter is parsed and then ignored (the virtual key
+plus translation already identify every key lux maps). SCROLL_LOCK_ON
+(0x40) and ENHANCED_KEY (0x100) control-key-state bits are dropped —
+scroll-lock state does not alter decoding and the enhanced-key bit only
+marks an extended keyboard, neither is a modifier. Records with more than
+six parameters, a non-numeric parameter, a key-down flag outside {0, 1}, or
+a repeat count past 0xFFFF are malformed and fall through to the unknown-key
+escape hatch, never a panic.
+
+Two deviations from the only other major implementation (charm's lib xt)
+are stricter on purpose: a record may omit trailing parameters up to
+six total (charm requires exactly six; the spec's own truncated examples
+permit fewer), and the key-down flag must be 0 or 1 (charm treats anything
+non-1 as a release). Wire truth follows the Microsoft spec: the final byte
+is `_`, omitted fields take their defaults (all zero, repeat count 1), and
+`;;` skips a field.
+
+What does not change: text-producing keys, Enter/Tab/Backspace semantics,
+rendering, the mouse path, and every terminal that never answers the probe —
+mintty and foot keep kitty and legacy encodings respectively, and Windows
+Terminal without an answer would keep the legacy path too. Spec:
+<https://github.com/microsoft/terminal/blob/main/doc/specs/%234999%20-%20Improved%20keyboard%20handling%20in%20Conpty.md>.
 
 ## Mouse
 

@@ -42,7 +42,7 @@ comparative claims require reproducible results.
 | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with two enable-only verdicts), streaming input parser with kitty CSI u decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with three enable-only verdicts), streaming input parser with kitty CSI u and win32-input-mode record decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -146,13 +146,18 @@ the same handful of bytes whether the screen is 80×24 or 120×40.
 
 Defaults come from the environment (`TERM`, `COLORTERM`, `NO_COLOR`) and the
 platform. Then a single bounded probe at startup asks the terminal itself
-(device attributes, mode reports for scroll regions and synchronized output,
-and the kitty keyboard query). The scroll-mode probe can only veto, never
+(device attributes, mode reports for scroll regions, synchronized output,
+pixel mouse, and win32 input, and the kitty keyboard query). The scroll-mode
+probe can only veto, never
 invent; a silent or slow terminal keeps the conservative defaults, and
 redirected output skips the probe entirely for the plain-text profile. The
-other two queries are enable-only — a kitty flags reply turns on the
+other queries are enable-only — a kitty flags reply turns on the
 enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
-its C0 alias; a mode 2026 answer that recognizes the mode turns on the
+its C0 alias; on Windows, a mode 9001 answer that recognizes win32 input
+mode turns on the ConPTY record encoding (press/repeat/release actions,
+console modifier truth, and AltGr as a plain character) with the same
+guaranteed reset on every exit path, and kitty wins when both answer;
+a mode 2026 answer that recognizes the mode turns on the
 frame-synchronization wrapper (silence never does), and
 `LUX_TUI_SYNC_OUTPUT` overrides that verdict in either direction. Mouse
 tracking is all-motion (1003 with SGR 1006): hover states
@@ -193,9 +198,13 @@ kitty underline shapes and underline color ride the style diff at every
 depth, and OSC 8 regions are opt-in with a frame contract that never leaks
 an open region. Synchronized output has landed the same way: the probe
 enables mode 2026 wrapping only on a recognized answer, with
-`LUX_TUI_SYNC_OUTPUT` as the force-on/force-off escape hatch. Next slices
+`LUX_TUI_SYNC_OUTPUT` as the force-on/force-off escape hatch. The Windows
+counterpart has landed too: win32-input-mode (9001) is probed and enabled on
+a recognizing answer, decoding the ConPTY key records with both ctrl keys
+into the ctrl bit, AltGr as a plain rune, console repeat counts, and
+modifier bookends as honest unknown-key releases. Next slices
 are the remaining keyboard-truth
-items (win32-input-mode, multiplexer
+items (multiplexer
 provenance), variable-height virtualization, and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.
