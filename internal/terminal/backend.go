@@ -221,6 +221,11 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	var leftover []byte
 	if timeout, probe := probeTimeoutConfigured(); probe {
 		reply, pending := negotiate(ctx, b.input, b.writer, timeout)
+		// The provenance gate runs before verdicts are applied: when the
+		// reports came from a multiplexer's pane, the input-family answers
+		// describe what the host speaks to the mux, not what the pane
+		// receives, so they are downgraded and legacy decoding stands.
+		reply = gateMultiplexerInput(reply)
 		b.features = applyProbeFeatures(b.features, reply, sync)
 		leftover = pending
 	}

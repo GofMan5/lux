@@ -65,52 +65,68 @@ func TestParseProbeReply(t *testing.T) {
 		// treated as user input and replayed byte for byte.
 		{"DA1 report with an empty body is replayed", "\x1b[?c", probeReply{}, "\x1b[?c"},
 		{"DA1 report with a non-numeric body is replayed", "\x1b[?6 c", probeReply{}, "\x1b[?6 c"},
-		{"DA1 report with attributes", "\x1b[?62;1;2c", probeReply{answered: true}, ""},
-		{"DA1 report with one attribute", "\x1b[?6c", probeReply{answered: true}, ""},
-		{"scroll regions rejected", "\x1b[?6c\x1b[?6;0$y", probeReply{answered: true, scroll: probeRejected}, ""},
-		{"scroll regions set", "\x1b[?6c\x1b[?6;1$y", probeReply{answered: true, scroll: probeSupported}, ""},
-		{"scroll regions reset", "\x1b[?6c\x1b[?6;2$y", probeReply{answered: true, scroll: probeSupported}, ""},
-		{"scroll regions permanently set", "\x1b[?6c\x1b[?6;3$y", probeReply{answered: true, scroll: probeSupported}, ""},
-		{"scroll regions permanently reset", "\x1b[?6c\x1b[?6;4$y", probeReply{answered: true, scroll: probeSupported}, ""},
-		{"synchronized output rejected", "\x1b[?6c\x1b[?2026;0$y", probeReply{answered: true, sync: probeRejected}, ""},
-		{"synchronized output set", "\x1b[?6c\x1b[?2026;2$y", probeReply{answered: true, sync: probeSupported}, ""},
-		{"synchronized output permanently set", "\x1b[?6c\x1b[?2026;3$y", probeReply{answered: true, sync: probeSupported}, ""},
+		{"DA1 report with attributes", "\x1b[?62;1;2c", probeReply{answered: true, da1: "62;1;2"}, ""},
+		{"DA1 report with one attribute", "\x1b[?6c", probeReply{answered: true, da1: "6"}, ""},
+		// DA2 answers carry the '>' introducer: they are recorded for
+		// provenance but never mark the terminal answered — only DA1 proves
+		// the classic report path the early-exit logic depends on.
+		{"DA2 answer with the tmux code", "\x1b[>84;0;0c", probeReply{da2: "84;0;0"}, ""},
+		{"DA2 answer from Windows Terminal", "\x1b[>0;10;1c", probeReply{da2: "0;10;1"}, ""},
+		{"DA2 request form is not a report", "\x1b[>c", probeReply{}, "\x1b[>c"},
+		{"DA2 with a space in the body is replayed", "\x1b[>84 0;0c", probeReply{}, "\x1b[>84 0;0c"},
+		{"modifyOtherKeys report shape is replayed", "\x1b[>4;2m", probeReply{}, "\x1b[>4;2m"},
+		{"DA1 then DA2 are both recorded", "\x1b[?62;1;2c\x1b[>1;0;0c", probeReply{answered: true, da1: "62;1;2", da2: "1;0;0"}, ""},
+		{"first DA1 wins over a forged second", "\x1b[?62;1;2c\x1b[?1;2c", probeReply{answered: true, da1: "62;1;2"}, ""},
+		{"first DA2 wins over a forged second", "\x1b[>84;0;0c\x1b[>0;10;1c", probeReply{da2: "84;0;0"}, ""},
+		{"scroll regions rejected", "\x1b[?6c\x1b[?6;0$y", probeReply{answered: true, da1: "6", scroll: probeRejected}, ""},
+		{"scroll regions set", "\x1b[?6c\x1b[?6;1$y", probeReply{answered: true, da1: "6", scroll: probeSupported}, ""},
+		{"scroll regions reset", "\x1b[?6c\x1b[?6;2$y", probeReply{answered: true, da1: "6", scroll: probeSupported}, ""},
+		{"scroll regions permanently set", "\x1b[?6c\x1b[?6;3$y", probeReply{answered: true, da1: "6", scroll: probeSupported}, ""},
+		{"scroll regions permanently reset", "\x1b[?6c\x1b[?6;4$y", probeReply{answered: true, da1: "6", scroll: probeSupported}, ""},
+		{"synchronized output rejected", "\x1b[?6c\x1b[?2026;0$y", probeReply{answered: true, da1: "6", sync: probeRejected}, ""},
+		{"synchronized output set", "\x1b[?6c\x1b[?2026;2$y", probeReply{answered: true, da1: "6", sync: probeSupported}, ""},
+		{"synchronized output permanently set", "\x1b[?6c\x1b[?2026;3$y", probeReply{answered: true, da1: "6", sync: probeSupported}, ""},
 		// Status 4 for mode 2026 is "permanently reset": the set-mode wrapper
 		// would be a permanent no-op, so the probe treats it as rejected.
-		{"synchronized output permanently reset", "\x1b[?6c\x1b[?2026;4$y", probeReply{answered: true, sync: probeRejected}, ""},
-		{"pixel mouse rejected", "\x1b[?6c\x1b[?1016;0$y", probeReply{answered: true, pixel: probeRejected}, ""},
-		{"pixel mouse set", "\x1b[?6c\x1b[?1016;2$y", probeReply{answered: true, pixel: probeSupported}, ""},
-		{"pixel mouse permanently set", "\x1b[?6c\x1b[?1016;3$y", probeReply{answered: true, pixel: probeSupported}, ""},
+		{"synchronized output permanently reset", "\x1b[?6c\x1b[?2026;4$y", probeReply{answered: true, da1: "6", sync: probeRejected}, ""},
+		{"pixel mouse rejected", "\x1b[?6c\x1b[?1016;0$y", probeReply{answered: true, da1: "6", pixel: probeRejected}, ""},
+		{"pixel mouse set", "\x1b[?6c\x1b[?1016;2$y", probeReply{answered: true, da1: "6", pixel: probeSupported}, ""},
+		{"pixel mouse permanently set", "\x1b[?6c\x1b[?1016;3$y", probeReply{answered: true, da1: "6", pixel: probeSupported}, ""},
 		// Status 4 for mode 1016 gets the same treatment as 2026: the mode
 		// cannot be turned on, so pixel coordinates would never arrive and
 		// enabling the decode would only misread cell reports.
-		{"pixel mouse permanently reset", "\x1b[?6c\x1b[?1016;4$y", probeReply{answered: true, pixel: probeRejected}, ""},
-		{"win32 input rejected", "\x1b[?6c\x1b[?9001;0$y", probeReply{answered: true, win32: probeRejected}, ""},
-		{"win32 input set", "\x1b[?6c\x1b[?9001;1$y", probeReply{answered: true, win32: probeSupported}, ""},
-		{"win32 input reset but settable", "\x1b[?6c\x1b[?9001;2$y", probeReply{answered: true, win32: probeSupported}, ""},
-		{"win32 input permanently set", "\x1b[?6c\x1b[?9001;3$y", probeReply{answered: true, win32: probeSupported}, ""},
+		{"pixel mouse permanently reset", "\x1b[?6c\x1b[?1016;4$y", probeReply{answered: true, da1: "6", pixel: probeRejected}, ""},
+		{"win32 input rejected", "\x1b[?6c\x1b[?9001;0$y", probeReply{answered: true, da1: "6", win32: probeRejected}, ""},
+		{"win32 input set", "\x1b[?6c\x1b[?9001;1$y", probeReply{answered: true, da1: "6", win32: probeSupported}, ""},
+		{"win32 input reset but settable", "\x1b[?6c\x1b[?9001;2$y", probeReply{answered: true, da1: "6", win32: probeSupported}, ""},
+		{"win32 input permanently set", "\x1b[?6c\x1b[?9001;3$y", probeReply{answered: true, da1: "6", win32: probeSupported}, ""},
 		// Status 4 for mode 9001 matches the other enable-only modes: a
 		// permanently reset mode can never carry the CSI underscore
 		// records, so gating the decode on it would only mislabel the
 		// legacy stream it actually sends.
-		{"win32 input permanently reset", "\x1b[?6c\x1b[?9001;4$y", probeReply{answered: true, win32: probeRejected}, ""},
+		{"win32 input permanently reset", "\x1b[?6c\x1b[?9001;4$y", probeReply{answered: true, da1: "6", win32: probeRejected}, ""},
 		// Windows Terminal answers DA1 with a 39-byte report; the reportEnd
 		// window must accept it or every WT launch stalls for the full probe
 		// timeout and replays the reply as a phantom keystroke.
-		{"Windows Terminal DA1 answer", "\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52c", probeReply{answered: true}, ""},
+		{"Windows Terminal DA1 answer", "\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52c", probeReply{answered: true, da1: "61;4;6;7;14;21;22;23;24;28;32;42;52"}, ""},
 		{
 			name:   "Windows Terminal full negotiation answer",
 			stream: "\x1b[?61;4;6;7;14;21;22;23;24;28;32;42;52c\x1b[?6;2$y\x1b[?2026;2$y",
-			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported},
+			want:   probeReply{answered: true, da1: "61;4;6;7;14;21;22;23;24;28;32;42;52", scroll: probeSupported, sync: probeSupported},
+		},
+		{
+			name:   "tmux full negotiation answer",
+			stream: "\x1b[?1;2c\x1b[>84;0;0c\x1b[?6;2$y\x1b[?2026;2$y\x1b[?1016;0$y\x1b[?9001;0$y",
+			want:   probeReply{answered: true, da1: "1;2", da2: "84;0;0", scroll: probeSupported, sync: probeSupported, pixel: probeRejected, win32: probeRejected},
 		},
 		{
 			name:   "full negotiation answer",
 			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y",
-			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported},
+			want:   probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, pixel: probeSupported},
 		},
-		{"leading zeros in a report", "\x1b[?6c\x1b[?06;01$y", probeReply{answered: true, scroll: probeSupported}, ""},
-		{"report for an unprobed mode is consumed", "\x1b[?6c\x1b[?99;1$y", probeReply{answered: true}, ""},
-		{"user keys around reports are replayed", "\x1b[?6cX\x1b[?6;0$yY", probeReply{answered: true, scroll: probeRejected}, "XY"},
+		{"leading zeros in a report", "\x1b[?6c\x1b[?06;01$y", probeReply{answered: true, da1: "6", scroll: probeSupported}, ""},
+		{"report for an unprobed mode is consumed", "\x1b[?6c\x1b[?99;1$y", probeReply{answered: true, da1: "6"}, ""},
+		{"user keys around reports are replayed", "\x1b[?6cX\x1b[?6;0$yY", probeReply{answered: true, da1: "6", scroll: probeRejected}, "XY"},
 		{"mode-set escape after a query is replayed", "\x1b[?25h", probeReply{}, "\x1b[?25h"},
 		{"mode report without DA1", "\x1b[?6;1$y", probeReply{scroll: probeSupported}, ""},
 		{"arrow key escape is replayed", "\x1b[A", probeReply{}, "\x1b[A"},
@@ -125,25 +141,25 @@ func TestParseProbeReply(t *testing.T) {
 		// The kitty flags reply is digits behind the private-mode question
 		// mark; its value is never parsed, only its shape matters, so even
 		// overflowing digits count as an answer.
-		{"kitty flags reply", "\x1b[?6c\x1b[?1u", probeReply{answered: true, keyboard: probeSupported}, ""},
+		{"kitty flags reply", "\x1b[?6c\x1b[?1u", probeReply{answered: true, da1: "6", keyboard: probeSupported}, ""},
 		{"kitty flags reply without DA1", "\x1b[?1u", probeReply{keyboard: probeSupported}, ""},
-		{"kitty flags of zero still count", "\x1b[?6c\x1b[?0u", probeReply{answered: true, keyboard: probeSupported}, ""},
-		{"kitty flags with leading zeros", "\x1b[?6c\x1b[?013u", probeReply{answered: true, keyboard: probeSupported}, ""},
-		{"overflowing kitty flags still count", "\x1b[?6c\x1b[?99999999999999999999u", probeReply{answered: true, keyboard: probeSupported}, ""},
-		{"user keys around a kitty reply are replayed", "\x1b[?6cX\x1b[?1uY", probeReply{answered: true, keyboard: probeSupported}, "XY"},
+		{"kitty flags of zero still count", "\x1b[?6c\x1b[?0u", probeReply{answered: true, da1: "6", keyboard: probeSupported}, ""},
+		{"kitty flags with leading zeros", "\x1b[?6c\x1b[?013u", probeReply{answered: true, da1: "6", keyboard: probeSupported}, ""},
+		{"overflowing kitty flags still count", "\x1b[?6c\x1b[?99999999999999999999u", probeReply{answered: true, da1: "6", keyboard: probeSupported}, ""},
+		{"user keys around a kitty reply are replayed", "\x1b[?6cX\x1b[?1uY", probeReply{answered: true, da1: "6", keyboard: probeSupported}, "XY"},
 		{
 			name:   "full negotiation answer with kitty flags",
 			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?1u",
-			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported, keyboard: probeSupported},
+			want:   probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, pixel: probeSupported, keyboard: probeSupported},
 		},
 		{
 			name:   "full negotiation answer with win32 input",
 			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?9001;2$y\x1b[?1u",
-			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported, win32: probeSupported, keyboard: probeSupported},
+			want:   probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, pixel: probeSupported, win32: probeSupported, keyboard: probeSupported},
 		},
 		{"kitty query shape without digits is replayed", "\x1b[?u", probeReply{}, "\x1b[?u"},
-		{"kitty reply with junk flags is replayed", "\x1b[?6c\x1b[?,u", probeReply{answered: true}, "\x1b[?,u"},
-		{"kitty reply with parameters is replayed", "\x1b[?6c\x1b[?1;1u", probeReply{answered: true}, "\x1b[?1;1u"},
+		{"kitty reply with junk flags is replayed", "\x1b[?6c\x1b[?,u", probeReply{answered: true, da1: "6"}, "\x1b[?,u"},
+		{"kitty reply with parameters is replayed", "\x1b[?6c\x1b[?1;1u", probeReply{answered: true, da1: "6"}, "\x1b[?1;1u"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -304,7 +320,7 @@ func TestNegotiateDetectsSupports(t *testing.T) {
 	if got := probe.String(); got != probeRequest {
 		t.Errorf("probe request = %q, want %q", got, probeRequest)
 	}
-	want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported}
+	want := probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, pixel: probeSupported}
 	if reply != want {
 		t.Errorf("reply = %+v, want %+v", reply, want)
 	}
@@ -344,7 +360,7 @@ func TestNegotiateKittyGrace(t *testing.T) {
 		if elapsed := time.Since(start); elapsed >= 400*time.Millisecond {
 			t.Errorf("negotiate burned the full budget on a fragmented reply stream (elapsed %v)", elapsed)
 		}
-		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported, keyboard: probeSupported, pixel: probeSupported}
+		want := probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, keyboard: probeSupported, pixel: probeSupported}
 		if reply != want {
 			t.Errorf("reply = %+v, want %+v", reply, want)
 		}
@@ -375,7 +391,7 @@ func TestNegotiateKittyGrace(t *testing.T) {
 		if elapsed > 300*time.Millisecond {
 			t.Errorf("negotiate spent %v waiting for late replies that never come, want the %v grace plus overhead", elapsed, kittyGrace)
 		}
-		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported}
+		want := probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported}
 		if reply != want {
 			t.Errorf("reply = %+v, want %+v (keyboard and pixel stay unknown on silence)", reply, want)
 		}
@@ -406,8 +422,8 @@ func TestNegotiatePreservesUserBytes(t *testing.T) {
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Errorf("negotiate took %v on a terminated reply stream", elapsed)
 	}
-	if reply != (probeReply{answered: true}) {
-		t.Errorf("reply = %+v, want only answered set", reply)
+	if reply != (probeReply{answered: true, da1: "6"}) {
+		t.Errorf("reply = %+v, want only answered set with the DA1 body recorded", reply)
 	}
 	if string(leftover) != "abc" {
 		t.Errorf("leftover = %q, want the user bytes %q", leftover, "abc")
@@ -509,34 +525,34 @@ func TestApplyProbeFeatures(t *testing.T) {
 	}{
 		// The auto default: only the 2026 answer moves the flag.
 		{"unknown reply keeps defaults", before, probeReply{}, syncOutputAuto, before},
-		{"supported scroll keeps the flag", before, probeReply{answered: true, scroll: probeSupported}, syncOutputAuto, before},
-		{"supported sync keeps the flag", before, probeReply{answered: true, sync: probeSupported}, syncOutputAuto, before},
+		{"supported scroll keeps the flag", before, probeReply{answered: true, da1: "6", scroll: probeSupported}, syncOutputAuto, before},
+		{"supported sync keeps the flag", before, probeReply{answered: true, da1: "6", sync: probeSupported}, syncOutputAuto, before},
 		{"rejected scroll clears scroll regions", before, probeReply{answered: true, scroll: probeRejected}, syncOutputAuto, scrollOff},
-		{"rejected sync clears synchronized output", before, probeReply{answered: true, sync: probeRejected}, syncOutputAuto, syncOff},
+		{"rejected sync clears synchronized output", before, probeReply{answered: true, da1: "6", sync: probeRejected}, syncOutputAuto, syncOff},
 		{"both rejected clear both", before, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, syncOutputAuto, bothOff},
-		{"supported sync upgrades a set that does not claim it", syncOff, probeReply{answered: true, sync: probeSupported}, syncOutputAuto, before},
-		{"supported sync upgrades even an empty set", capability.Set{}, probeReply{answered: true, sync: probeSupported}, syncOutputAuto, capability.Set{SynchronizedOutput: true}},
-		{"rejected sync downgrades even an empty set", capability.Set{}, probeReply{answered: true, sync: probeRejected}, syncOutputAuto, capability.Set{}},
+		{"supported sync upgrades a set that does not claim it", syncOff, probeReply{answered: true, da1: "6", sync: probeSupported}, syncOutputAuto, before},
+		{"supported sync upgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", sync: probeSupported}, syncOutputAuto, capability.Set{SynchronizedOutput: true}},
+		{"rejected sync downgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", sync: probeRejected}, syncOutputAuto, capability.Set{}},
 		{"already disabled stays disabled", bothOff, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, syncOutputAuto, bothOff},
 		// The override replaces the verdict in both directions: it exists
 		// for terminals whose report lies.
-		{"forced on beats a rejection", syncOff, probeReply{answered: true, sync: probeRejected}, syncOutputOn, before},
+		{"forced on beats a rejection", syncOff, probeReply{answered: true, da1: "6", sync: probeRejected}, syncOutputOn, before},
 		{"forced on upgrades an empty set", capability.Set{}, probeReply{}, syncOutputOn, capability.Set{SynchronizedOutput: true}},
-		{"forced off beats support", before, probeReply{answered: true, sync: probeSupported}, syncOutputOff, syncOff},
+		{"forced off beats support", before, probeReply{answered: true, da1: "6", sync: probeSupported}, syncOutputOff, syncOff},
 		{"forced off stays off on silence", syncOff, probeReply{}, syncOutputOff, syncOff},
 		// Other verdicts are untouched by the sync mode.
-		{"supported scroll and sync never upgrade scroll in an empty set", capability.Set{}, probeReply{answered: true, scroll: probeSupported, sync: probeSupported}, syncOutputAuto, capability.Set{SynchronizedOutput: true}},
-		{"supported kitty turns the keyboard on", before, probeReply{answered: true, keyboard: probeSupported}, syncOutputAuto, keyboardOn},
-		{"kitty support upgrades even an empty set", capability.Set{}, probeReply{answered: true, keyboard: probeSupported}, syncOutputAuto, capability.Set{KeyboardEnhanced: true}},
+		{"supported scroll and sync never upgrade scroll in an empty set", capability.Set{}, probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported}, syncOutputAuto, capability.Set{SynchronizedOutput: true}},
+		{"supported kitty turns the keyboard on", before, probeReply{answered: true, da1: "6", keyboard: probeSupported}, syncOutputAuto, keyboardOn},
+		{"kitty support upgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", keyboard: probeSupported}, syncOutputAuto, capability.Set{KeyboardEnhanced: true}},
 		{"rejected kitty changes nothing", before, probeReply{answered: true, keyboard: probeRejected}, syncOutputAuto, before},
 		{"unknown kitty keeps the current state", keyboardOn, probeReply{answered: true}, syncOutputAuto, keyboardOn},
-		{"supported pixel turns the mode on", before, probeReply{answered: true, pixel: probeSupported}, syncOutputAuto, pixelOn},
-		{"pixel support upgrades even an empty set", capability.Set{}, probeReply{answered: true, pixel: probeSupported}, syncOutputAuto, capability.Set{PixelMouse: true}},
-		{"rejected pixel changes nothing", before, probeReply{answered: true, pixel: probeRejected}, syncOutputAuto, before},
+		{"supported pixel turns the mode on", before, probeReply{answered: true, da1: "6", pixel: probeSupported}, syncOutputAuto, pixelOn},
+		{"pixel support upgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", pixel: probeSupported}, syncOutputAuto, capability.Set{PixelMouse: true}},
+		{"rejected pixel changes nothing", before, probeReply{answered: true, da1: "6", pixel: probeRejected}, syncOutputAuto, before},
 		{"unknown pixel keeps the current state", pixelOn, probeReply{answered: true}, syncOutputAuto, pixelOn},
-		{"supported win32 turns the mode on", before, probeReply{answered: true, win32: probeSupported}, syncOutputAuto, win32On},
-		{"win32 support upgrades even an empty set", capability.Set{}, probeReply{answered: true, win32: probeSupported}, syncOutputAuto, capability.Set{Win32Input: true}},
-		{"rejected win32 changes nothing", before, probeReply{answered: true, win32: probeRejected}, syncOutputAuto, before},
+		{"supported win32 turns the mode on", before, probeReply{answered: true, da1: "6", win32: probeSupported}, syncOutputAuto, win32On},
+		{"win32 support upgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", win32: probeSupported}, syncOutputAuto, capability.Set{Win32Input: true}},
+		{"rejected win32 changes nothing", before, probeReply{answered: true, da1: "6", win32: probeRejected}, syncOutputAuto, before},
 		{"unknown win32 keeps the current state", win32On, probeReply{answered: true}, syncOutputAuto, win32On},
 	}
 	for _, tt := range tests {

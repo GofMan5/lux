@@ -25,17 +25,24 @@ import (
 // delay plus that one cosmetic event — never a stuck Open.
 const defaultProbeTimeout = 150 * time.Millisecond
 
-// probeRequest is written once. The primary device attributes report proves
-// the input path actually echoes device reports back; the DECRPM queries ask
-// whether DEC private mode 6 (DECOM), mode 2026 (synchronized output), mode
-// 1016 (pixel-precision mouse), and mode 9001 (win32-input-mode) are
+// probeRequest is written once. The primary and secondary device attributes
+// reports prove the input path echoes device reports back; the DECRPM queries
+// ask whether DEC private mode 6 (DECOM), mode 2026 (synchronized output),
+// mode 1016 (pixel-precision mouse), and mode 9001 (win32-input-mode) are
 // recognized. Mode 6 is a proxy for DECSTBM scroll regions: DECSTBM is a
 // control sequence, not a mode, so DECRQM cannot ask about it directly, and
 // every terminal family pairs DECSTBM with DECOM — a terminal that rejects
 // DECOM lacks the private-mode machinery scroll regions rely on. The kitty
 // keyboard protocol query goes last: only protocol terminals answer it, and
 // those answers arrive right behind the classic quartet.
-const probeRequest = "\x1b[c\x1b[?6$p\x1b[?2026$p\x1b[?1016$p\x1b[?9001$p\x1b[?u"
+//
+// DA2 rides right behind DA1 for provenance, not for capability: the first
+// parameter is the manufacturer code, and a multiplexer answers with its own
+// — tmux with 84, while every real host reports a different one (Windows
+// Terminal 0, xterm 41, VTE 65, screen 83, WezTerm 123). A program running
+// inside a pane cannot see $TMUX across an ssh hop, but it can always see
+// who answered.
+const probeRequest = "\x1b[c\x1b[>c\x1b[?6$p\x1b[?2026$p\x1b[?1016$p\x1b[?9001$p\x1b[?u"
 
 // kittyGrace bounds how long the probe keeps listening for the kitty flags
 // reply and the pixel- and win32-input-mode reports once the classic trio
@@ -71,8 +78,16 @@ type probeReply struct {
 	// answered is set by any primary device attributes report: the terminal
 	// is live and understands query protocols at all.
 	answered bool
-	scroll   probeFeature
-	sync     probeFeature
+	// da1 and da2 record the bodies of the primary and secondary device
+	// attributes reports. They carry no verdict by themselves — their job
+	// is provenance: the manufacturer code in DA2 and the attribute set in
+	// DA1 fingerprint tmux, so input-side protocols can be gated when the
+	// answerer is a multiplexer rather than the host. First report wins:
+	// a later forged report must not overwrite the first honest one.
+	da1    string
+	da2    string
+	scroll probeFeature
+	sync   probeFeature
 	// keyboard is set only by a kitty flags reply; silence leaves it
 	// unknown, which means "keep legacy input decoding".
 	keyboard probeFeature
@@ -170,7 +185,10 @@ func parseProbeReply(stream []byte) (probeReply, []byte) {
 	var leftover []byte
 	for i := 0; i < len(stream); {
 		rest := stream[i:]
-		if len(rest) >= 3 && rest[0] == 0x1b && rest[1] == '[' && rest[2] == '?' {
+		// Both report families are CSI: '?' introduces the private-mode
+		// reports (DA1 and DECRPM), '>' introduces DA2. Anything else is
+		// not a report the probe asked for.
+		if len(rest) >= 3 && rest[0] == 0x1b && rest[1] == '[' && (rest[2] == '?' || rest[2] == '>') {
 			if end, ok := reportEnd(rest); ok {
 				final := rest[end]
 				body := rest[3:end]
@@ -185,7 +203,19 @@ func parseProbeReply(stream []byte) (probeReply, []byte) {
 					if !isAttributeBody(body) {
 						break
 					}
-					reply.answered = true
+					// DA1 answers with '?', DA2 with '>'. DA1 alone marks
+					// the terminal answered; both bodies are recorded for
+					// provenance, first report wins, so a forged late
+					// report cannot overwrite an honest early one. An
+					// echoed query has an empty body and never gets here.
+					if rest[2] == '?' {
+						reply.answered = true
+						if reply.da1 == "" {
+							reply.da1 = string(body)
+						}
+					} else if reply.da2 == "" {
+						reply.da2 = string(body)
+					}
 					i += end + 1
 					continue
 				case 'y':

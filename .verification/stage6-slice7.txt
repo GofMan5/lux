@@ -1,0 +1,140 @@
+Stage 6, slice 7 — keyboard truth: multiplexer provenance — local verification, 2026-10-07
+=========================================================================================
+
+Scope (ROADMAP.md, stage 6 item 7): the last keyboard-truth item. The probe's
+replies are attributed before they are trusted: when a multiplexer (tmux,
+GNU screen) answered on behalf of the host terminal, input-family verdicts
+(kitty keyboard, pixel mouse 1016, win32 input 9001) are downgraded so a
+pane never runs an input encoding the multiplexer does not re-emit, while
+output-family verdicts (DECOM/DECSTBM 6, synchronized output 2026) keep
+their answers. Landed as one commit:
+
+  (this commit) feat: gate probe verdicts by multiplexer
+               negotiate.go: the probe write gains "\x1b[>c" (DA2 rides
+               the quartet behind DA1), probeReply gains da1/da2 latched
+               with first-answerer-wins semantics (a forged second report
+               cannot overwrite the first), the '>' branch classifies the
+               DA2 report shape, and the early-exit condition is
+               unchanged (DA2 lands with the classic trio's deadline).
+               multiplexer.go (new, ~150 lines): muxKind
+               (none/tmux/screen), detectMultiplexer(reply) — $TMUX,
+               $STY, $TERM prefix (tmux*/screen*), DA2 manufacturer code
+               84, DA1 VT100 shape "1;2"/"1;2;4" — and
+               gateMultiplexerInput(reply), which rewrites only
+               probeSupported input verdicts to probeUnknown (rejections
+               and silence stand: they come from the same mux parser that
+               feeds the pane) and leaves the output family untouched.
+               backend.go: Open() gates the reply between
+               parseProbeReply-equivalent classification and
+               applyProbeFeatures — applyProbeFeatures itself and the
+               syncOutputMode plumbing are unchanged.
+
+Provenance truth (research pass over tmux 3.3a→master sources — input.c,
+tty-keys.c, tty.c, screen-write.c, options-table.c, CHANGES; GNU screen
+ansi.c; kitty keyboard-protocol.rst; tcell v3 tscreen.go; bubbletea v2
+tea.go; WezTerm docs — full quotes with line refs in the report that fed
+this artifact, deleted before the commit; facts below are the ones that
+survived cross-verification):
+  - tmux's server-side pane parser (input.c) answers DA1 itself; the host
+    terminal's real reply is consumed by tmux's client key parser
+    (tty_keys_device_attributes, once-only) and NEVER reaches the pane.
+    Exact DA1 bytes: "\x1b[?1;2c" (standard) / "\x1b[?1;2;4c"
+    (--enable-sixel build). Identical in 3.3a and master.
+  - GNU screen replies byte-identical "\x1b[?1;2c" (ansi.c L1045-1048):
+    DA1 alone cannot distinguish tmux from screen or a legacy terminal —
+    the DA1 witness is a "legacy-shaped replier" heuristic; harmless
+    because the gate treats every multiplexer the same.
+  - DA2: tmux "\x1b[>84;0;0c" (84='T'); screen "\x1b[>83;<version>;0c"
+    (83='S'). tmux's 84 is a near-collision-free fingerprint: Windows
+    Terminal 0, xterm 41, VTE 65, screen 83, WezTerm 123, kitty 1. Screen's
+    83 is NOT used: the version parameter drifts between builds and 83 was
+    never audited for exclusivity among real terminals, so screen stays
+    environment-detected ($STY, screen* $TERM).
+  - DECRPM timeline: <=3.3a drops ALL private DECRQM; 3.6 answers only
+    12/2004/1004/1006/2031 and consumes the rest with no reply; 3.7+
+    answers 1,3,6,7,12,25,47/1047/1049,1000,1002,1003,1004,1005,1006,
+    2004,2026,2031 from pane state, unknown modes -> ";0$y". So 1016 and
+    9001 get ";0$y" (rejected) on 3.7+, silence on <=3.6. Trap confirmed:
+    "?6$p" is answered as DECOM (origin mode), not DECSDM — exactly the
+    DECOM-as-DECSTBM-proxy lux already uses. screen: no DECRQM at all.
+  - kitty keyboard in tmux: zero support through 3.8-dev (CHANGES has no
+    kitty mention; the 'u' CSI table entry is RCP, so "CSI ? u" is
+    silently dropped in ALL versions). screen drops it too. The kitty
+    protocol spec's implementer list has neither.
+  - DCS passthrough ("DCS tmux; ... ST"): default off, window/pane scope;
+    outbound-only in practice — host replies either match tmux's own
+    reply list (consumed for tmux's own detection, never forwarded) or
+    are chopped under the default 10 ms escape-time and delivered to the
+    pane as garbage META keys. No coherent host reply can reach a pane in
+    stock tmux, so there is no byte-level "the host answered me directly"
+    — the input gate is categorical, not a workaround for a solvable
+    routing problem.
+  - Environment witnesses: tmux sets $TMUX, $TMUX_PANE, TERM_PROGRAM=tmux,
+    TERM from default-terminal; screen sets $STY, $WINDOW, TERM=screen.*.
+    Env fails for ssh-from-inside-tmux (remote shell, local mux) and
+    scrubbed-env wrappers — the DA2/DA1 report witnesses cover exactly
+    those cases.
+  - Market precedents: tcell v3 sends one fingerprint batch (DECRPM
+    2048/1000/1006/9001, kitty ?u, XTVERSION >q, DA1 LAST as terminator,
+    1 s bounded wait); bubbletea v2 probes DECRPM 2026+2027 behind a
+    TERM/TERM_PROGRAM heuristic. Neither gates on $TMUX; neither attempts
+    passthrough. lux's design (env pre-filter + DA2 fingerprint, one
+    batch, bounded wait) matches the market pattern with a stricter
+    verdict: gate input, trust output.
+
+Tests (all green):
+  - negotiate_test.go: parseProbeReply gains DA2 rows (tmux 84, WT
+    0;10;1, first-wins over forged second, request/spaced/junk shapes
+    replayed), DA1+DA2 both recorded, the tmux full-negotiation stream
+    ("?1;2c >84;0;0c 6;2$y 2026;2$y 1016;0$y 9001;0$y"), and the
+    da1/da2 fields in every want literal of the pipe-based negotiation
+    tests (TestNegotiateKittyGrace's fragmented subtest initially missed
+    the da1 want — caught by the docker Linux lane, which is the only
+    lane where the pipe tests run; fixed).
+  - multiplexer_test.go (new, ~250 lines): TestDetectMultiplexer (21
+    hermetic rows: witnesses, collisions, ssh and nested-mux cases),
+    TestGateMultiplexerInput (input family downgraded, output family
+    kept, host passthrough unchanged, rejections/silence untouched),
+    TestTmuxKeepsLegacyInput (the hostile full stream incl. a forged
+    "\x1b[?1u" kitty claim: raw reply records the claim, the gate
+    removes it, applyProbeFeatures leaves ScrollRegions and
+    SynchronizedOutput on and KeyboardEnhanced/PixelMouse/Win32Input
+    off, and the legacy parser decodes the pane bytes),
+    TestNegotiateTmuxStream (end-to-end through negotiate(): probe
+    bytes, reply classification, leftover user bytes replayed; runs on
+    the Linux lane, skipped on Windows for the anonymous-pipe
+    WaitForSingleObject reason shared with every negotiate pipe test).
+  - terminal_test.go legacy-key coverage unchanged.
+
+Verification runs (2026-10-07, this tree):
+  - Windows: go test ./... -count=1 -> ok (all 11 packages).
+  - Linux (docker golang:1.25-alpine): go test ./... -count=1 -> ok,
+    including TestNegotiateTmuxStream and the pipe-based negotiation
+    tests.
+  - go vet ./... -> clean; gofmt -l . -> clean.
+  - go test ./internal/terminal/ -run '^$' -fuzz '^FuzzParserNeverPanics$'
+    -fuzztime 20s -> PASS, 1.16M execs, 0 crashes (449 interesting
+    inputs corpus).
+
+Honesty ledger:
+  - the research pass could not build a SIXEL tmux, so ";4" DA1 replies
+    are trusted from source reading, not from a live capture; the
+    witness maps both shapes identically anyway.
+  - "84 is claimed by no real host" is a characterization of the known
+    emulator set, not a per-terminal audit; the false-positive cost is
+    bounded by the gate itself (a colliding host would only lose input
+    protocols it must first positively answer).
+  - st's DA2 first parameter is suspected (from memory, not the research)
+    to also be 83 — one more reason screen stays environment-detected;
+    unaudited, documented as such in the code comment.
+  - future tmux with native kitty would be wrongly gated until detection
+    is taught — deliberate, documented in COMPATIBILITY.md.
+  - the docker lane used golang:1.25-alpine (cached locally); CI pins go
+    1.23.x and stable, so the matrix stays broader than this local run.
+  - .research-mux/ (the research scratch: tmux/screen/tcell/bubbletea
+    sources and the report) was deleted before the commit; the verified
+    facts live in this artifact, the code comments, and docs/
+    COMPATIBILITY.md.
+
+Stage 6 closes with this slice: items 1-7 are landed. Stage-close artifact
+follows as .verification/stage6.txt.

@@ -146,11 +146,19 @@ the same handful of bytes whether the screen is 80×24 or 120×40.
 
 Defaults come from the environment (`TERM`, `COLORTERM`, `NO_COLOR`) and the
 platform. Then a single bounded probe at startup asks the terminal itself
-(device attributes, mode reports for scroll regions, synchronized output,
-pixel mouse, and win32 input, and the kitty keyboard query). The scroll-mode
+(primary and secondary device attributes, mode reports for scroll regions,
+synchronized output, pixel mouse, and win32 input, and the kitty keyboard
+query). The scroll-mode
 probe can only veto, never
 invent; a silent or slow terminal keeps the conservative defaults, and
 redirected output skips the probe entirely for the plain-text profile. The
+answers carry provenance: the device reports and the environment together
+reveal when a multiplexer answered on behalf of the host, and inside a
+detected tmux or GNU screen the input-family verdicts (kitty keyboard,
+pixel mouse, win32 input) are downgraded — a pane never runs an input
+encoding the multiplexer does not re-emit, while output-family verdicts
+(scroll regions, synchronized output) stay, because tmux implements those
+for its panes itself. The
 other queries are enable-only — a kitty flags reply turns on the
 enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
 its C0 alias; on Windows, a mode 9001 answer that recognizes win32 input
@@ -202,10 +210,12 @@ enables mode 2026 wrapping only on a recognized answer, with
 counterpart has landed too: win32-input-mode (9001) is probed and enabled on
 a recognizing answer, decoding the ConPTY key records with both ctrl keys
 into the ctrl bit, AltGr as a plain rune, console repeat counts, and
-modifier bookends as honest unknown-key releases. Next slices
-are the remaining keyboard-truth
-items (multiplexer
-provenance), variable-height virtualization, and semantic
+modifier bookends as honest unknown-key releases. Multiplexer provenance has
+landed too: the probe latches DA1 and DA2 (first answerer wins) and reads
+`$TMUX`/`$STY`/`$TERM`, so a pane that answered through tmux or GNU screen
+keeps the legacy input path even when a mis-routed or forged reply claims
+kitty support — that closes the keyboard-truth stage. Next slices are
+variable-height virtualization and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a

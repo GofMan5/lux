@@ -29,8 +29,9 @@ work and the API may still change.
 - Runtime options: `WithSizeLimit`, `WithFallbackSize`, `WithIO`, `WithBackend`.
 - Plain-output fallback: monochrome newline-delimited snapshots for redirected
   output and `TERM=dumb`.
-- Capability negotiation before the first frame: one bounded DA1/DECRQM probe
-  (150 ms default) that can only veto `ScrollRegions` and
+- Capability negotiation before the first frame: one bounded
+  DA1/DA2/DECRQM probe (150 ms default) that can only veto
+  `ScrollRegions` and
   `SynchronizedOutput`; `LUX_TUI_PROBE_TIMEOUT` adjusts the budget or disables
   negotiation. Keystrokes that race the probe are replayed, never dropped.
 - Kitty keyboard protocol (disambiguate + event-type flags): the startup
@@ -109,6 +110,35 @@ work and the API may still change.
   or `auto` leaves the probe to decide; an invalid value degrades to auto
   after a one-line stderr notice). With negotiation disabled, only a
   forced-on setting claims the wrapper.
+- Multiplexer provenance for the negotiated capabilities — the probe now
+  also sends the secondary device attributes query (`CSI > c`) and latches
+  both DA1 and DA2 bodies with first-answerer-wins semantics, so a forged
+  second report cannot overwrite the first. DA2's manufacturer code
+  identifies who answered: tmux reports 84 — a value no real host claims
+  (Windows Terminal 0, xterm 41, VTE 65, screen 83, WezTerm 123) — and
+  tmux's DA1 is the VT100 shape `?1;2c` where modern hosts answer VT220-class
+  attribute sets. The environment corroborates where reports cannot:
+  `$TMUX`, `$STY`, and the propagated `$TERM` (`tmux*`/`screen*`), which
+  survives an ssh hop that `$TMUX` itself does not. Any single witness is
+  enough, and the verdict it drives is asymmetric by family: output
+  protocols (DECOM/DECSTBM, 2026) keep the multiplexer's answers, because
+  tmux implements those for its panes itself and the app-to-mux path is the
+  one that matters; input protocols (kitty keyboard, pixel mouse, win32
+  input) have a "supported" verdict downgraded to unknown, because the bytes
+  a pane receives are whatever the multiplexer re-encodes and DCS
+  passthrough is output-only — there is no byte-level way to confirm the
+  host answered directly. Rejections and silence stand. kitty therefore
+  stays off inside a detected tmux or screen until the multiplexer
+  implements the protocol natively — a deliberate cost paid back by never
+  running an enhanced encoding a pane cannot actually receive; today's tmux
+  honestly rejects 1016 and 9001 (3.7 and later) or never answers them (3.6
+  and earlier), and drops the kitty query in every version anyway, so the
+  gate is defense in depth against the next "helpful" multiplexer, a
+  mis-routed passthrough reply, or a pane whose `$TERM` was forced to a
+  host name. Screen is environment-detected only: its DA1 is byte-identical
+  to tmux's, and its DA2 code 83 was not audited for exclusivity among real
+  terminals (the version parameter behind it drifts between builds), so
+  `$STY` and a `screen*` `$TERM` are the trusted witnesses there.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

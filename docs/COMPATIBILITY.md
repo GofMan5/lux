@@ -14,8 +14,8 @@ behavior; **planned validation** = plausible path without current evidence.
 | Windows 10+ ConHost in cmd/PowerShell | degraded, validation pending | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; answers the mode 9001 probe with full win32-input support, so the keyboard path matches Windows Terminal there; modern mouse behavior depends on console support |
 | Windows 7/8 legacy console | not supported | no published fallback to classic screen-buffer rendering |
 | Unix PTYs on Linux/macOS/BSD | implemented, validation pending | termios raw mode, VT output, `SIGWINCH` resize |
-| tmux | planned validation | legacy VT path should work; the probe hears whatever answers first — inside tmux that can be tmux itself — so a kitty flags reply is trusted as-is, and the backend does not yet distinguish the outer emulator from the multiplexer |
-| GNU screen | planned validation | basic VT/ANSI path only; advanced protocols are not enabled |
+| tmux | planned validation | legacy VT keyboard and mouse; tmux's own DECRPM answers for the output family (DECOM, 2026) are trusted because tmux implements those for its panes; input-family verdicts (kitty, pixel mouse, win32 input) are downgraded by the multiplexer gate so a pane never runs an input encoding tmux did not re-emit — see "Multiplexer provenance" below |
+| GNU screen | planned validation | basic VT/ANSI path only; detected through `$STY` or a `screen*` `$TERM` and gated the same way as tmux; screen itself implements neither 2026 nor kitty for panes |
 | SSH/mosh | planned validation | negotiation runs before the first frame over the same transport; slow links can spend the whole 150 ms budget (raise `LUX_TUI_PROBE_TIMEOUT`), and impaired-link validation remains |
 | CI, redirected stdout, `TERM=dumb` | implemented | monochrome newline-delimited full snapshots; no cursor addressing/input |
 
@@ -83,11 +83,11 @@ synchronized output, hyperlinks, and graphics. Today:
 
 Open probes an interactive terminal once, in raw mode, before the alternate
 screen is entered, so the probe meets a quiet stream: the only reports in
-flight are the ones it asked for. One write — primary device attributes
-(`CSI c`) plus DECRQM for DEC private mode 6 (DECOM, the proxy for DECSTBM
-scroll regions), mode 2026 (synchronized output), mode 1016 (pixel mouse),
-and mode 9001 (win32 input), plus the kitty keyboard query (`CSI ? u`) —
-followed by a bounded read:
+flight are the ones it asked for. One write — primary and secondary device
+attributes (`CSI c`, `CSI > c`) plus DECRQM for DEC private mode 6 (DECOM, the
+proxy for DECSTBM scroll regions), mode 2026 (synchronized output), mode 1016
+(pixel mouse), and mode 9001 (win32 input), plus the kitty keyboard query
+(`CSI ? u`) — followed by a bounded read:
 
 - the default budget is 150 ms; terminals that answer usually do so in
   single-digit milliseconds, and a terminal that answers DA1 but not DECRQM
@@ -136,6 +136,62 @@ takes the same exit. A resize landing inside the probe window is replayed as
 the first event, so the first layout uses the real terminal size. Inspection
 is capped at 4096 bytes, and the cap shortens classification only: bytes
 already read are always classified or replayed.
+
+### Multiplexer provenance
+
+The reports above are answered by whichever parser receives them, and inside
+a multiplexer that parser is the multiplexer, not the host terminal. The
+probe therefore records who answered before trusting the answers:
+
+- DA1 and DA2 bodies are latched with first-answerer-wins semantics, so a
+  forged second report cannot overwrite the first;
+- DA2's first parameter is the manufacturer code. tmux answers 84 — a value
+  no real host claims (Windows Terminal 0, xterm 41, VTE 65, screen 83,
+  WezTerm 123, kitty 1) — which makes it a near-collision-free fingerprint
+  even where the environment is silent;
+- tmux's DA1 is the VT100 shape `?1;2c` (sixel builds append `;4`) while
+  every modern host reports a VT220-class attribute set. GNU screen answers
+  DA1 byte-identically, so that witness alone cannot tell tmux from screen —
+  harmless, because the gate treats every multiplexer the same and the DA2
+  code or the environment separates them for bookkeeping;
+- the environment corroborates where the reports cannot: `$TMUX`, `$STY`,
+  and the propagated `$TERM` (`tmux*`, `screen*`). `$TERM` survives an ssh
+  hop that `$TMUX` does not — the local-tmux-into-remote-ssh case — which
+  is exactly why the report witnesses exist. Screen's DA2 code is
+  deliberately not a fingerprint: the version parameter behind the
+  manufacturer code drifts between builds, and 83 was never audited for
+  exclusivity among real terminals, so screen stays environment-detected
+  only.
+
+Any single witness is enough, and the verdict it drives is asymmetric by
+family:
+
+- output protocols — DECOM/DECSTBM and 2026 — keep the multiplexer's answers.
+  They describe the app-to-multiplexer path, and tmux implements DECSTBM and
+  2026 for its panes itself, so its supports and rejections are both honest;
+- input protocols — kitty keyboard, pixel mouse, win32 input — have their
+  verdicts downgraded to unknown. The bytes a pane receives are whatever the
+  multiplexer re-encodes, so a "supported" answer attributes nothing about
+  the input path; rejections and silence stand (they come from the same
+  parser that feeds the pane). Legacy decoding is what the pane actually
+  speaks, and stays.
+
+DSC passthrough cannot rescue the input verdicts: passthrough is output-only,
+host replies are consumed by the multiplexer's own input parser and never
+forwarded back, and there is no byte-level way to observe "the host answered
+me directly" from inside a pane. kitty therefore stays off inside a detected
+multiplexer until the multiplexer implements the protocol natively — at
+which point its answers describe the pane path and become honest exactly the
+way 2026's already are. That is a deliberate cost: a future tmux with native
+kitty would be gated off until detection is taught about it, paid back by
+never running an enhanced encoding a pane cannot actually receive.
+
+The gate is defense in depth rather than a live-bug fix: today's tmux
+honestly rejects 1016 and 9001 (3.7 and later) or never answers them (3.6
+and earlier), and drops the kitty query in every version, so its panes
+already negotiate to legacy input. What the gate buys is survival of the
+next "helpful" multiplexer, a mis-routed passthrough reply, or a pane whose
+`$TERM` was forced to a host name — input stays decodable in all of them.
 
 ## Enhanced keyboard (kitty protocol)
 
@@ -190,10 +246,11 @@ escape surfaces as two Escapes one 35 ms timeout apart. Legacy `~` codes
 25-34 map to F13-F20 with the Menu hole, matching what enhanced terminals
 re-send.
 
-The verdict trusts the first answerer, so a multiplexer answering on behalf
-of a terminal without the protocol (or the reverse) is accepted for now;
-distinguishing them is deferred to DA1-based provenance. Disabling
-negotiation with `LUX_TUI_PROBE_TIMEOUT=off` restores the pure legacy path.
+The verdict trusts the first answerer, and the multiplexer gate above
+decides whether that answerer is trustworthy for input: inside a detected
+tmux or screen the kitty flags reply is downgraded and the legacy path
+stands, whatever the reply claimed. Disabling negotiation with
+`LUX_TUI_PROBE_TIMEOUT=off` restores the pure legacy path.
 
 ## Windows keyboard (win32 input mode)
 
