@@ -1,0 +1,48 @@
+Stage 5c — docs/CI sync — local verification, 2026-10-07
+=========================================================
+
+Scope (ROADMAP.md, stage 5c):
+  1. COMPATIBILITY.md rewritten against the 5b negotiation code.
+  2. README.md Direction updated + Capabilities section added.
+  3. CI jobs: cross-compile, govulncheck, fuzz-smoke, coverage, Go matrix.
+  4. CHANGELOG.md (Keep a Changelog) covering stages 1–5b.
+
+Doc-truth cross-check (every claim traced to code before writing):
+  - probe request  = "\x1b[c\x1b[?6$p\x1b[?2026$p"   negotiate.go:35
+  - default budget = 150 ms                            negotiate.go:26
+  - LUX_TUI_PROBE_TIMEOUT ms|off|false|no|0|<0        negotiate.go:271-287
+  - veto-only: positive rejection removes a feature   negotiate.go (applyProbeFeatures)
+  - "permanently reset" mode 2026 counts as rejection negotiate.go (featureFromStatus)
+  - keystrokes replayed in order                      backend.go:163-168
+  - resize-in-probe replayed as first event           backend.go:151-162
+  - probe runs in raw mode before the alt screen      backend.go:85-127
+  - plain path (redirected, TERM=dumb) never probes   backend.go:70-80
+  - inspection cap 4096 bytes, replay never dropped   negotiate.go:37-42
+  - tmux/SSH matrix rows: no responder provenance yet (stage 6) — stated.
+
+CI additions and local sanity (pwsh, Go 1.23, windows/amd64):
+  cross-compile CGO_ENABLED=0:
+      linux/arm64   go build ./...  exit 0
+      darwin/amd64  go build ./...  exit 0
+      windows/arm64 go build ./...  exit 0
+  fuzz smoke (2 s each; CI runs 30 s):
+      FuzzParserNeverPanics    ./internal/terminal  PASS  24467 execs
+      FuzzTextInputInvariants  ./ui                 PASS   3134 execs
+  coverage:
+      go test -covermode=atomic -coverprofile ./...  PASS
+      go tool cover -func total: 82.6% statements
+      coverage.out removed after recording (CI uploads its own artifact).
+  govulncheck pinned to v1.8.0 (latest tag on 2026-10-07); not run locally
+      (needs the vuln DB over the network — first green run happens on
+      GitHub Actions once the repository exists).
+  Go matrix widened to 1.23.x + stable; yaml hand-checked against the
+      existing job style (checkout@v4, setup-go@v5, cache: true).
+
+Known limits (honesty):
+  - "green CI" acceptance for the new jobs cannot be observed until the
+    repository is pushed to GitHub (stage 10); local equivalents above are
+    green, YAML mirrors the existing job style.
+  - pwsh note: unquoted "-coverprofile=coverage.out ./..." mangled args
+    locally; bash in CI is unaffected. Quoted local rerun passed.
+
+Diffs: d7ce72f docs, cf08145 changelog, ci.yml + this file — docs/CI only.
