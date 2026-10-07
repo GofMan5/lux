@@ -1,0 +1,85 @@
+Stage 6, slice 1 — kitty keyboard disambiguate flag — local verification, 2026-10-07
+====================================================================================
+
+Scope (ROADMAP.md, stage 6 item 1): capability flag, probe query with grace,
+enable-only verdict, push/pop on every exit path, CSI u decoding with guard
+rails. Code and tests landed in 8d87313 (feat: negotiate and enable kitty
+keyboard disambiguate flag). This file rides the docs slice that documents
+the feature (COMPATIBILITY.md, README.md, CHANGELOG.md).
+
+Test evidence (windows/amd64, 2026-10-07):
+  go test ./...      ok, all 10 packages
+  go vet ./...       clean
+  kitty-scoped runs, 115 === RUN entries, all PASS:
+      TestParserKittyDisambiguateKeys (codepoints, modifiers, event types,
+          PUA boundaries 57343/57344/63743/63744, surrogate, overflow, junk)
+      TestParserKittyEscapeIsImmediate (CSI 27 u ends on final u: no
+          escape-delay wait)
+      TestParserKittyStreamsAcrossReads (CSI u split across reads)
+      TestParseProbeReply (11 new kitty cases: flags reply, reply without
+          DA1, zero, leading zeros, overflow, junk replayed, query shape
+          replayed, params replayed)
+      TestApplyProbeFeatures (renamed/extended: kitty enable-only branch
+          next to the veto-only scroll/sync cases)
+      TestCloseRestoresTheKittyStack (latched: pop leads the legacy restore
+          exactly once; unlatched: never written)
+  coverage (internal/terminal): 79.5% statements;
+      parseKittyKey / kittyKey / kittyNumber / isFlagsBody / parseProbeReply
+      / applyProbeFeatures / featureFromStatus / probeTimeoutConfigured 100%.
+      coverprofile removed after recording (CI uploads its own artifact).
+
+Linux evidence (docker golang:1.25-alpine, CI-shaped; go.sum-verified module
+downloads; toolchain >= go.mod's 1.23.0 requirement):
+  go vet ./... && go test ./... -count=1    all 10 packages ok
+  the negotiation loop tests that skip on Windows run green there:
+      TestNegotiateKittyGrace/fragmented_kitty_reply_lands_within_the_grace PASS
+      TestNegotiateKittyGrace/silence_after_the_classic_trio_pays_only_the_grace PASS
+      TestNegotiateSilentTerminalBounded/{open_writer,closed_writer}    PASS
+      TestNegotiateDetectsSupports                                        PASS
+
+Fuzz (windows/amd64, 30 s, post-docs rerun):
+  FuzzParserNeverPanics  ./internal/terminal  PASS  1,933,603 execs,
+      6 new interesting inputs (288 total). 21 kitty-shaped seeds were added
+      in 8d87313: query/enable/disable/push stack shapes, PUA boundary
+      codepoints, surrogate, overflow digits, event types, empty fields,
+      junk finals. No panics, no invariance failures.
+
+Doc-truth cross-check (every claim traced to code before writing):
+  - probe request = DA1 + DECRPM 6 + DECRPM 2026 + CSI ? u  negotiate.go
+  - kittyGrace = 25 ms, paid only after the classic trio answered
+  - verdict is enable-only: a flags reply sets KeyboardEnhanced; silence,
+    junk, or a rejected DECRPM never upgrades (negotiate.go applyProbeFeatures)
+  - push CSI > 1 u rides the enter write; pop CSI < u leads the legacy
+    restore in the same write on every exit: Close, the Open failure
+    branch, and panics funneled through Run's deferred close
+    (backend.go Open/Close; app.go:195-208)
+  - Esc immediate in enhanced mode: TestParserKittyEscapeIsImmediate
+  - Ctrl+letter vs C0 alias, Alt+key, multi-modifier combos decode as CSI u
+    keys; text/Enter/Tab/Backspace stay legacy at flag 1
+  - Shift+Tab (CSI 9;2u) normalizes to BackTab to match legacy \x1b[Z
+  - repeat (event type 2) coalesces into a repeat count; release (3) and
+    junk surface as unknown keys; PUA 57344-63743 never injects text;
+    lock-state modifier bits are dropped
+  - LUX_TUI_PROBE_TIMEOUT=off disables negotiation including the kitty
+    query (escape hatch for a lying multiplexer)
+  - tmux may answer CSI ? u itself; the reply is trusted as-is, provenance
+    deferred to stage 6 item 7 — stated in the COMPATIBILITY.md matrix row
+
+Known limits (honesty):
+  - Open-level enter/leave writes have no byte-level test: interactive
+    Open requires a real tty (isTerminal + MakeRaw gate; pipes fail Open
+    before negotiation). The Close-level pop is test-asserted, and the
+    Open failure branch's combined leave write was verified by code review
+    (backend.go), matching the pre-existing enterTerminal test gap.
+  - TestNegotiateKittyGrace skips on Windows (anonymous-pipe readInput
+    never signals there); the docker Linux run above is the green
+    evidence, and CI's linux lane reruns it on every push.
+  - real-terminal golden matrix (key × terminal × protocol) belongs to
+    stage 6 item 2+ and the stage 9 lanes, per the roadmap.
+  - the docker Linux lane used golang:1.25-alpine (cached locally); CI
+    pins go 1.23.x and stable, so the matrix stays broader than this
+    local run.
+
+Stage 6 is not closed: items 2-7 (event Action semantics, F13+, mouse
+1003/pixel, SGR underline/OSC 8, sync-output enable, win32-input-mode,
+DA1 provenance) are still open. Stage-close artifact lands after item 7.

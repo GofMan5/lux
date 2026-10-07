@@ -42,7 +42,7 @@ comparative claims require reproducible results.
 | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM, bounded, veto-only), streaming input parser, mouse/paste/focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with one enable-only keyboard verdict), streaming input parser with kitty CSI u decoding, mouse/paste/focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -146,13 +146,15 @@ the same handful of bytes whether the screen is 80×24 or 120×40.
 
 Defaults come from the environment (`TERM`, `COLORTERM`, `NO_COLOR`) and the
 platform. Then a single bounded probe at startup asks the terminal itself
-(device attributes plus mode reports for scroll regions and synchronized
-output), and it can only veto a capability, never invent one: a silent or slow
-terminal keeps the conservative defaults, and redirected output skips the
-probe entirely for the plain-text profile. Keystrokes that race the probe are
-replayed in order, never dropped. `LUX_TUI_PROBE_TIMEOUT` raises the 150 ms
-budget or turns negotiation off for deterministic runs. Features degrade in
-this order:
+(device attributes, mode reports for scroll regions and synchronized output,
+and the kitty keyboard query). The mode probes can only veto a capability,
+never invent one: a silent or slow terminal keeps the conservative defaults,
+and redirected output skips the probe entirely for the plain-text profile.
+The kitty query is the one enable-only verdict — a flags reply turns on the
+enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
+its C0 alias. Keystrokes that race the probe are replayed in order, never
+dropped. `LUX_TUI_PROBE_TIMEOUT` raises the 150 ms budget or turns
+negotiation off for deterministic runs. Features degrade in this order:
 
 ```text
 Kitty/Sixel/iTerm image → half-block/braille cells → ASCII
@@ -167,11 +169,13 @@ the open requirements.
 
 ## Direction
 
-Capability negotiation landed: a bounded, veto-only probe runs before the
-first frame. Next slices are modern keyboard protocols (kitty with negotiated
-fallback, Windows key disambiguation), variable-height virtualization, and
-semantic accessibility bridges. Graphics protocols follow only after these
-paths are measurable.
+Capability negotiation landed, and the first modern-keyboard slice followed:
+the kitty protocol's disambiguate flag is queried at startup and pushed only
+on a positive answer, with a guaranteed pop on every exit path. Next slices
+are the remaining keyboard-truth items (event types, F13+, mouse modes,
+win32-input-mode, multiplexer provenance), variable-height virtualization,
+and semantic accessibility bridges. Graphics protocols follow only after
+these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

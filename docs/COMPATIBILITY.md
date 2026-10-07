@@ -14,7 +14,7 @@ behavior; **planned validation** = plausible path without current evidence.
 | Windows 10+ ConHost in cmd/PowerShell | degraded, validation pending | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; modern mouse/input behavior depends on console support |
 | Windows 7/8 legacy console | not supported | no published fallback to classic screen-buffer rendering |
 | Unix PTYs on Linux/macOS/BSD | implemented, validation pending | termios raw mode, VT output, `SIGWINCH` resize |
-| tmux | planned validation | legacy VT path should work; the probe hears whatever answers first — inside tmux that can be tmux itself — and the backend does not yet distinguish the outer emulator from the multiplexer |
+| tmux | planned validation | legacy VT path should work; the probe hears whatever answers first — inside tmux that can be tmux itself — so a kitty flags reply is trusted as-is, and the backend does not yet distinguish the outer emulator from the multiplexer |
 | GNU screen | planned validation | basic VT/ANSI path only; advanced protocols are not enabled |
 | SSH/mosh | planned validation | negotiation runs before the first frame over the same transport; slow links can spend the whole 150 ms budget (raise `LUX_TUI_PROBE_TIMEOUT`), and impaired-link validation remains |
 | CI, redirected stdout, `TERM=dumb` | implemented | monochrome newline-delimited full snapshots; no cursor addressing/input |
@@ -34,9 +34,11 @@ an explicit application-supplied `Clipboard` implementation. No OS adapter is
 bundled; remote OSC 52 remains outside core and needs capability/user policy.
 
 Scoped shortcuts compare exact key code, rune, and modifiers while ignoring
-repeat count. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M, Backspace/Ctrl-H)
-remain indistinguishable; do not register them as separate commands until a
-modern keyboard protocol has been positively negotiated.
+repeat count. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M) remain
+indistinguishable on the legacy path; once the kitty protocol is positively
+negotiated, a terminal that reports the pairs as CSI u decodes them into
+distinct events. Do not rely on the split until the terminal has answered the
+probe.
 
 `cmd.exe`, PowerShell, and shells running under SSH are command interpreters,
 not terminal emulators. Compatibility decisions must be based on the actual TTY
@@ -45,10 +47,13 @@ and capabilities, never the shell name alone.
 ## Current capability behavior
 
 The adapter records interactive mode, Unicode, color depth, alternate screen,
-cursor addressing, mouse, focus, bracketed paste, synchronized output,
-hyperlinks, and graphics. Today:
+cursor addressing, mouse, focus, bracketed paste, enhanced keyboard,
+synchronized output, hyperlinks, and graphics. Today:
 
 - redirected output or `TERM=dumb` selects the portable monochrome profile;
+- the enhanced (kitty) keyboard stays off until the probe's kitty query is
+  positively answered — nothing about the legacy key path changes before
+  that;
 - `NO_COLOR` disables color;
 - `COLORTERM=truecolor` or `24bit` selects true color;
 - a `TERM` containing `256color` selects the 256-color palette;
@@ -65,21 +70,29 @@ Open probes an interactive terminal once, in raw mode, before the alternate
 screen is entered, so the probe meets a quiet stream: the only reports in
 flight are the ones it asked for. One write — primary device attributes
 (`CSI c`) plus DECRQM for DEC private mode 6 (DECOM, the proxy for DECSTBM
-scroll regions) and mode 2026 (synchronized output) — followed by a bounded
-read:
+scroll regions) and mode 2026 (synchronized output), plus the kitty keyboard
+query (`CSI ? u`) — followed by a bounded read:
 
 - the default budget is 150 ms; terminals that answer usually do so in
   single-digit milliseconds, and a terminal that answers DA1 but not DECRQM
   keeps the probe alive until the deadline, which startup pays once;
+- once the classic trio (DA1 and both mode reports) has answered, a 25 ms
+  grace replaces the rest of the budget for the kitty reply: fragmented
+  replies still land, while a protocol-less terminal pays one extra 25 ms
+  instead of the full window;
 - `LUX_TUI_PROBE_TIMEOUT` sets the budget in milliseconds; `0`, a negative
   number, `off`, `false`, or `no` disables negotiation entirely (deterministic
-  runs, terminals that answer nothing); an invalid value falls back to the
-  default after a one-line notice on stderr;
-- the probe can only veto: only a mode report that positively rejects a
+  runs, terminals that answer nothing — including the kitty query, so it
+  doubles as the escape hatch for a misbehaving multiplexer); an invalid value
+  falls back to the default after a one-line notice on stderr;
+- the mode probes can only veto: only a mode report that positively rejects a
   capability removes it from the snapshot (a "permanently reset" mode 2026
   counts, because the set-mode wrapper would be a permanent no-op). A silent
   terminal, a lost reply, or a partial report keeps the defaults, so a dead
   link can never corrupt output;
+- the kitty query is the one enable-only verdict: a flags reply
+  (`CSI ? flags u`) turns the enhanced keyboard on; silence or junk keeps the
+  legacy path;
 - redirected output and `TERM=dumb` skip the probe and use the portable
   plain-text profile.
 
@@ -87,10 +100,45 @@ The probe is honest about what it cannot know. Keystrokes that race it are
 replayed into the read loop in order — never dropped. A report that arrives
 after the deadline is not filtered either (filtering report shapes would eat
 pasted input that merely looks like one); it surfaces as a single unknown-key
-event, the price on links slower than the budget. A resize landing inside the
-probe window is replayed as the first event, so the first layout uses the real
-terminal size. Inspection is capped at 4096 bytes, and the cap shortens
-classification only: bytes already read are always classified or replayed.
+event, the price on links slower than the budget. A late kitty flags reply
+takes the same exit. A resize landing inside the probe window is replayed as
+the first event, so the first layout uses the real terminal size. Inspection
+is capped at 4096 bytes, and the cap shortens classification only: bytes
+already read are always classified or replayed.
+
+## Enhanced keyboard (kitty protocol)
+
+When the kitty query is answered, the backend pushes the protocol's
+disambiguate flag only (`CSI > 1 u`) — no event types, no key-only text
+reporting. What that buys:
+
+- the flag rides the enter sequence in the same Write, and the pop
+  (`CSI < u`) leads the legacy restore in the same Write on every exit path
+  — normal Close, the enter-write failure branch, and anything the app
+  layer's deferred Close covers. A session that started cannot exit with the
+  kitty stack still pushed;
+- Esc arrives as `CSI 27 u` and decodes immediately: the 35 ms escape delay
+  that disambiguates a lone `0x1b` on legacy paths never applies in enhanced
+  mode;
+- ambiguous pairs split when the terminal reports them as CSI u: Esc vs
+  Alt+key, Ctrl+letter vs its C0 alias (Ctrl+I vs Tab, Ctrl+M vs Enter), and
+  multi-modifier combos that legacy encodings cannot express;
+- Shift+Tab normalizes to BackTab to match what the legacy `\x1b[Z` path
+  delivers, so apps see one event shape either way.
+
+What does not change: text-producing keys, unmodified Enter/Tab/Backspace
+keep their legacy encodings; repeat events (event type 2) coalesce into a
+repeat count; release events (type 3) are reported as unknown keys until
+press/release semantics are modeled; kitty functional-key codes (the Unicode
+private-use block, which flag 1 does not deliver anyway) are reported as
+unknown keys rather than injected as text; lock-state modifier bits are
+dropped until the event model can represent them. Enhanced mode never
+changes rendering or the mouse path.
+
+The verdict trusts the first answerer, so a multiplexer answering on behalf
+of a terminal without the protocol (or the reverse) is accepted for now;
+distinguishing them is deferred to DA1-based provenance. Disabling
+negotiation with `LUX_TUI_PROBE_TIMEOUT=off` restores the pure legacy path.
 
 ## Required degradation ladder
 

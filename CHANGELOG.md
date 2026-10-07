@@ -33,6 +33,17 @@ work and the API may still change.
   (150 ms default) that can only veto `ScrollRegions` and
   `SynchronizedOutput`; `LUX_TUI_PROBE_TIMEOUT` adjusts the budget or disables
   negotiation. Keystrokes that race the probe are replayed, never dropped.
+- Kitty keyboard protocol (disambiguate flag): the startup probe asks
+  `CSI ? u` and waits a 25 ms grace behind the classic reports; a flags reply
+  is the one enable-only verdict and turns `KeyboardEnhanced` on. The push
+  (`CSI > 1 u`) rides the enter write and the pop (`CSI < u`) leads the
+  restore in the same write on every exit path, including panics funneled
+  through `Run`'s deferred close. Enhanced mode decodes kitty `CSI u` keys:
+  Esc is immediate (no escape delay), Ctrl+letter splits from its C0 alias,
+  multi-modifier combos arrive, Shift+Tab normalizes to BackTab, repeat
+  events coalesce, release events and private-use functional codes surface
+  as unknown keys, and lock-state bits are dropped until the event model
+  grows them. Silence keeps the legacy key path untouched.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
