@@ -78,6 +78,13 @@ func TestParseProbeReply(t *testing.T) {
 		// Status 4 for mode 2026 is "permanently reset": the set-mode wrapper
 		// would be a permanent no-op, so the probe treats it as rejected.
 		{"synchronized output permanently reset", "\x1b[?6c\x1b[?2026;4$y", probeReply{answered: true, sync: probeRejected}, ""},
+		{"pixel mouse rejected", "\x1b[?6c\x1b[?1016;0$y", probeReply{answered: true, pixel: probeRejected}, ""},
+		{"pixel mouse set", "\x1b[?6c\x1b[?1016;2$y", probeReply{answered: true, pixel: probeSupported}, ""},
+		{"pixel mouse permanently set", "\x1b[?6c\x1b[?1016;3$y", probeReply{answered: true, pixel: probeSupported}, ""},
+		// Status 4 for mode 1016 gets the same treatment as 2026: the mode
+		// cannot be turned on, so pixel coordinates would never arrive and
+		// enabling the decode would only misread cell reports.
+		{"pixel mouse permanently reset", "\x1b[?6c\x1b[?1016;4$y", probeReply{answered: true, pixel: probeRejected}, ""},
 		// Windows Terminal answers DA1 with a 39-byte report; the reportEnd
 		// window must accept it or every WT launch stalls for the full probe
 		// timeout and replays the reply as a phantom keystroke.
@@ -89,8 +96,8 @@ func TestParseProbeReply(t *testing.T) {
 		},
 		{
 			name:   "full negotiation answer",
-			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y",
-			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported},
+			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y",
+			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported},
 		},
 		{"leading zeros in a report", "\x1b[?6c\x1b[?06;01$y", probeReply{answered: true, scroll: probeSupported}, ""},
 		{"report for an unprobed mode is consumed", "\x1b[?6c\x1b[?99;1$y", probeReply{answered: true}, ""},
@@ -117,8 +124,8 @@ func TestParseProbeReply(t *testing.T) {
 		{"user keys around a kitty reply are replayed", "\x1b[?6cX\x1b[?1uY", probeReply{answered: true, keyboard: probeSupported}, "XY"},
 		{
 			name:   "full negotiation answer with kitty flags",
-			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1u",
-			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, keyboard: probeSupported},
+			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?1u",
+			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported, keyboard: probeSupported},
 		},
 		{"kitty query shape without digits is replayed", "\x1b[?u", probeReply{}, "\x1b[?u"},
 		{"kitty reply with junk flags is replayed", "\x1b[?6c\x1b[?,u", probeReply{answered: true}, "\x1b[?,u"},
@@ -265,7 +272,7 @@ func TestNegotiateDetectsSupports(t *testing.T) {
 	reader, writer := negotiatePipe(t)
 	done := make(chan error, 1)
 	go func() {
-		_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y"))
+		_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y"))
 		if closeErr := writer.Close(); err == nil {
 			err = closeErr
 		}
@@ -283,7 +290,7 @@ func TestNegotiateDetectsSupports(t *testing.T) {
 	if got := probe.String(); got != probeRequest {
 		t.Errorf("probe request = %q, want %q", got, probeRequest)
 	}
-	want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported}
+	want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported, pixel: probeSupported}
 	if reply != want {
 		t.Errorf("reply = %+v, want %+v", reply, want)
 	}
@@ -300,16 +307,18 @@ func TestNegotiateKittyGrace(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
 	}
-	t.Run("fragmented kitty reply lands within the grace", func(t *testing.T) {
+	t.Run("fragmented late replies land within the grace", func(t *testing.T) {
 		reader, writer := negotiatePipe(t)
 		done := make(chan error, 1)
 		go func() {
 			_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y"))
-			// The kitty reply arrives as its own read, the way a protocol
-			// terminal sends it behind the classic trio.
+			// The late replies arrive as their own read, the way a protocol
+			// terminal sends them behind the classic trio: kitty flags and
+			// the pixel-mode report are the answers that end the probe
+			// early.
 			time.Sleep(5 * time.Millisecond)
 			if err == nil {
-				_, err = writer.Write([]byte("\x1b[?1u"))
+				_, err = writer.Write([]byte("\x1b[?1u\x1b[?1016;2$y"))
 			}
 			done <- err
 		}()
@@ -321,7 +330,7 @@ func TestNegotiateKittyGrace(t *testing.T) {
 		if elapsed := time.Since(start); elapsed >= 400*time.Millisecond {
 			t.Errorf("negotiate burned the full budget on a fragmented reply stream (elapsed %v)", elapsed)
 		}
-		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported, keyboard: probeSupported}
+		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported, keyboard: probeSupported, pixel: probeSupported}
 		if reply != want {
 			t.Errorf("reply = %+v, want %+v", reply, want)
 		}
@@ -334,7 +343,9 @@ func TestNegotiateKittyGrace(t *testing.T) {
 		done := make(chan error, 1)
 		go func() {
 			// The write end stays open: silence without EOF is what a
-			// terminal without the kitty protocol looks like.
+			// terminal without the late protocols looks like — the kitty
+			// flags and the pixel-mode report never answer, so the probe
+			// returns after the grace rather than the full deadline.
 			_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y"))
 			done <- err
 		}()
@@ -348,11 +359,11 @@ func TestNegotiateKittyGrace(t *testing.T) {
 			t.Errorf("negotiate returned after %v, want the %v grace window to be waited out", elapsed, kittyGrace)
 		}
 		if elapsed > 300*time.Millisecond {
-			t.Errorf("negotiate spent %v waiting for a kitty reply that never comes, want the %v grace plus overhead", elapsed, kittyGrace)
+			t.Errorf("negotiate spent %v waiting for late replies that never come, want the %v grace plus overhead", elapsed, kittyGrace)
 		}
 		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported}
 		if reply != want {
-			t.Errorf("reply = %+v, want %+v (keyboard stays unknown on silence)", reply, want)
+			t.Errorf("reply = %+v, want %+v (keyboard and pixel stay unknown on silence)", reply, want)
 		}
 		if len(leftover) != 0 {
 			t.Errorf("leftover = %q, want none", leftover)
@@ -466,6 +477,8 @@ func TestApplyProbeFeatures(t *testing.T) {
 	bothOff.SynchronizedOutput = false
 	keyboardOn := before
 	keyboardOn.KeyboardEnhanced = true
+	pixelOn := before
+	pixelOn.PixelMouse = true
 	tests := []struct {
 		name     string
 		features capability.Set
@@ -484,6 +497,10 @@ func TestApplyProbeFeatures(t *testing.T) {
 		{"kitty support upgrades even an empty set", capability.Set{}, probeReply{answered: true, keyboard: probeSupported}, capability.Set{KeyboardEnhanced: true}},
 		{"rejected kitty changes nothing", before, probeReply{answered: true, keyboard: probeRejected}, before},
 		{"unknown kitty keeps the current state", keyboardOn, probeReply{answered: true}, keyboardOn},
+		{"supported pixel turns the mode on", before, probeReply{answered: true, pixel: probeSupported}, pixelOn},
+		{"pixel support upgrades even an empty set", capability.Set{}, probeReply{answered: true, pixel: probeSupported}, capability.Set{PixelMouse: true}},
+		{"rejected pixel changes nothing", before, probeReply{answered: true, pixel: probeRejected}, before},
+		{"unknown pixel keeps the current state", pixelOn, probeReply{answered: true}, pixelOn},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

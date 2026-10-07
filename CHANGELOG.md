@@ -56,6 +56,16 @@ work and the API may still change.
   decodes as a move instead of a phantom release — only the `m` final byte
   means release — and SGR releases carry the real button instead of
   collapsing to `MouseNone`.
+- Opt-in pixel-precision mouse: `WithPixelMouse(true)` asks `CSI ? 1016 $ p`
+  during the startup probe and swaps SGR `1006` for kitty's pixel-position
+  mode on a recognized answer. Mouse events carry 0-based `PixelX`/`PixelY`
+  (and cell `X`/`Y` via floor division once the `CSI 16 t` cell-size reply
+  lands — re-queried on resize); back and forward buttons decode as
+  `MouseBack`/`MouseForward`; kitty's pointer-leave code decodes as a move
+  with `MouseNone` and every coordinate -1, which clears hover. A rejected
+  or silent answer keeps the cell encoding, so the option stays inert.
+  Malformed reports (buttons past 511, negative coordinates, the reserved
+  130/131 codes) fall through to the unknown-key escape hatch.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

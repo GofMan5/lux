@@ -23,6 +23,19 @@ const (
 	// encoding rides along as before.
 	enterTerminal = "\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[?1003h\x1b[?1006h"
 	leaveTerminal = "\x1b[?1006l\x1b[?1003l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[?1049l\x1b[0m"
+	// enterPixel is the pixel-mouse twin of enterTerminal: mode 1016
+	// replaces 1006 rather than stacking on it (kitty's SGR pixel encoding
+	// uses the same CSI < shape with pixel coordinates in place of cell
+	// numbers), and the cell-size query rides the same write so the reply
+	// is already in flight when the read loop starts. It is a full
+	// constant, not enterTerminal with substitutions, so the enter/leave
+	// pair stays visually diffable.
+	enterPixel = "\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[?1003h\x1b[?1016h\x1b[16t"
+	leavePixel = "\x1b[?1016l\x1b[?1003l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[?1049l\x1b[0m"
+	// cellSizeQuery re-asks the cell size after a resize: the query is
+	// CSI 16 t and the reply CSI 6 ; height ; width t, which the parser
+	// absorbs to keep pixel-to-cell mapping current.
+	cellSizeQuery = "\x1b[16t"
 	// kittyEnter pushes the kitty keyboard protocol's disambiguate and
 	// event-type flags (0b11, written as 3): ambiguous keys arrive as
 	// complete CSI u sequences while plain text and functional keys keep
@@ -38,8 +51,8 @@ const (
 	// including the enter failure below and Close — so the terminal's
 	// flag stack cannot leak a frame behind the program, the bubbletea
 	// v2.0.9 failure mode.
-	kittyEnter = "\x1b[>3u"
-	kittyLeave = "\x1b[<u"
+	kittyEnter  = "\x1b[>3u"
+	kittyLeave  = "\x1b[<u"
 	escapeDelay = 35 * time.Millisecond
 )
 
@@ -50,13 +63,18 @@ type Backend struct {
 	output *os.File
 	writer *os.File
 
-	mu           sync.Mutex
-	writeOnce    sync.Once
-	writeSlot    chan struct{}
-	encoded      []byte
-	opened       bool
-	plain        bool
-	kitty        bool
+	mu        sync.Mutex
+	writeOnce sync.Once
+	writeSlot chan struct{}
+	encoded   []byte
+	opened    bool
+	plain     bool
+	kitty     bool
+	// pixelOpted records the application's WithPixelMouse choice; pixel
+	// latches the mode actually in use, which needs both the opt-in and
+	// a terminal that answered the 1016 probe.
+	pixelOpted   bool
+	pixel        bool
 	features     capability.Set
 	state        *term.State
 	restoreVT    func() error
@@ -72,10 +90,30 @@ type Backend struct {
 	lastResizeOK bool
 }
 
+// Option configures a Backend at construction time, before any Open.
+type Option func(*Backend)
+
+// PixelMouse opts into pixel-precision mouse tracking (kitty mode 1016) for
+// terminals that answer the probe's mode query. The opt-in is required
+// because the encoding is a breaking change on the input stream: coordinates
+// become pixels, pointer leaves arrive as dedicated reports, and buttons
+// beyond the classic three appear. A terminal without the mode, or a program
+// that never opts in, keeps the cell encoding unchanged. The choice is
+// honored per Open, so a second Open after Close re-negotiates.
+func PixelMouse(enabled bool) Option {
+	return func(b *Backend) { b.pixelOpted = enabled }
+}
+
 // New constructs a closed backend. Nil files are allowed for tests and plain
 // output-only use, but an interactive Open requires both terminal handles.
-func New(input *os.File, output *os.File) *Backend {
-	return &Backend{input: input, output: output, parser: newParser(), events: make(chan event.Event, 64), resizes: make(chan event.Event, 1)}
+func New(input *os.File, output *os.File, opts ...Option) *Backend {
+	backend := &Backend{input: input, output: output, parser: newParser(), events: make(chan event.Event, 64), resizes: make(chan event.Event, 1)}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(backend)
+		}
+	}
+	return backend
 }
 
 // Open activates raw input and terminal modes when both handles are terminals.
@@ -145,11 +183,19 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 		b.features = applyProbeFeatures(b.features, reply)
 		leftover = pending
 	}
-	// kitty is latched before the enter write so every exit path — the
-	// failure branch below, Close, or a second Open — knows whether the
-	// protocol was pushed and must be popped.
+	// kitty and pixel are latched before the enter write so every exit path
+	// — the failure branch below, Close, or a second Open — knows which
+	// sequences were pushed and must be popped.
 	b.kitty = b.features.KeyboardEnhanced
+	b.pixel = b.pixelOpted && b.features.PixelMouse
+	// The parser decodes in the mode that is actually entered, from the
+	// very first byte the read loop sees — including the cell-size reply
+	// that enterPixel just put in flight.
+	b.parser.pixelMouse = b.pixel
 	enter, leave := enterTerminal, leaveTerminal
+	if b.pixel {
+		enter, leave = enterPixel, leavePixel
+	}
 	if b.kitty {
 		enter += kittyEnter
 		leave = kittyLeave + leave
@@ -303,7 +349,19 @@ func (b *Backend) deliverEvent(next event.Event) (done bool, ev event.Event, err
 		}
 		b.lastResizeW, b.lastResizeH = next.Width, next.Height
 		b.lastResizeOK = true
+		pixel, writer := b.pixel, b.writer
 		b.mu.Unlock()
+		if pixel && writer != nil && b.acquireWriteSlot(0) {
+			// A resize can change the cell size along with the screen
+			// dimensions, so the query goes out again and the parser
+			// re-learns the mapping from the next reply. The slot is taken
+			// without waiting — a frame being presented simply wins, and
+			// the stale cell size only degrades coordinate precision until
+			// the next resize — and the write happens off the mutex so it
+			// cannot deadlock against Close, which takes both.
+			_ = writeAll(writer, []byte(cellSizeQuery))
+			<-b.writeSlotChan()
+		}
 	}
 	if next.At.IsZero() {
 		next.At = time.Now()
@@ -441,11 +499,12 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT, kitty := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty
+	plain, writer, input, state, restoreVT, kitty, pixel := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.pixel
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
 	b.kitty = false
+	b.pixel = false
 	b.previous = nil
 	b.lastResizeOK = false
 	b.mu.Unlock()
@@ -467,6 +526,9 @@ func (b *Backend) Close() error {
 			// Sharing one Write with leaveTerminal is what guarantees the pop
 			// happens wherever the restore does.
 			leave := leaveTerminal
+			if pixel {
+				leave = leavePixel
+			}
 			if kitty {
 				leave = kittyLeave + leave
 			}

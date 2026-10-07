@@ -161,6 +161,18 @@ func WithKeyReleases(enabled bool) Option {
 	return func(config *config) error { config.keyReleases = enabled; return nil }
 }
 
+// WithPixelMouse opts into pixel-precision mouse coordinates. Terminals that
+// support kitty mode 1016 then report pointer position in pixels, pointer
+// leaves as dedicated events, and the extra back/forward mouse buttons; on
+// every other terminal the option is inert and coordinates stay cell-based.
+// The default is off because pixel reports change the shape of the mouse
+// event stream models must handle: PixelX/PixelY gain real values, X/Y
+// derive from the pixel position, and a leave arrives as a motion event
+// with no button and off-screen coordinates (-1).
+func WithPixelMouse(enabled bool) Option {
+	return func(config *config) error { config.pixelMouse = enabled; return nil }
+}
+
 type config struct {
 	backend                       Backend
 	input, output                 *os.File
@@ -168,6 +180,7 @@ type config struct {
 	fallbackWidth, fallbackHeight int
 	reducedMotion                 bool
 	keyReleases                   bool
+	pixelMouse                    bool
 }
 
 func defaultConfig() config {
@@ -193,7 +206,7 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 		}
 	}
 	if settings.backend == nil {
-		settings.backend = terminal.New(settings.input, settings.output)
+		settings.backend = terminal.New(settings.input, settings.output, terminal.PixelMouse(settings.pixelMouse))
 	}
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

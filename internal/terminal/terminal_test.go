@@ -63,15 +63,19 @@ func TestParserMouseAllMotion(t *testing.T) {
 		in   string
 		want event.MouseEvent
 	}{
-		{"hover motion", "\x1b[<35;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseNone}},
-		{"hover motion without flag", "\x1b[<3;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseNone}},
-		{"drag with button", "\x1b[<32;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseLeft}},
-		{"press", "\x1b[<0;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MousePress, Button: event.MouseLeft}},
-		{"release keeps button", "\x1b[<0;5;2m", event.MouseEvent{X: 4, Y: 1, Action: event.MouseRelease, Button: event.MouseLeft}},
-		{"release middle", "\x1b[<1;5;2m", event.MouseEvent{X: 4, Y: 1, Action: event.MouseRelease, Button: event.MouseMiddle}},
-		{"release without button", "\x1b[<3;5;2m", event.MouseEvent{X: 4, Y: 1, Action: event.MouseRelease, Button: event.MouseNone}},
-		{"shifted hover", "\x1b[<39;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseNone, Mod: event.ModShift}},
-		{"wheel right", "\x1b[<67;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseWheel, Button: event.MouseWheelRight}},
+		{"hover motion", "\x1b[<35;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseNone}},
+		{"hover motion without flag", "\x1b[<3;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseNone}},
+		{"drag with button", "\x1b[<32;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseLeft}},
+		{"press", "\x1b[<0;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MousePress, Button: event.MouseLeft}},
+		{"release keeps button", "\x1b[<0;5;2m", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseRelease, Button: event.MouseLeft}},
+		{"release middle", "\x1b[<1;5;2m", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseRelease, Button: event.MouseMiddle}},
+		{"release without button", "\x1b[<3;5;2m", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseRelease, Button: event.MouseNone}},
+		{"shifted hover", "\x1b[<39;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseNone, Mod: event.ModShift}},
+		{"wheel right", "\x1b[<67;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseWheel, Button: event.MouseWheelRight}},
+		{"back button", "\x1b[<128;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MousePress, Button: event.MouseBack}},
+		{"forward button", "\x1b[<129;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MousePress, Button: event.MouseForward}},
+		{"back button release", "\x1b[<128;5;2m", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseRelease, Button: event.MouseBack}},
+		{"forward button drag", "\x1b[<161;5;2M", event.MouseEvent{X: 4, Y: 1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseForward}},
 	}
 	for _, tc := range cases {
 		got := newParser().feed([]byte(tc.in), false)
@@ -84,11 +88,131 @@ func TestParserMouseAllMotion(t *testing.T) {
 	}
 	// Out-of-range and malformed sequences still fall through to the
 	// unknown-key escape hatch.
-	for _, bad := range []string{"\x1b[<0;0;2M", "\x1b[<0;5;0M", "\x1b[<256;5;2M", "\x1b[<0;5;2X", "\x1b[<0;5M"} {
+	for _, bad := range []string{"\x1b[<0;0;2M", "\x1b[<0;5;0M", "\x1b[<256;5;2M", "\x1b[<0;5;2X", "\x1b[<0;5M", "\x1b[<130;5;2M", "\x1b[<131;5;2M"} {
 		got := newParser().feed([]byte(bad), false)
 		if len(got) == 0 || got[0].Kind != event.Key || !got[0].Key.Is(event.KeyUnknown, 0) {
 			t.Fatalf("bad sequence %q decoded as %#v", bad, got)
 		}
+	}
+}
+
+// pixelParser returns a parser decoding mode 1016 streams, with the optional
+// cell-size report already absorbed.
+func pixelParser(cellWidth, cellHeight int) *parser {
+	parser := newParser()
+	parser.pixelMouse = true
+	if cellWidth > 0 {
+		parser.cellW, parser.cellH = cellWidth, cellHeight
+	}
+	return parser
+}
+
+// TestParserPixelMouse covers the mode 1016 decode: pixel coordinates pass
+// through verbatim, cells derive from the reported cell size (or stay -1
+// until one lands), kitty's leave code becomes an off-screen no-button
+// motion, and the reserved codes stay junk.
+func TestParserPixelMouse(t *testing.T) {
+	beforeSize := []struct {
+		name string
+		in   string
+		want event.MouseEvent
+	}{
+		{"press before cell size", "\x1b[<0;49;21M", event.MouseEvent{X: -1, Y: -1, PixelX: 49, PixelY: 21, Action: event.MousePress, Button: event.MouseLeft}},
+		{"hover motion", "\x1b[<35;49;21M", event.MouseEvent{X: -1, Y: -1, PixelX: 49, PixelY: 21, Action: event.MouseMove, Button: event.MouseNone}},
+		{"leave sentinel", "\x1b[<288;49;21M", event.MouseEvent{X: -1, Y: -1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseNone}},
+		{"leave sentinel with modifiers", "\x1b[<296;49;21M", event.MouseEvent{X: -1, Y: -1, PixelX: -1, PixelY: -1, Action: event.MouseMove, Button: event.MouseNone, Mod: event.ModAlt}},
+	}
+	for _, tc := range beforeSize {
+		got := pixelParser(0, 0).feed([]byte(tc.in), false)
+		if len(got) != 1 || got[0].Kind != event.Mouse {
+			t.Fatalf("%s: events = %#v", tc.name, got)
+		}
+		if got[0].Mouse != tc.want {
+			t.Fatalf("%s: mouse = %#v, want %#v", tc.name, got[0].Mouse, tc.want)
+		}
+	}
+	afterSize := []struct {
+		name string
+		in   string
+		want event.MouseEvent
+	}{
+		{"press maps to cell", "\x1b[<0;49;21M", event.MouseEvent{X: 4, Y: 1, PixelX: 49, PixelY: 21, Action: event.MousePress, Button: event.MouseLeft}},
+		{"release maps to cell", "\x1b[<0;49;21m", event.MouseEvent{X: 4, Y: 1, PixelX: 49, PixelY: 21, Action: event.MouseRelease, Button: event.MouseLeft}},
+		{"wheel maps to cell", "\x1b[<64;49;21M", event.MouseEvent{X: 4, Y: 1, PixelX: 49, PixelY: 21, Action: event.MouseWheel, Button: event.MouseWheelUp}},
+		{"cell boundary rounds down", "\x1b[<0;9;20M", event.MouseEvent{X: 0, Y: 0, PixelX: 9, PixelY: 20, Action: event.MousePress, Button: event.MouseLeft}},
+		{"back button maps to cell", "\x1b[<128;49;21M", event.MouseEvent{X: 4, Y: 1, PixelX: 49, PixelY: 21, Action: event.MousePress, Button: event.MouseBack}},
+	}
+	for _, tc := range afterSize {
+		got := pixelParser(10, 21).feed([]byte(tc.in), false)
+		if len(got) != 1 || got[0].Kind != event.Mouse {
+			t.Fatalf("%s: events = %#v", tc.name, got)
+		}
+		if got[0].Mouse != tc.want {
+			t.Fatalf("%s: mouse = %#v, want %#v", tc.name, got[0].Mouse, tc.want)
+		}
+	}
+	// The pixel button cap is 511 (kitty's leave codes occupy 256-316), so
+	// anything above stays junk — as do the reserved 130/131 button codes.
+	for _, bad := range []string{"\x1b[<512;49;21M", "\x1b[<130;49;21M", "\x1b[<131;49;21M", "\x1b[<0;-1;21M", "\x1b[<0;49;-1M"} {
+		got := pixelParser(10, 21).feed([]byte(bad), false)
+		if len(got) == 0 || got[0].Kind != event.Key || !got[0].Key.Is(event.KeyUnknown, 0) {
+			t.Fatalf("bad pixel sequence %q decoded as %#v", bad, got)
+		}
+	}
+}
+
+// TestParserCellSizeReport covers the CSI 16 t reply handling: the report
+// is absorbed silently while pixel mouse is active — updating the cell
+// mapping mid-stream — and stays visible as junk in a cell-mode stream,
+// where this backend never queries.
+func TestParserCellSizeReport(t *testing.T) {
+	parser := pixelParser(0, 0)
+	got := parser.feed([]byte("\x1b[6;21;10t"), false)
+	if len(got) != 0 || parser.cellW != 10 || parser.cellH != 21 {
+		t.Fatalf("reply not absorbed: events=%#v cell=%d,%d", got, parser.cellW, parser.cellH)
+	}
+	// The absorbed size converts the next pixel report to cells.
+	got = parser.feed([]byte("\x1b[<0;49;21M"), false)
+	if len(got) != 1 || got[0].Mouse.X != 4 || got[0].Mouse.Y != 1 {
+		t.Fatalf("cell mapping after reply = %#v", got)
+	}
+	// A zero, negative, or trailing-field size is junk, not a mapping
+	// change. The negative row matters because any other non-digit would
+	// itself be a CSI final byte and split the sequence earlier.
+	for _, bad := range []string{"\x1b[6;0;10t", "\x1b[6;21;0t", "\x1b[6;-1;10t", "\x1b[6;21t", "\x1b[6;21;10M", "\x1b[6;21;10;5t"} {
+		parser := pixelParser(0, 0)
+		events := parser.feed([]byte(bad), false)
+		if len(events) != 1 || events[0].Kind != event.Key || !events[0].Key.Is(event.KeyUnknown, 0) || parser.cellW != 0 || parser.cellH != 0 {
+			t.Fatalf("malformed report %q decoded as %#v cell=%d,%d", bad, events, parser.cellW, parser.cellH)
+		}
+	}
+	// In cell mode the gate is off: the same bytes stay visible instead of
+	// being swallowed as parser bookkeeping.
+	got = newParser().feed([]byte("\x1b[6;21;10t"), false)
+	if len(got) != 1 || got[0].Kind != event.Key || !got[0].Key.Is(event.KeyUnknown, 0) {
+		t.Fatalf("cell-mode report = %#v", got)
+	}
+	// A doubled escape before the reply is terminal junk, not a mapping
+	// change: the inner decode sees a None-kind event and the outer layer
+	// surfaces it as an unknown key.
+	got = pixelParser(0, 0).feed([]byte("\x1b\x1b[6;21;10t"), false)
+	if len(got) != 1 || got[0].Kind != event.Key || !got[0].Key.Is(event.KeyUnknown, 0) {
+		t.Fatalf("doubled-escape reply = %#v", got)
+	}
+}
+
+// TestEnterPixelSequences pins the wire constants: pixel mode swaps 1006 for
+// 1016, keeps the 1003 all-motion and the rest of the enter stack, and pairs
+// the enter with a cell-size query whose reply the parser absorbs.
+func TestEnterPixelSequences(t *testing.T) {
+	if !strings.Contains(enterPixel, "\x1b[?1016h") || strings.Contains(enterPixel, "\x1b[?1006h") {
+		t.Fatalf("enterPixel does not replace 1006 with 1016: %q", enterPixel)
+	}
+	if !strings.Contains(enterPixel, "\x1b[?1003h") || !strings.Contains(enterPixel, "\x1b[?1049h") || !strings.Contains(enterPixel, cellSizeQuery) {
+		t.Fatalf("enterPixel lost shared enter stack: %q", enterPixel)
+	}
+	if !strings.Contains(leavePixel, "\x1b[?1016l") || !strings.Contains(leavePixel, "\x1b[?1003l") || !strings.Contains(leavePixel, "\x1b[?1049l") || strings.Contains(leavePixel, "\x1b[?1006l") {
+		t.Fatalf("leavePixel does not mirror enterPixel: %q", leavePixel)
 	}
 }
 
@@ -498,6 +622,15 @@ func FuzzParserNeverPanics(f *testing.F) {
 		"\x1b[<35;3;4M", "\x1b[<3;3;4M", "\x1b[<32;1;2M", "\x1b[<0;1;2m",
 		"\x1b[<67;1;2M", "\x1b[<64;1;2m", "\x1b[<255;1;1M", "\x1b[<256;1;1M",
 		"\x1b[<288;1;1M", "\x1b[<99999999999999999999;1;1M", "\x1b[<0;0;0M",
+		// Pixel-mode shapes: the 511 button cap, kitty leave codes at both
+		// ends of their range, the reserved 130/131 codes, negative
+		// coordinates, and the cell-size report — valid, zero-sized, and
+		// behind a doubled escape.
+		"\x1b[<511;640;480M", "\x1b[<512;640;480M", "\x1b[<256;1;1M",
+		"\x1b[<316;1;1M", "\x1b[<317;1;1M", "\x1b[<130;1;1M", "\x1b[<131;1;1M",
+		"\x1b[<0;-1;1M", "\x1b[6;21;10t", "\x1b[6;0;10t", "\x1b[6;21;0t",
+		"\x1b[6;99999999999999999999;10t", "\x1b\x1b[6;21;10t", "\x1b[6;21t",
+		"\x1b[6;21;10;5t", "\x1b[6t",
 	}
 	for _, seed := range kittySeeds {
 		seeds = append(seeds, []byte(seed))
@@ -512,6 +645,18 @@ func FuzzParserNeverPanics(f *testing.F) {
 		_ = parser.feed(data[mid:], true)
 		if len(parser.buffer) > maxSequence || len(parser.paste) > maxPaste {
 			t.Fatalf("parser exceeded limits: buffer=%d paste=%d", len(parser.buffer), len(parser.paste))
+		}
+		// The pixel-mode decode runs the same stream through the alternate
+		// guard set — pixel coordinates, the 511 button cap, and the CSI t
+		// cell-size arm — so both decodes stay panic-free under the same
+		// mutations.
+		pixels := newParser()
+		pixels.pixelMouse = true
+		pixels.cellW, pixels.cellH = 10, 20
+		_ = pixels.feed(data[:mid], false)
+		_ = pixels.feed(data[mid:], true)
+		if len(pixels.buffer) > maxSequence || len(pixels.paste) > maxPaste {
+			t.Fatalf("pixel parser exceeded limits: buffer=%d paste=%d", len(pixels.buffer), len(pixels.paste))
 		}
 	})
 }

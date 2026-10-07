@@ -193,6 +193,43 @@ carries. Legacy X10-encoded mouse (`ESC [ M` plus three raw bytes) is not
 decoded because SGR is enabled on every path that has a mouse at all, and
 the ancient byte encoding cannot survive raw mode's binary transparency.
 
+### Pixel-precision mouse (kitty 1016)
+
+`WithPixelMouse(true)` opts the program into pixel-coordinate tracking on
+terminals that answer the `CSI ? 1016 $ p` mode query — the kitty
+pixel-position extension over SGR. The opt-in is deliberate: turning it on
+blind would trade proven cell coordinates for unproven pixel ones on every
+terminal with a mouse.
+
+The runtime behavior on terminals that answer the query:
+
+- enter swaps the SGR cell encoding (`?1006`) for pixel mode (`?1016`) while
+  keeping all-motion `?1003`, and appends the cell-size query `CSI 16 t`;
+- the terminal answers `CSI 6 ; height ; width t` (height first — the xterm
+  and kitty report shape), and the parser absorbs that reply as
+  bookkeeping, mapping `PixelX`/`PixelY` onto `X`/`Y` by floor division;
+- mouse events then carry `PixelX` and `PixelY` (0-based, measured from the
+  viewport's top left), while cell `X`/`Y` remain available as before;
+- back and forward buttons (kitty codes 128-129) decode as `MouseBack`/
+  `MouseForward` in both cell and pixel mode;
+- a pointer leaving the window arrives as kitty's leave code
+  (`256 | 32 | modifiers`) and decodes as a move with `MouseNone` and every
+  coordinate set to -1 — the built-in widgets' hit tests simply miss, which
+  clears hover;
+- on resize the adapter re-queries the cell size, so the mapping stays
+  truthful after font-size or window changes;
+- while the cell size is still unknown — from enter until the `CSI 16 t`
+  reply lands, typically milliseconds — pixel moves carry real pixel
+  coordinates but `X`/`Y` of -1, which transiently clears hover. A resize
+  that re-queries has the same gap.
+
+A terminal whose 1016 reply is status 0 ("not recognized") or 4
+("permanently reset"), or that never answers the query, keeps the default
+cell encoding; the option stays inert rather than degrading to a guess.
+Malformed pixel reports — button codes past 511, negative coordinates, the
+reserved 130/131 codes — fall through to the unknown-key escape hatch, and
+the decoder never trusts a zero cell size for mapping.
+
 ## Required degradation ladder
 
 Future features must preserve meaning in this order:

@@ -1,0 +1,120 @@
+Stage 6, slice 3 — mouse truth: all-motion SGR, opt-in kitty pixel 1016 — local verification, 2026-10-07
+=========================================================================================================
+
+Scope (ROADMAP.md, stage 6 item 3, both halves): the all-motion tracking
+enable with SGR releases carrying their real button (commit A), and
+kitty's pixel-position mode 1016 as a probed, opt-in upgrade with cell
+mapping, back/forward buttons, and the pointer-leave sentinel (commit B).
+Landed as two commits:
+
+  79d4469  feat: enable all-motion mouse tracking
+           enter/leave swap 1002 for 1003 (motion without a held button);
+           xterm's no-button motion report (SGR button 35) decodes as a
+           move, only the 'm' final byte means release, releases keep
+           Left/Middle/Right; ui context hover follows plain motion.
+  (this commit) feat: add opt-in pixel-precision mouse
+           probe asks CSI ? 1016 $ p and featureFromStatus rejects status
+           0/4 (same ladder as 2026); applyProbeFeatures turns PixelMouse on
+           only for a recognized answer; WithPixelMouse opts in at the app
+           layer; enterPixel swaps 1006 for 1016 and appends CSI 16 t;
+           parseCellSizeReport absorbs the CSI 6 ; height ; width t reply
+           as bookkeeping (cell mode keeps it visible); pixel reports
+           decode PixelX/PixelY with X/Y floor-divided by the cell size
+           (-1 until known, -1 on kitty's leave code 256|32|mods); buttons
+           128/129 decode Back/Forward, 130/131 stay unknown; resize
+           re-queries the cell size; leavePixel mirrors enterPixel.
+
+Test evidence (windows/amd64, 2026-10-07):
+  go test ./...      ok, all 10 packages
+  go vet ./...       clean
+  gofmt -l .         clean (this commit realigned the struct fields it
+                     touched; a one-line reflow of a slice-2 test lands
+                     as the follow-up chore commit)
+  mouse-scoped runs, all PASS:
+      TestParserMouseAllMotion (rewritten cell table, 13 rows: press,
+          release, wheel, no-button hover 35, drag, back 128, forward 129,
+          back release, forward drag 161, mod combos, junk 255/256 — cell
+          rows now assert PixelX/PixelY = -1, junk list adds 130/131)
+      TestParserPixelMouse (new: before-size table — press maps to
+          X/Y=-1 with real pixels, hover, leave 288, leave+alt 296 keeps
+          Mod; after-size table with 10x21 cells — press/release map by
+          floor division, wheel 64, boundary 9;20 -> 0,0, back 128; junk
+          512, 130, 131, negative coordinates)
+      TestParserCellSizeReport (new: CSI 6 ; 21 ; 10 t absorbed with
+          cellW=10 cellH=21 and then maps a real report; junk — zero,
+          negative, single-part, 'M' final, trailing field, and the
+          cell-mode-visible fallback; doubled-escape prefix surfaces as
+          unknown key)
+      TestEnterPixelSequences (new: enterPixel has 1016h and not 1006h,
+          keeps 1003h/1049h/cellSizeQuery; leavePixel mirrors)
+      TestParseProbeReply (new rows: 1016 status 0/2/3/4, full answers
+          with 1016 in both kitty-flag variants)
+      TestNegotiateDetectsSupports (stream now answers 1016, want pixel
+          supported)
+      TestNegotiateKittyGrace (fragmented case lands kitty + 1016 behind
+          the trio and still beats the 400 ms budget; silence pays only
+          the 25 ms grace with keyboard and pixel unknown)
+      TestApplyProbeFeatures (new rows: supported pixel turns it on even
+          from an empty set; rejected/unknown change nothing)
+      ui context hover tests from commit A stay green.
+
+Linux evidence (docker golang:1.25-alpine, 2026-10-07):
+  go test ./... -count=1    all 10 packages ok
+  (the same run that skips the negotiation-loop tests on Windows proves
+  them on Linux: grace, silence, detects-supports, preserves-user-bytes.)
+
+Fuzz (windows/amd64, 2026-10-07):
+  FuzzParserNeverPanics  ./internal/terminal  20 s  PASS
+      298,342 execs, 7 new interesting (417 total after this slice's new
+      seeds: pixel button cap 511/512, leave range 256/316/317, reserved
+      130/131, negative coordinates, cell-size report shapes — valid,
+      zero, negative, overflow, single-part, trailing field, doubled
+      escape). The fuzz body now drives BOTH decodes: every mutated input
+      runs through the cell parser and a pixel parser with cellW=10,
+      cellH=20, so the alternate guard set is fuzzed, not just seeded.
+
+Doc-truth cross-check (every claim traced to code or spec first):
+  - kitty encoder bits (kitty mouse.c encode_mouse_event_impl): SHIFT=4,
+    ALT=8, CONTROL=16, MOTION=32, EXTRA=128, LEAVE=256; leave is
+    256|32|mods in [256,316]; back/forward are 128/129 with 130/131
+    reserved. The decode mirrors those exact numbers.
+  - CSI 16 t replies CSI 6 ; height ; width t, height FIRST (xterm
+    ctlseqs "CellSizeReport" and kitty screen.c agree) — parts[0] is
+    height in parseCellSizeReport.
+  - pixel coordinates are 0-based viewport pixels, no padding (kitty
+    mouse.c reports the raw pointer position; cell_for_pos divides by
+    the cell size), so floor division x/cellW is the truthful mapping
+    and cell (0,0) is the first cell.
+  - 1016 replaces the SGR *cell encoding* for the same event encoding:
+    enterPixel omits ?1006 (1016 subsumes it), leavePixel symmetric
+    (kitty mouse.c uses the one event encoder for both).
+  - DECRPM status for 1016: 0 and 4 mean the mode cannot be set, so
+    pixel reports would never arrive — featureFromStatus treats them as
+    rejected, identical to the 2026 ladder.
+  - the probe's early return now needs pixel != unknown; the grace
+    break stays 25 ms behind the classic trio, so a terminal without a
+    1016 answer costs only the grace (TestNegotiateKittyGrace silence).
+  - resize re-query: deliverEvent writes cellSizeQuery under the write
+    slot with mu released (no deadlock against Present/Close; a missed
+    re-query is acceptable, the next resize asks again).
+  - leave sentinel clears hover: X/Y=-1 miss every hit test in
+    ui handleMouseLocked, and hover resets with zero visual churn.
+
+Known limits (honesty):
+  - Open-level pixel enter/leave writes are untested at byte level for
+    the same tty-gating reason as slices 1-2 (Windows CI has no tty);
+    Close-level restore and the enter failure branch are covered.
+  - until the CSI 16 t reply lands (milliseconds after enter) pixel
+    moves carry real pixels but X/Y = -1, which transiently clears
+    hover; documented in COMPATIBILITY.md instead of papered over.
+  - back/forward buttons: kitty is the reference; xterm's 1006 never
+    sends them (its buttons 8/9 are wheel), and the cell decoder
+    accepts 128/129 anyway — a future terminal sending them under 1006
+    is decoded, which matches the "accept any SGR report" policy.
+  - the docker Linux lane used golang:1.25-alpine (cached locally); CI
+    pins go 1.23.x and stable, so the matrix stays broader than this
+    local run.
+
+Stage 6 is not closed: items 4-7 (SGR underline + OSC 8 hyperlinks,
+sync-output enable via DECRQM 2026, win32-input-mode, multiplexer
+provenance) are still open. Stage-close artifact lands after item 7.

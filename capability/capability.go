@@ -34,6 +34,12 @@ type Set struct {
 	Mouse            bool
 	Focus            bool
 	BracketedPaste   bool
+	// PixelMouse reports whether the terminal answered the DECRQM query for
+	// pixel-precision mouse (mode 1016, the kitty SGR pixel encoding). When
+	// set and the program opts in, the backend switches mouse tracking to
+	// that mode and mouse events carry zero-based pixel coordinates in
+	// PixelX and PixelY alongside cell coordinates.
+	PixelMouse bool
 	// KeyboardEnhanced reports whether the terminal answered the kitty
 	// keyboard protocol flags query. When set, the backend pushes the
 	// protocol's disambiguate flag: ambiguous keys (Esc, Alt+key, modified

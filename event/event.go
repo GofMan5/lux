@@ -233,6 +233,8 @@ const (
 	MouseLeft
 	MouseMiddle
 	MouseRight
+	MouseBack
+	MouseForward
 	MouseWheelUp
 	MouseWheelDown
 	MouseWheelLeft
@@ -241,10 +243,14 @@ const (
 
 // MouseEvent uses zero-based cell coordinates. Button names the involved
 // button for presses, drags, and SGR releases; pure hover motion carries
-// MouseNone.
+// MouseNone. PixelX and PixelY carry zero-based pixel coordinates when
+// pixel-precision mouse is active, and -1 otherwise. X and Y are -1 while
+// the cell size is still unknown or when the pointer leaves the window.
 type MouseEvent struct {
 	X      int
 	Y      int
+	PixelX int
+	PixelY int
 	Action MouseAction
 	Button MouseButton
 	Mod    Mod

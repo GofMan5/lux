@@ -42,7 +42,7 @@ comparative claims require reproducible results.
 | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with one enable-only keyboard verdict), streaming input parser with kitty CSI u decoding, mouse/paste/focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with two enable-only verdicts), streaming input parser with kitty CSI u decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -154,6 +154,8 @@ The kitty query is the one enable-only verdict — a flags reply turns on the
 enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
 its C0 alias. Mouse tracking is all-motion (1003 with SGR 1006): hover states
 follow plain pointer motion, and SGR releases carry the real button.
+`WithPixelMouse` opts into kitty's pixel-position mode (1016) where the probe
+confirms it, carrying `PixelX`/`PixelY` and back/forward buttons.
 Keystrokes that race the probe are replayed in order, never
 dropped. `LUX_TUI_PROBE_TIMEOUT` raises the 150 ms budget or turns
 negotiation off for deterministic runs. Features degrade in this order:
@@ -171,15 +173,19 @@ the open requirements.
 
 ## Direction
 
-Capability negotiation landed, and the modern-keyboard slices are underway:
+Capability negotiation landed, and the keyboard-truth stage is underway:
 the kitty protocol is queried at startup and pushed (disambiguate +
 event-type flags) only on a positive answer, with a guaranteed pop on every
 exit path. Key events carry press/repeat/release actions, modifier bits up
 through caps/num lock, and kitty's private-use functional-key table
-(F13-F35, media, keypad). Next slices are the remaining keyboard-truth
-items (mouse modes, win32-input-mode, multiplexer provenance),
-variable-height virtualization, and semantic accessibility bridges.
-Graphics protocols follow only after these paths are measurable.
+(F13-F35, media, keypad). Mouse truth has landed: all-motion SGR tracking
+with the pixel-position mode (1016) as an opt-in that maps pixel reports to
+cells via the queried cell size, plus back/forward buttons and kitty's
+pointer-leave sentinel. Next slices are the remaining keyboard-truth
+items (hyperlinks and styled underline, synchronized output, win32-input-mode,
+multiplexer provenance), variable-height virtualization, and semantic
+accessibility bridges. Graphics protocols follow only after these paths are
+measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

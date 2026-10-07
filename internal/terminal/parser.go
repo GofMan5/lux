@@ -19,6 +19,23 @@ type parser struct {
 	buffer  []byte
 	paste   []byte
 	inPaste bool
+	// pixelMouse mirrors the backend's active mouse encoding: mode 1016
+	// reports carry pixel coordinates instead of 1-based cell numbers. It
+	// stays false on cell terminals, where mouse sequences decode
+	// unchanged.
+	pixelMouse bool
+	// cellW and cellH hold the cell size from the CSI 16 t reply; they
+	// stay zero until the reply lands, and pixel reports map to cells
+	// only once both are positive.
+	cellW, cellH int
+}
+
+// mouseMode is the decode context parseMouse and the CSI-t arm need: whether
+// coordinates arrive as pixels and how large a cell is for the conversion.
+type mouseMode struct {
+	pixel bool
+	cellW int
+	cellH int
 }
 
 func newParser() *parser { return &parser{} }
@@ -54,7 +71,7 @@ func (p *parser) feed(data []byte, eof bool) []event.Event {
 			continue
 		}
 		if p.buffer[0] == 0x1b {
-			next, consumed, complete := parseEscape(p.buffer, eof)
+			next, consumed, complete := parseEscape(p.buffer, eof, mouseMode{p.pixelMouse, p.cellW, p.cellH})
 			if !complete {
 				if len(p.buffer) <= maxSequence {
 					break
@@ -67,7 +84,14 @@ func (p *parser) feed(data []byte, eof bool) []event.Event {
 				continue
 			}
 			if complete {
-				result = append(result, next)
+				if next.Kind == event.None {
+					// The pixel-mode cell-size reply updates the
+					// coordinate mapping instead of surfacing as an
+					// application event.
+					p.absorbCellSize(next)
+				} else {
+					result = append(result, next)
+				}
 				p.buffer = p.buffer[consumed:]
 				continue
 			}
@@ -88,9 +112,13 @@ func (p *parser) feed(data []byte, eof bool) []event.Event {
 		}
 		for len(p.buffer) > 0 {
 			if p.buffer[0] == 0x1b {
-				next, consumed, complete := parseEscape(p.buffer, true)
+				next, consumed, complete := parseEscape(p.buffer, true, mouseMode{p.pixelMouse, p.cellW, p.cellH})
 				if complete {
-					result = append(result, next)
+					if next.Kind == event.None {
+						p.absorbCellSize(next)
+					} else {
+						result = append(result, next)
+					}
 					p.buffer = p.buffer[consumed:]
 					continue
 				}
@@ -107,6 +135,15 @@ func (p *parser) appendPaste(data []byte) {
 	remaining := maxPaste - len(p.paste)
 	if remaining > 0 {
 		p.paste = append(p.paste, data[:min(remaining, len(data))]...)
+	}
+}
+
+// absorbCellSize records a cell-size reply instead of surfacing it as an
+// event. The CSI 16 t query is only sent while pixel mouse is active, so its
+// reply is the parser's own bookkeeping, never an application event.
+func (p *parser) absorbCellSize(next event.Event) {
+	if next.Width > 0 && next.Height > 0 {
+		p.cellW, p.cellH = next.Width, next.Height
 	}
 }
 
@@ -142,7 +179,7 @@ func parseRune(data []byte, eof bool) (event.Event, int, bool) {
 	return event.RuneKey(r, 0), size, true
 }
 
-func parseEscape(data []byte, eof bool) (event.Event, int, bool) {
+func parseEscape(data []byte, eof bool, mode mouseMode) (event.Event, int, bool) {
 	if len(data) == 1 {
 		if eof {
 			return event.KeyPress(event.KeyEscape, 0), 1, true
@@ -163,7 +200,7 @@ func parseEscape(data []byte, eof bool) (event.Event, int, bool) {
 			// arrow-family keys: Alt+Up is ESC ESC [ A. Decode the inner
 			// sequence once and add the modifier rather than decoding the
 			// second escape as ctrl+[ (the rune the C0 byte spells).
-			next, consumed, complete := parseEscape(data[1:], eof)
+			next, consumed, complete := parseEscape(data[1:], eof, mode)
 			if !complete {
 				return next, consumed, false
 			}
@@ -202,8 +239,19 @@ func parseEscape(data []byte, eof bool) (event.Event, int, bool) {
 	if sequence == pasteStart {
 		return event.Event{}, len(sequence), true
 	}
-	if mouse, ok := parseMouse(sequence); ok {
+	if mouse, ok := parseMouse(sequence, mode); ok {
 		return event.Event{Kind: event.Mouse, Mouse: mouse}, len(sequence), true
+	}
+	if mode.pixel {
+		// The cell-size reply to the CSI 16 t query this backend itself
+		// sends in pixel mode. It never appears in a cell-mode stream, so
+		// the gate keeps junk shaped like a reply visible as an unknown
+		// key rather than silently eating it. The reply reports height
+		// first, matching the xterm cell-size report form CSI 6 ; h ; w t
+		// that answers CSI 16 t.
+		if width, height, ok := parseCellSizeReport(sequence); ok {
+			return event.Event{Kind: event.None, Width: width, Height: height}, len(sequence), true
+		}
 	}
 	if focus, ok := map[string]bool{"\x1b[I": true, "\x1b[O": false}[sequence]; ok {
 		return event.Event{Kind: event.Focus, Focused: focus}, len(sequence), true
@@ -490,7 +538,7 @@ func kittyFunctional(code int) (event.KeyCode, rune, bool) {
 	case code >= 57376 && code <= 57398:
 		return event.KeyF13 + event.KeyCode(code-57376), 0, true
 	case code >= 57399 && code <= 57408:
-		return event.KeyRune, rune('0' + code-57399), true
+		return event.KeyRune, rune('0' + code - 57399), true
 	}
 	return 0, 0, false
 }
@@ -536,7 +584,35 @@ func kittyEventType(field string) (int, bool) {
 	return value, true
 }
 
-func parseMouse(sequence string) (event.MouseEvent, bool) {
+// parseCellSizeReport decodes the CSI 6 ; height ; width t reply to the
+// cell-size query CSI 16 t. The report is only meaningful in pixel mode,
+// which the caller gates on; here the shape is all that matters.
+func parseCellSizeReport(sequence string) (int, int, bool) {
+	if !strings.HasPrefix(sequence, "\x1b[6;") || sequence[len(sequence)-1] != 't' {
+		return 0, 0, false
+	}
+	// The "6;" prefix is already stripped: what remains before the final
+	// 't' is exactly the height and width.
+	parts := strings.Split(sequence[4:len(sequence)-1], ";")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	height, err1 := strconv.Atoi(parts[0])
+	width, err2 := strconv.Atoi(parts[1])
+	if err1 != nil || err2 != nil || height < 1 || width < 1 {
+		return 0, 0, false
+	}
+	return width, height, true
+}
+
+// parseMouse decodes SGR mouse sequences. Cell mode (the default) carries
+// 1-based cell coordinates: the parser converts them to the zero-based cells
+// the event API uses and reports PixelX/PixelY as -1. Pixel mode (kitty
+// mode 1016) carries 0-based pixel coordinates instead: they survive
+// verbatim in PixelX/PixelY while X/Y hold the cell the pointer is in,
+// derived by floor division once the cell-size reply has landed — before
+// that, or when the terminal's pointer-leave report fires, X/Y are -1.
+func parseMouse(sequence string, mode mouseMode) (event.MouseEvent, bool) {
 	if !strings.HasPrefix(sequence, "\x1b[<") {
 		return event.MouseEvent{}, false
 	}
@@ -551,10 +627,31 @@ func parseMouse(sequence string) (event.MouseEvent, bool) {
 	button, err1 := strconv.Atoi(parts[0])
 	x, err2 := strconv.Atoi(parts[1])
 	y, err3 := strconv.Atoi(parts[2])
-	if err1 != nil || err2 != nil || err3 != nil || x < 1 || y < 1 || button < 0 || button > 255 {
+	if err1 != nil || err2 != nil || err3 != nil {
 		return event.MouseEvent{}, false
 	}
-	mouse := event.MouseEvent{X: x - 1, Y: y - 1}
+	if !mode.pixel && (x < 1 || y < 1 || button < 0 || button > 255) {
+		return event.MouseEvent{}, false
+	}
+	if mode.pixel && (x < 0 || y < 0 || button < 0 || button > 511) {
+		return event.MouseEvent{}, false
+	}
+	mouse := event.MouseEvent{}
+	if mode.pixel {
+		// Pixel reports are 0-based; cell coordinates follow from floor
+		// division once a positive cell size is known. Until then (and on
+		// the pointer-leave sentinel) X and Y stay -1, and hover logic
+		// simply misses its hit test.
+		mouse.PixelX, mouse.PixelY = x, y
+		if mode.cellW > 0 && mode.cellH > 0 {
+			mouse.X, mouse.Y = x/mode.cellW, y/mode.cellH
+		} else {
+			mouse.X, mouse.Y = -1, -1
+		}
+	} else {
+		mouse.X, mouse.Y = x-1, y-1
+		mouse.PixelX, mouse.PixelY = -1, -1
+	}
 	if button&4 != 0 {
 		mouse.Mod |= event.ModShift
 	}
@@ -564,10 +661,42 @@ func parseMouse(sequence string) (event.MouseEvent, bool) {
 	if button&16 != 0 {
 		mouse.Mod |= event.ModCtrl
 	}
+	// kitty encodes a pointer leave as 256 | 32 | modifiers, a code the
+	// cell-protocol button space cannot reach: the cell guard above
+	// already rejected it there, so what survives here is pixel mode,
+	// where the code reads as the leave it is. The modifier bits parsed
+	// above stay in the event, mirroring kitty's own decode.
+	if button >= 256 && button <= 316 {
+		mouse.Action = event.MouseMove
+		mouse.Button = event.MouseNone
+		mouse.X, mouse.Y, mouse.PixelX, mouse.PixelY = -1, -1, -1, -1
+		return mouse, true
+	}
 	base := button & 3
 	if button&64 != 0 {
 		mouse.Action = event.MouseWheel
 		mouse.Button = [...]event.MouseButton{event.MouseWheelUp, event.MouseWheelDown, event.MouseWheelLeft, event.MouseWheelRight}[base]
+	} else if button&128 != 0 {
+		// Buttons past the classic three: kitty reserves the wheel bit's
+		// number space for back/forward buttons, encoded 128-131 with the
+		// extra-button bit. The two unused codes of that range (130, 131)
+		// stay reserved, so they decode as junk rather than guessing a
+		// button that was never sent.
+		switch base {
+		case 0:
+			mouse.Button = event.MouseBack
+		case 1:
+			mouse.Button = event.MouseForward
+		default:
+			return event.MouseEvent{}, false
+		}
+		if final == 'm' {
+			mouse.Action = event.MouseRelease
+		} else if button&32 != 0 {
+			mouse.Action = event.MouseMove
+		} else {
+			mouse.Action = event.MousePress
+		}
 	} else if final == 'm' {
 		// SGR closes a press with the same button code and the lowercase
 		// final byte, so the button survives the release instead of
