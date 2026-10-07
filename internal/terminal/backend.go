@@ -19,7 +19,18 @@ import (
 const (
 	enterTerminal = "\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[?1002h\x1b[?1006h"
 	leaveTerminal = "\x1b[?1006l\x1b[?1002l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[?1049l\x1b[0m"
-	escapeDelay   = 35 * time.Millisecond
+	// kittyEnter pushes the kitty keyboard protocol's disambiguate flag
+	// (0b1) and nothing else: ambiguous keys arrive as complete CSI u
+	// sequences while plain text and functional keys keep their legacy
+	// encodings. Event types, alternate keys, and all-keys-as-codes stay
+	// off until a later stage can represent them. The push is written in
+	// the same Write call as enterTerminal, and the matching pop shares a
+	// Write with leaveTerminal on every exit path — including the enter
+	// failure below and Close — so the terminal's flag stack cannot leak
+	// a frame behind the program, the bubbletea v2.0.9 failure mode.
+	kittyEnter = "\x1b[>1u"
+	kittyLeave = "\x1b[<u"
+	escapeDelay = 35 * time.Millisecond
 )
 
 // Backend is a VT-first terminal adapter. Its methods serialize lifecycle and
@@ -35,6 +46,7 @@ type Backend struct {
 	encoded      []byte
 	opened       bool
 	plain        bool
+	kitty        bool
 	features     capability.Set
 	state        *term.State
 	restoreVT    func() error
@@ -123,9 +135,22 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 		b.features = applyProbeFeatures(b.features, reply)
 		leftover = pending
 	}
+	// kitty is latched before the enter write so every exit path — the
+	// failure branch below, Close, or a second Open — knows whether the
+	// protocol was pushed and must be popped.
+	b.kitty = b.features.KeyboardEnhanced
+	enter, leave := enterTerminal, leaveTerminal
+	if b.kitty {
+		enter += kittyEnter
+		leave = kittyLeave + leave
+	}
 	b.opened = true
-	if err := writeAll(b.writer, []byte(enterTerminal)); err != nil {
-		_ = writeAll(b.writer, []byte(leaveTerminal))
+	if err := writeAll(b.writer, []byte(enter)); err != nil {
+		// The pop rides the same write as the legacy restore: a pop without
+		// a matching push is a no-op on a protocol terminal, and a
+		// half-delivered enter cannot leave the stack pushed without its
+		// corresponding pop being attempted.
+		_ = writeAll(b.writer, []byte(leave))
 		_ = b.writer.Close()
 		b.writer = nil
 		_ = term.Restore(int(b.input.Fd()), b.state)
@@ -406,10 +431,11 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT := b.plain, b.writer, b.input, b.state, b.restoreVT
+	plain, writer, input, state, restoreVT, kitty := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
+	b.kitty = false
 	b.previous = nil
 	b.lastResizeOK = false
 	b.mu.Unlock()
@@ -426,7 +452,15 @@ func (b *Backend) Close() error {
 		// that stopped draining holds the slot until the descriptor is closed, and
 		// on Windows it may not return even then.
 		if !plain && b.acquireWriteSlot(restoreGrace) {
-			result = errors.Join(result, writeAll(writer, []byte(leaveTerminal)))
+			// The kitty pop leads the legacy restore so the stack is unwound
+			// before the modes it was layered on, mirroring the enter order.
+			// Sharing one Write with leaveTerminal is what guarantees the pop
+			// happens wherever the restore does.
+			leave := leaveTerminal
+			if kitty {
+				leave = kittyLeave + leave
+			}
+			result = errors.Join(result, writeAll(writer, []byte(leave)))
 			<-b.writeSlotChan()
 		}
 		result = errors.Join(result, writer.Close())

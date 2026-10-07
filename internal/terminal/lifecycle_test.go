@@ -151,6 +151,60 @@ func TestCloseWritesItsRestoreWhenTheWriterIsIdle(t *testing.T) {
 	}
 }
 
+// TestCloseRestoresTheKittyStack pins the pop half of the kitty protocol
+// deal: a backend that pushed the disambiguate flag must pop it in the same
+// Write as the legacy restore, and a backend that never pushed must not emit
+// a stray pop.
+func TestCloseRestoresTheKittyStack(t *testing.T) {
+	t.Run("latched backend pops before the legacy restore", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}, kitty: true}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasSuffix(written, []byte(kittyLeave+leaveTerminal)) {
+			t.Fatalf("Close did not pop kitty before restoring: %q", written)
+		}
+		if bytes.Count(written, []byte(kittyLeave)) != 1 {
+			t.Fatalf("the kitty pop appears more than once: %q", written)
+		}
+	})
+	t.Run("unlatched backend never writes the pop", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(written, []byte(kittyLeave)) {
+			t.Fatalf("Close popped a kitty stack it never pushed: %q", written)
+		}
+	})
+}
+
 func TestCloseGivesUpOnAWriterThatStopsDraining(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {

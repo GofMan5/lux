@@ -34,6 +34,13 @@ type Set struct {
 	Mouse            bool
 	Focus            bool
 	BracketedPaste   bool
+	// KeyboardEnhanced reports whether the terminal answered the kitty
+	// keyboard protocol flags query. When set, the backend pushes the
+	// protocol's disambiguate flag: ambiguous keys (Esc, Alt+key, modified
+	// Enter/Tab/Backspace, multi-modifier combos) arrive as complete CSI u
+	// sequences instead of legacy byte-prefix hacks. The flag stays clear on
+	// terminals that did not answer, which keeps legacy decoding untouched.
+	KeyboardEnhanced bool
 	// ScrollRegions reports whether the terminal implements scroll regions
 	// (DECSTBM with insert/delete lines). Without it, a backend must repaint
 	// scrolled rows instead of asking the terminal to move them.

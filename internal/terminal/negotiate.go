@@ -31,8 +31,19 @@ const defaultProbeTimeout = 150 * time.Millisecond
 // recognized. Mode 6 is a proxy for DECSTBM scroll regions: DECSTBM is a
 // control sequence, not a mode, so DECRQM cannot ask about it directly, and
 // every terminal family pairs DECSTBM with DECOM — a terminal that rejects
-// DECOM lacks the private-mode machinery scroll regions rely on.
-const probeRequest = "\x1b[c\x1b[?6$p\x1b[?2026$p"
+// DECOM lacks the private-mode machinery scroll regions rely on. The kitty
+// keyboard protocol query goes last: only protocol terminals answer it, and
+// those answers arrive right behind the classic trio.
+const probeRequest = "\x1b[c\x1b[?6$p\x1b[?2026$p\x1b[?u"
+
+// kittyGrace bounds how long the probe keeps listening for the kitty flags
+// reply once the classic trio has answered. Terminals answer the queries in
+// write order and back-to-back, so a protocol terminal's reply lands within
+// single-digit milliseconds of the last DECRPM; a terminal without the
+// protocol sends nothing at all and would otherwise pin the probe at the
+// full deadline. Legacy terminals pay this grace once per startup, which
+// keeps kitty detection reliable without taxing every Open.
+const kittyGrace = 25 * time.Millisecond
 
 // maxProbeStream bounds how many bytes a probe inspects. A real terminal sends
 // three short reports; anything spraying kilobytes at an unestablished
@@ -60,6 +71,9 @@ type probeReply struct {
 	answered bool
 	scroll   probeFeature
 	sync     probeFeature
+	// keyboard is set only by a kitty flags reply; silence leaves it
+	// unknown, which means "keep legacy input decoding".
+	keyboard probeFeature
 }
 
 // negotiate probes a terminal and returns its report together with every byte
@@ -82,16 +96,32 @@ func negotiate(ctx context.Context, input *os.File, writer io.Writer, timeout ti
 		return probeReply{}, nil
 	}
 	deadline := time.Now().Add(timeout)
+	// graceStart is zero until the classic trio (DA1 plus both DECRPM
+	// reports) has answered; from then on the kitty reply has kittyGrace
+	// left to arrive before the probe returns what it knows.
+	var graceStart time.Time
 	var stream []byte
 	buffer := make([]byte, 256)
 	for {
 		reply, leftover := parseProbeReply(stream)
-		if reply.answered && reply.scroll != probeUnknown && reply.sync != probeUnknown {
+		classicDone := reply.answered && reply.scroll != probeUnknown && reply.sync != probeUnknown
+		if classicDone && reply.keyboard != probeUnknown {
+			return reply, leftover
+		}
+		if classicDone && graceStart.IsZero() {
+			graceStart = time.Now()
+		}
+		if !graceStart.IsZero() && !time.Now().Before(graceStart.Add(kittyGrace)) {
 			return reply, leftover
 		}
 		remaining := time.Until(deadline)
 		if remaining <= 0 {
 			return reply, leftover
+		}
+		if !graceStart.IsZero() {
+			if wait := time.Until(graceStart.Add(kittyGrace)); wait < remaining {
+				remaining = wait
+			}
 		}
 		count, err := readInput(ctx, input, buffer, remaining)
 		if count > 0 {
@@ -154,6 +184,20 @@ func parseProbeReply(stream []byte) (probeReply, []byte) {
 						i += end + 1
 						continue
 					}
+				case 'u':
+					// The kitty keyboard protocol flags report. The body is
+					// the terminal's current flag number: digits only, the
+					// shape real implementations send. The value itself is
+					// irrelevant — the backend pushes its own flags — so any
+					// well-formed body is a positive answer, and silence
+					// keeps the protocol off. An empty body is the query's
+					// own shape and never a reply.
+					if !isFlagsBody(body) {
+						break
+					}
+					reply.keyboard = probeSupported
+					i += end + 1
+					continue
 				}
 			}
 		}
@@ -192,6 +236,21 @@ func isAttributeBody(body []byte) bool {
 	}
 	for _, b := range body {
 		if (b < '0' || b > '9') && b != ';' {
+			return false
+		}
+	}
+	return true
+}
+
+// isFlagsBody reports whether a kitty flags body is digits only — the shape
+// a real reply sends. Anything else a human could have typed stays in
+// leftover instead of forging protocol support.
+func isFlagsBody(body []byte) bool {
+	if len(body) == 0 {
+		return false
+	}
+	for _, b := range body {
+		if b < '0' || b > '9' {
 			return false
 		}
 	}
@@ -244,19 +303,26 @@ func featureFromStatus(mode, status int) probeFeature {
 	return probeSupported
 }
 
-// applyProbeFeatures downgrades a feature snapshot to what the terminal itself
-// reported. Unknown answers keep the defaults — a silent terminal is assumed
-// to support what every VT102 descendant supports — and only a positive
-// rejection removes a capability, so a lost reply can never corrupt output.
-// The sync veto mirrors the scroll veto: synchronized output is opt-in via
-// LUX_TUI_SYNC_OUTPUT, but a terminal that answers DECRQM with "mode 2026
-// unrecognized" would otherwise receive mode-set wrappers it cannot parse.
+// applyProbeFeatures reconciles a feature snapshot with what the terminal
+// itself reported. Unknown answers keep the defaults — a silent terminal is
+// assumed to support what every VT102 descendant supports — and only a
+// positive rejection removes a capability, so a lost reply can never corrupt
+// output. The sync veto mirrors the scroll veto: synchronized output is
+// opt-in via LUX_TUI_SYNC_OUTPUT, but a terminal that answers DECRQM with
+// "mode 2026 unrecognized" would otherwise receive mode-set wrappers it
+// cannot parse. The kitty keyboard verdict is the one enable-only result:
+// enhanced input changes how keys are encoded, so it is enabled by a
+// positive reply and by nothing else — a terminal that stays silent keeps
+// the legacy encodings the parser already handles.
 func applyProbeFeatures(features capability.Set, reply probeReply) capability.Set {
 	if reply.scroll == probeRejected {
 		features.ScrollRegions = false
 	}
 	if reply.sync == probeRejected {
 		features.SynchronizedOutput = false
+	}
+	if reply.keyboard == probeSupported {
+		features.KeyboardEnhanced = true
 	}
 	return features
 }

@@ -83,6 +83,144 @@ func TestParserLoneEscapeTimeout(t *testing.T) {
 	}
 }
 
+// TestParserKittyDisambiguateKeys covers the CSI u decoding of the kitty
+// keyboard protocol's disambiguate level, the only level the backend
+// enables. At that level the terminal uses CSI u exclusively for keys
+// legacy encodings could not express, and keeps everything else legacy, so
+// the mix below with arrow keys and plain runes in the last case is the
+// shape a real enhanced stream takes.
+func TestParserKittyDisambiguateKeys(t *testing.T) {
+	kittyRune := func(r rune, mod event.Mod, repeat uint16) event.Event {
+		return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: r, Mod: mod, Repeat: repeat}}
+	}
+	tests := []struct {
+		name  string
+		input string
+		want  event.Event
+	}{
+		{"escape", "\x1b[27u", event.KeyPress(event.KeyEscape, 0)},
+		{"alt+escape", "\x1b[27;3u", event.KeyPress(event.KeyEscape, event.ModAlt)},
+		{"ctrl+escape", "\x1b[27;5u", event.KeyPress(event.KeyEscape, event.ModCtrl)},
+		{"shift+alt+escape", "\x1b[27;4u", event.KeyPress(event.KeyEscape, event.ModShift|event.ModAlt)},
+		{"ctrl+a", "\x1b[97;5u", event.RuneKey('a', event.ModCtrl)},
+		{"alt+x", "\x1b[120;3u", event.RuneKey('x', event.ModAlt)},
+		{"ctrl+alt+x", "\x1b[120;7u", event.RuneKey('x', event.ModCtrl|event.ModAlt)},
+		{"shift+ctrl+a", "\x1b[97;6u", event.RuneKey('a', event.ModShift|event.ModCtrl)},
+		{"super+x", "\x1b[120;9u", event.RuneKey('x', event.ModSuper)},
+		// Lock-state bits (16 and 32 in the modifier value) cannot be
+		// represented in Mod yet, so they are dropped rather than aliased
+		// onto a real modifier.
+		{"caps-lock bit is ignored", "\x1b[97;17u", event.RuneKey('a', 0)},
+		{"num-lock bit is ignored", "\x1b[97;33u", event.RuneKey('a', 0)},
+		{"shift+enter", "\x1b[13;2u", event.KeyPress(event.KeyEnter, event.ModShift)},
+		{"ctrl+enter", "\x1b[13;5u", event.KeyPress(event.KeyEnter, event.ModCtrl)},
+		{"alt+enter", "\x1b[13;3u", event.KeyPress(event.KeyEnter, event.ModAlt)},
+		{"ctrl+backspace", "\x1b[127;5u", event.KeyPress(event.KeyBackspace, event.ModCtrl)},
+		{"alt+backspace", "\x1b[127;3u", event.KeyPress(event.KeyBackspace, event.ModAlt)},
+		{"shift+tab normalizes to backtab", "\x1b[9;2u", event.KeyPress(event.KeyBackTab, 0)},
+		{"ctrl+tab keeps the shift bit clear", "\x1b[9;5u", event.KeyPress(event.KeyTab, event.ModCtrl)},
+		{"explicit press modifier value", "\x1b[9;1u", event.KeyPress(event.KeyTab, 0)},
+		{"plain rune code", "\x1b[97u", event.RuneKey('a', 0)},
+		{"latin-1 rune code", "\x1b[233u", event.RuneKey('é', 0)},
+		{"cyrillic rune code", "\x1b[1048u", event.RuneKey('И', 0)},
+		{"astral rune code", "\x1b[128516u", event.RuneKey('😄', 0)},
+		{"largest codepoint", "\x1b[1114111u", event.RuneKey(0x10FFFF, 0)},
+		{"space with a modifier", "\x1b[32;3u", event.RuneKey(' ', event.ModAlt)},
+		{"press event type", "\x1b[97;3;1u", kittyRune('a', event.ModAlt, 1)},
+		{"repeat event type coalesces", "\x1b[97;3;2u", kittyRune('a', event.ModAlt, 2)},
+		{"associated text is ignored", "\x1b[97;3;1;97u", kittyRune('a', event.ModAlt, 1)},
+		{"alternate-key subparameters are stripped", "\x1b[97:65:97;3u", event.RuneKey('a', event.ModAlt)},
+		{"modifier subparameter is stripped", "\x1b[97;3:2u", event.RuneKey('a', event.ModAlt)},
+		// Junk in a parameter can only be bytes below the CSI final range,
+		// because anything from 0x40 up terminates the sequence; the
+		// tolerated junk below therefore uses punctuation.
+		{"junk modifier field is tolerated as unmodified", "\x1b[97;,u", event.RuneKey('a', 0)},
+		{"zero modifier value", "\x1b[97;0u", event.RuneKey('a', 0)},
+		// Release events belong to a level the backend never enables; an
+		// unrequested one surfaces as an unknown key instead of being
+		// silently dropped or misread as a press.
+		{"release event type is unknown", "\x1b[97;3;3u", event.KeyPress(event.KeyUnknown, 0)},
+		{"junk event type is unknown", "\x1b[97;3;,u", event.KeyPress(event.KeyUnknown, 0)},
+		{"out-of-range event type is unknown", "\x1b[97;3;9u", event.KeyPress(event.KeyUnknown, 0)},
+		// The query and stack-management shapes share the final byte but
+		// never the leading parameter, and they must not decode as keys.
+		{"query reply shape is unknown", "\x1b[?1u", event.KeyPress(event.KeyUnknown, 0)},
+		{"query reply shape with junk flags", "\x1b[?,u", event.KeyPress(event.KeyUnknown, 0)},
+		{"stack push shape is unknown", "\x1b[>1u", event.KeyPress(event.KeyUnknown, 0)},
+		{"stack pop shape is unknown", "\x1b[<u", event.KeyPress(event.KeyUnknown, 0)},
+		{"empty code is unknown", "\x1b[;5u", event.KeyPress(event.KeyUnknown, 0)},
+		{"bare CSI u is unknown", "\x1b[u", event.KeyPress(event.KeyUnknown, 0)},
+		{"code zero is unknown", "\x1b[0u", event.KeyPress(event.KeyUnknown, 0)},
+		{"control codepoint is unknown", "\x1b[3u", event.KeyPress(event.KeyUnknown, 0)},
+		// Functional codepoints cannot arrive at the disambiguate level —
+		// functional keys keep legacy encodings there. The kitty protocol
+		// numbers them inside the Unicode private use area U+E000..U+F8FF,
+		// which is full of otherwise valid runes, so the whole block decodes
+		// as unknown rather than injecting a private-use character into a
+		// text field.
+		{"functional base is unknown", "\x1b[57344u", event.KeyPress(event.KeyUnknown, 0)},
+		{"kitty F1 is unknown", "\x1b[57441u", event.KeyPress(event.KeyUnknown, 0)},
+		{"media key is unknown", "\x1b[57428u", event.KeyPress(event.KeyUnknown, 0)},
+		{"end of the private use area is unknown", "\x1b[63743u", event.KeyPress(event.KeyUnknown, 0)},
+		{"first codepoint past the private use area is a rune", "\x1b[63744u", event.RuneKey(0xF900, 0)},
+		{"surrogate codepoint is unknown", "\x1b[55296u", event.KeyPress(event.KeyUnknown, 0)},
+		{"codepoint past Unicode is unknown", "\x1b[1114112u", event.KeyPress(event.KeyUnknown, 0)},
+		{"overflowing code is unknown", "\x1b[99999999999999999999u", event.KeyPress(event.KeyUnknown, 0)},
+		{"five fields are unknown", "\x1b[97;3;1;97;9u", event.KeyPress(event.KeyUnknown, 0)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := newParser().feed([]byte(tt.input), false)
+			if len(got) != 1 || got[0] != tt.want {
+				t.Fatalf("feed(%q) = %#v, want %#v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParserKittyEscapeIsImmediate pins the stage 6 acceptance: in enhanced
+// mode Esc arrives as the complete CSI 27 u sequence, which ends on a final
+// byte, so it decodes the moment its last byte lands and never waits out
+// the 35 ms lone-escape delay.
+func TestParserKittyEscapeIsImmediate(t *testing.T) {
+	parser := newParser()
+	if got := parser.feed([]byte("\x1b[27u"), false); len(got) != 1 || !got[0].Key.Is(event.KeyEscape, 0) {
+		t.Fatalf("escape was not decoded immediately: %#v", got)
+	}
+	if parser.pendingEscape() {
+		t.Fatal("a complete kitty escape left the parser waiting on a timeout")
+	}
+	// Bytes already in flight behind the escape arrive as their own events,
+	// proving the escape did not swallow the rest of the stream.
+	got := newParser().feed([]byte("\x1b[27uX"), false)
+	if len(got) != 2 || !got[0].Key.Is(event.KeyEscape, 0) || got[1] != event.RuneKey('X', 0) {
+		t.Fatalf("stream after kitty escape = %#v", got)
+	}
+}
+
+// TestParserKittyStreamsAcrossReads proves a CSI u event split across read
+// boundaries decodes only once its final byte arrives.
+func TestParserKittyStreamsAcrossReads(t *testing.T) {
+	parser := newParser()
+	var got []event.Event
+	for _, chunk := range []string{"\x1b[2", "7;5", "u\x1b[", "27;3"} {
+		got = append(got, parser.feed([]byte(chunk), false)...)
+	}
+	if len(got) != 1 || !got[0].Key.Is(event.KeyEscape, event.ModCtrl) {
+		t.Fatalf("split ctrl+escape = %#v", got)
+	}
+	got = append(got, parser.feed([]byte("u\x1b[Aa"), false)...)
+	want := []event.Event{
+		event.KeyPress(event.KeyEscape, event.ModCtrl),
+		event.KeyPress(event.KeyEscape, event.ModAlt),
+		event.KeyPress(event.KeyUp, 0),
+		event.RuneKey('a', 0),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("enhanced stream mixed with legacy keys = %#v, want %#v", got, want)
+	}
+}
+
 func TestReadLoopClosesCapturedDoneChannel(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("anonymous pipes are not console input handles on Windows")
@@ -228,7 +366,23 @@ func TestBackendErrors(t *testing.T) {
 }
 
 func FuzzParserNeverPanics(f *testing.F) {
-	for _, seed := range [][]byte{[]byte("hello"), []byte("\x1b[A"), []byte("\x1b[<0;1;1M"), []byte(pasteStart + "x" + pasteEnd), {0xff, 0x80, 0x1b}} {
+	seeds := [][]byte{
+		[]byte("hello"), []byte("\x1b[A"), []byte("\x1b[<0;1;1M"), []byte(pasteStart + "x" + pasteEnd),
+		{0xff, 0x80, 0x1b},
+	}
+	// Kitty CSI u regressions: query and stack shapes, private-use key codes,
+	// surrogates, overflowing digits, colon subparameters, event types, and
+	// sequences that straddle read boundaries.
+	kittySeeds := []string{
+		"\x1b[?1u", "\x1b[>1u", "\x1b[<u", "\x1b[u", "\x1b[27u", "\x1b[27;5u", "\x1b[27;3u",
+		"\x1b[57344u", "\x1b[63743u", "\x1b[63744u", "\x1b[1114112u", "\x1b[55296u", "\x1b[57343:27;1:3;65u",
+		"\x1b[99999999999999999999u", "\x1b[9;2u", "\x1b[97;3;2;97u", "\x1b[97;;u", "\x1b[13;5u",
+		"\x1b[27;17u", "\x1b[27;33u", "\x1b[;2u", "\x1b[27;2;99999999999999999999u",
+	}
+	for _, seed := range kittySeeds {
+		seeds = append(seeds, []byte(seed))
+	}
+	for _, seed := range seeds {
 		f.Add(seed)
 	}
 	f.Fuzz(func(t *testing.T, data []byte) {

@@ -106,6 +106,23 @@ func TestParseProbeReply(t *testing.T) {
 		{"report with a junk status is replayed", "\x1b[?6;x$y", probeReply{}, "\x1b[?6;x$y"},
 		{"report missing its final byte is replayed", "\x1b[?6;0$", probeReply{}, "\x1b[?6;0$"},
 		{"overflowing status is replayed", "\x1b[?6;99999999999999999999$y", probeReply{}, "\x1b[?6;99999999999999999999$y"},
+		// The kitty flags reply is digits behind the private-mode question
+		// mark; its value is never parsed, only its shape matters, so even
+		// overflowing digits count as an answer.
+		{"kitty flags reply", "\x1b[?6c\x1b[?1u", probeReply{answered: true, keyboard: probeSupported}, ""},
+		{"kitty flags reply without DA1", "\x1b[?1u", probeReply{keyboard: probeSupported}, ""},
+		{"kitty flags of zero still count", "\x1b[?6c\x1b[?0u", probeReply{answered: true, keyboard: probeSupported}, ""},
+		{"kitty flags with leading zeros", "\x1b[?6c\x1b[?013u", probeReply{answered: true, keyboard: probeSupported}, ""},
+		{"overflowing kitty flags still count", "\x1b[?6c\x1b[?99999999999999999999u", probeReply{answered: true, keyboard: probeSupported}, ""},
+		{"user keys around a kitty reply are replayed", "\x1b[?6cX\x1b[?1uY", probeReply{answered: true, keyboard: probeSupported}, "XY"},
+		{
+			name:   "full negotiation answer with kitty flags",
+			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1u",
+			want:   probeReply{answered: true, scroll: probeSupported, sync: probeSupported, keyboard: probeSupported},
+		},
+		{"kitty query shape without digits is replayed", "\x1b[?u", probeReply{}, "\x1b[?u"},
+		{"kitty reply with junk flags is replayed", "\x1b[?6c\x1b[?,u", probeReply{answered: true}, "\x1b[?,u"},
+		{"kitty reply with parameters is replayed", "\x1b[?6c\x1b[?1;1u", probeReply{answered: true}, "\x1b[?1;1u"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -275,6 +292,74 @@ func TestNegotiateDetectsSupports(t *testing.T) {
 	}
 }
 
+// TestNegotiateKittyGrace pins the shape of the grace window: a kitty reply
+// that lands fragmented behind the classic trio still completes the probe
+// early, while a terminal with no kitty answer costs only the grace, never
+// the full deadline.
+func TestNegotiateKittyGrace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
+	}
+	t.Run("fragmented kitty reply lands within the grace", func(t *testing.T) {
+		reader, writer := negotiatePipe(t)
+		done := make(chan error, 1)
+		go func() {
+			_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y"))
+			// The kitty reply arrives as its own read, the way a protocol
+			// terminal sends it behind the classic trio.
+			time.Sleep(5 * time.Millisecond)
+			if err == nil {
+				_, err = writer.Write([]byte("\x1b[?1u"))
+			}
+			done <- err
+		}()
+		start := time.Now()
+		reply, leftover := negotiate(context.Background(), reader, &bytes.Buffer{}, 400*time.Millisecond)
+		if err := <-done; err != nil {
+			t.Errorf("reply writer: %v", err)
+		}
+		if elapsed := time.Since(start); elapsed >= 400*time.Millisecond {
+			t.Errorf("negotiate burned the full budget on a fragmented reply stream (elapsed %v)", elapsed)
+		}
+		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported, keyboard: probeSupported}
+		if reply != want {
+			t.Errorf("reply = %+v, want %+v", reply, want)
+		}
+		if len(leftover) != 0 {
+			t.Errorf("leftover = %q, want none", leftover)
+		}
+	})
+	t.Run("silence after the classic trio pays only the grace", func(t *testing.T) {
+		reader, writer := negotiatePipe(t)
+		done := make(chan error, 1)
+		go func() {
+			// The write end stays open: silence without EOF is what a
+			// terminal without the kitty protocol looks like.
+			_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y"))
+			done <- err
+		}()
+		start := time.Now()
+		reply, leftover := negotiate(context.Background(), reader, &bytes.Buffer{}, 400*time.Millisecond)
+		if err := <-done; err != nil {
+			t.Errorf("reply writer: %v", err)
+		}
+		elapsed := time.Since(start)
+		if elapsed < kittyGrace {
+			t.Errorf("negotiate returned after %v, want the %v grace window to be waited out", elapsed, kittyGrace)
+		}
+		if elapsed > 300*time.Millisecond {
+			t.Errorf("negotiate spent %v waiting for a kitty reply that never comes, want the %v grace plus overhead", elapsed, kittyGrace)
+		}
+		want := probeReply{answered: true, scroll: probeSupported, sync: probeSupported}
+		if reply != want {
+			t.Errorf("reply = %+v, want %+v (keyboard stays unknown on silence)", reply, want)
+		}
+		if len(leftover) != 0 {
+			t.Errorf("leftover = %q, want none", leftover)
+		}
+	})
+}
+
 func TestNegotiatePreservesUserBytes(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
@@ -350,7 +435,12 @@ func TestNegotiateCapsRunawayStream(t *testing.T) {
 	}
 }
 
-func TestApplyProbeFeaturesOnlyDowngrades(t *testing.T) {
+// TestApplyProbeFeatures pins the direction of every probe verdict. Scroll
+// regions and synchronized output are veto-only: a positive reply never
+// upgrades a set that does not already claim them. The kitty keyboard
+// protocol is the one enable-only verdict — a flags reply turns the enhanced
+// keyboard on wherever it lands, and silence changes nothing.
+func TestApplyProbeFeatures(t *testing.T) {
 	before := capability.Set{
 		Terminal:           "vt500",
 		Interactive:        true,
@@ -361,6 +451,7 @@ func TestApplyProbeFeaturesOnlyDowngrades(t *testing.T) {
 		Mouse:              true,
 		Focus:              true,
 		BracketedPaste:     true,
+		KeyboardEnhanced:   false,
 		ScrollRegions:      true,
 		SynchronizedOutput: true,
 		Hyperlinks:         true,
@@ -373,6 +464,8 @@ func TestApplyProbeFeaturesOnlyDowngrades(t *testing.T) {
 	bothOff := before
 	bothOff.ScrollRegions = false
 	bothOff.SynchronizedOutput = false
+	keyboardOn := before
+	keyboardOn.KeyboardEnhanced = true
 	tests := []struct {
 		name     string
 		features capability.Set
@@ -385,8 +478,12 @@ func TestApplyProbeFeaturesOnlyDowngrades(t *testing.T) {
 		{"rejected scroll clears scroll regions", before, probeReply{answered: true, scroll: probeRejected}, scrollOff},
 		{"rejected sync clears synchronized output", before, probeReply{answered: true, sync: probeRejected}, syncOff},
 		{"both rejected clear both", before, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, bothOff},
-		{"supported never upgrades an empty set", capability.Set{}, probeReply{answered: true, scroll: probeSupported, sync: probeSupported}, capability.Set{}},
+		{"supported scroll and sync never upgrade an empty set", capability.Set{}, probeReply{answered: true, scroll: probeSupported, sync: probeSupported}, capability.Set{}},
 		{"already disabled stays disabled", bothOff, probeReply{answered: true, scroll: probeRejected, sync: probeRejected}, bothOff},
+		{"supported kitty turns the keyboard on", before, probeReply{answered: true, keyboard: probeSupported}, keyboardOn},
+		{"kitty support upgrades even an empty set", capability.Set{}, probeReply{answered: true, keyboard: probeSupported}, capability.Set{KeyboardEnhanced: true}},
+		{"rejected kitty changes nothing", before, probeReply{answered: true, keyboard: probeRejected}, before},
+		{"unknown kitty keeps the current state", keyboardOn, probeReply{answered: true}, keyboardOn},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

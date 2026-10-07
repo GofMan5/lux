@@ -169,6 +169,9 @@ func parseEscape(data []byte, eof bool) (event.Event, int, bool) {
 	if focus, ok := map[string]bool{"\x1b[I": true, "\x1b[O": false}[sequence]; ok {
 		return event.Event{Kind: event.Focus, Focused: focus}, len(sequence), true
 	}
+	if key, ok := parseKittyKey(sequence); ok {
+		return key, len(sequence), true
+	}
 	code, modifiers, ok := keySequence(sequence)
 	if ok {
 		return event.KeyPress(code, modifiers), len(sequence), true
@@ -239,6 +242,105 @@ func decodeModifier(value int) event.Mod {
 		result |= event.ModSuper
 	}
 	return result
+}
+
+// parseKittyKey decodes one CSI u key event from the kitty keyboard
+// protocol's disambiguate level — the only level the backend enables. At
+// that level the terminal uses CSI u exclusively for keys legacy encodings
+// could not express unambiguously: Esc, Esc and Alt+key, Ctrl-modified
+// letter keys, and Enter/Tab/Backspace carrying modifiers. Plain text and
+// functional keys keep their legacy encodings, so functional codepoints
+// (57344 and up) cannot arrive here; they still decode as unknown rather
+// than as junk runes, because a misbehaving terminal must not inject
+// private-use runes into a text field.
+//
+// The event-type and associated-text parameters belong to protocol levels
+// the backend never enables, so their absence is the spec and their
+// presence is decoded defensively: an auto-repeat coalesces into
+// KeyEvent.Repeat, and a release or anything unrepresentable surfaces as
+// one unknown key — the same honest cost a late probe report pays. The
+// query reply shape, CSI ? flags u, is rejected by the leading-parameter
+// check and falls through to the unknown-key fallback.
+func parseKittyKey(sequence string) (event.Event, bool) {
+	if len(sequence) < 4 || sequence[len(sequence)-1] != 'u' {
+		return event.Event{}, false
+	}
+	switch sequence[2] {
+	case '?', '<', '>', '=', 0x20:
+		return event.Event{}, false
+	}
+	fields := strings.Split(sequence[2:len(sequence)-1], ";")
+	if len(fields) > 4 {
+		return event.Event{}, false
+	}
+	code, ok := kittyNumber(fields[0])
+	if !ok {
+		return event.Event{}, false
+	}
+	var mod event.Mod
+	if len(fields) > 1 {
+		if value, ok := kittyNumber(fields[1]); ok {
+			mod = decodeModifier(value)
+		}
+	}
+	repeat := uint16(1)
+	if len(fields) > 2 {
+		value, _ := kittyNumber(fields[2])
+		switch value {
+		case 1: // press
+		case 2: // auto-repeat: one event coalesces the whole burst
+			repeat = 2
+		default: // release or garbage the backend never asked for
+			return event.KeyPress(event.KeyUnknown, 0), true
+		}
+	}
+	// The fourth field (associated text) belongs to a level the backend
+	// never pushes; it is ignored rather than trusted.
+	switch code {
+	case 27:
+		return kittyKey(event.KeyEscape, mod, repeat), true
+	case 13:
+		return kittyKey(event.KeyEnter, mod, repeat), true
+	case 127:
+		return kittyKey(event.KeyBackspace, mod, repeat), true
+	case 9:
+		if mod&event.ModShift != 0 {
+			// Shift+Tab normalizes to BackTab without the shift bit so the
+			// event matches the legacy CSI Z encoding of the same key.
+			return kittyKey(event.KeyBackTab, mod&^event.ModShift, repeat), true
+		}
+		return kittyKey(event.KeyTab, mod, repeat), true
+	}
+	// Private use area U+E000..U+F8FF is exactly where the kitty protocol
+	// numbers its functional keys (57344 and up). Functional keys keep
+	// legacy encodings at the disambiguate level, so a codepoint from that
+	// block means a terminal sent something unrequested; decoding it as a
+	// rune would inject a private-use character into text.
+	if code < 32 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) || (code >= 57344 && code <= 63743) {
+		return event.KeyPress(event.KeyUnknown, 0), true
+	}
+	key := kittyKey(event.KeyRune, mod, repeat)
+	key.Key.Rune = rune(code)
+	return key, true
+}
+
+// kittyKey builds the key event shape every CSI u decode shares.
+func kittyKey(code event.KeyCode, mod event.Mod, repeat uint16) event.Event {
+	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Mod: mod, Repeat: repeat}}
+}
+
+// kittyNumber reads one CSI u parameter, tolerating the colon-separated
+// alternate-key sub-parameters a higher protocol level appends: only the
+// value before the first colon is the parameter's own number.
+func kittyNumber(field string) (int, bool) {
+	if cut := strings.IndexByte(field, ':'); cut >= 0 {
+		field = field[:cut]
+	}
+	value, err := strconv.Atoi(field)
+	if err != nil || value < 0 {
+		return 0, false
+	}
+	return value, true
 }
 
 func parseMouse(sequence string) (event.MouseEvent, bool) {
