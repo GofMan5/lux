@@ -19,16 +19,22 @@ import (
 const (
 	enterTerminal = "\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[?1002h\x1b[?1006h"
 	leaveTerminal = "\x1b[?1006l\x1b[?1002l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[?1049l\x1b[0m"
-	// kittyEnter pushes the kitty keyboard protocol's disambiguate flag
-	// (0b1) and nothing else: ambiguous keys arrive as complete CSI u
-	// sequences while plain text and functional keys keep their legacy
-	// encodings. Event types, alternate keys, and all-keys-as-codes stay
-	// off until a later stage can represent them. The push is written in
-	// the same Write call as enterTerminal, and the matching pop shares a
-	// Write with leaveTerminal on every exit path — including the enter
-	// failure below and Close — so the terminal's flag stack cannot leak
-	// a frame behind the program, the bubbletea v2.0.9 failure mode.
-	kittyEnter = "\x1b[>1u"
+	// kittyEnter pushes the kitty keyboard protocol's disambiguate and
+	// event-type flags (0b11, written as 3): ambiguous keys arrive as
+	// complete CSI u sequences while plain text and functional keys keep
+	// their legacy encodings, and each such sequence reports whether it is
+	// a press, an auto-repeat, or a release. Enter, Tab, and Backspace
+	// keep their legacy bytes and never report releases — the spec's
+	// shell-safety exception — so the release stream stays text-free.
+	// Releases are decoded in full but filtered by the app layer unless
+	// the program opts in; alternate keys, all-keys-as-codes, and
+	// associated text stay off until a later stage can represent them.
+	// The push is written in the same Write call as enterTerminal, and the
+	// matching pop shares a Write with leaveTerminal on every exit path —
+	// including the enter failure below and Close — so the terminal's
+	// flag stack cannot leak a frame behind the program, the bubbletea
+	// v2.0.9 failure mode.
+	kittyEnter = "\x1b[>3u"
 	kittyLeave = "\x1b[<u"
 	escapeDelay = 35 * time.Millisecond
 )

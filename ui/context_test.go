@@ -220,6 +220,60 @@ func TestModalTrapDismissAndRestore(t *testing.T) {
 	}
 }
 
+// TestContextKeyReleasesAreInert pins the widget contract for kitty event
+// types: a release never activates, moves focus, scrolls, edits, or dismisses
+// a modal, while a repeat keeps routing exactly like a press.
+func TestContextKeyReleasesAreInert(t *testing.T) {
+	var ctx Context
+	presented(&ctx, []region{
+		{id: "button", bounds: render.Rect{W: 8, H: 1}, flags: Focusable | Activatable},
+		{id: "input", bounds: render.Rect{X: 10, Y: 0, W: 8, H: 1}, flags: Focusable | Editable},
+		{id: "list", bounds: render.Rect{Y: 2, W: 20, H: 5}, flags: Focusable | Scrollable},
+	}, modal{})
+	release := func(e event.Event) event.Event {
+		e.Key.Action = event.ActionRelease
+		e.Key.Repeat = 0
+		return e
+	}
+
+	if action, handled := ctx.Handle(release(event.KeyPress(event.KeyEnter, 0))); handled || action.Kind != None {
+		t.Fatalf("enter release = %#v handled=%v", action, handled)
+	}
+	if action, handled := ctx.Handle(release(event.RuneKey('x', 0))); handled || action.Kind != None {
+		t.Fatalf("rune release = %#v handled=%v", action, handled)
+	}
+	if action, handled := ctx.Handle(release(event.KeyPress(event.KeyTab, 0))); handled || action.Kind != None {
+		t.Fatalf("tab release = %#v handled=%v", action, handled)
+	}
+	if action, handled := ctx.Handle(release(event.KeyPress(event.KeyDown, 0))); handled || action.Kind != None {
+		t.Fatalf("down release = %#v handled=%v", action, handled)
+	}
+	if action, handled := ctx.Handle(release(event.KeyPress(event.KeyEscape, 0))); handled || action.Kind != None {
+		t.Fatalf("escape release = %#v handled=%v", action, handled)
+	}
+
+	if action, handled := ctx.Handle(event.KeyPress(event.KeyEnter, 0)); !handled || action.Kind != Activate || action.Target != "button" {
+		t.Fatalf("enter press = %#v handled=%v", action, handled)
+	}
+	if action, handled := ctx.Handle(event.KeyPress(event.KeyTab, 0)); !handled || action.Kind != Focus || action.Target != "input" {
+		t.Fatalf("tab press = %#v handled=%v", action, handled)
+	}
+	if action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'x', Action: event.ActionRepeat, Repeat: 1}}); !handled || action.Kind != Input || action.Target != "input" {
+		t.Fatalf("rune repeat = %#v handled=%v", action, handled)
+	}
+
+	var modalCtx Context
+	presented(&modalCtx, []region{
+		{id: "modal-a", bounds: render.Rect{X: 5, Y: 3, W: 8, H: 1}, flags: Focusable | Editable, modal: "dialog"},
+	}, modal{id: "dialog", bounds: render.Rect{X: 4, Y: 2, W: 10, H: 6}})
+	if action, handled := modalCtx.Handle(release(event.KeyPress(event.KeyEscape, 0))); handled || action.Kind != None {
+		t.Fatalf("modal escape release = %#v handled=%v", action, handled)
+	}
+	if action, handled := modalCtx.Handle(event.KeyPress(event.KeyEscape, 0)); !handled || action.Kind != Dismiss || action.Target != "dialog" {
+		t.Fatalf("modal escape press = %#v handled=%v", action, handled)
+	}
+}
+
 func TestResizeRejectsStalePresentation(t *testing.T) {
 	var ctx Context
 	ctx.mu.Lock()

@@ -90,8 +90,19 @@ func TestParserLoneEscapeTimeout(t *testing.T) {
 // the mix below with arrow keys and plain runes in the last case is the
 // shape a real enhanced stream takes.
 func TestParserKittyDisambiguateKeys(t *testing.T) {
-	kittyRune := func(r rune, mod event.Mod, repeat uint16) event.Event {
-		return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: r, Mod: mod, Repeat: repeat}}
+	kittyRune := func(r rune, mod event.Mod, action event.KeyAction) event.Event {
+		repeat := uint16(1)
+		if action == event.ActionRelease {
+			repeat = 0
+		}
+		return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: r, Mod: mod, Action: action, Repeat: repeat}}
+	}
+	kittyKey := func(code event.KeyCode, mod event.Mod, action event.KeyAction) event.Event {
+		repeat := uint16(1)
+		if action == event.ActionRelease {
+			repeat = 0
+		}
+		return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Mod: mod, Action: action, Repeat: repeat}}
 	}
 	tests := []struct {
 		name  string
@@ -107,11 +118,14 @@ func TestParserKittyDisambiguateKeys(t *testing.T) {
 		{"ctrl+alt+x", "\x1b[120;7u", event.RuneKey('x', event.ModCtrl|event.ModAlt)},
 		{"shift+ctrl+a", "\x1b[97;6u", event.RuneKey('a', event.ModShift|event.ModCtrl)},
 		{"super+x", "\x1b[120;9u", event.RuneKey('x', event.ModSuper)},
-		// Lock-state bits (16 and 32 in the modifier value) cannot be
-		// represented in Mod yet, so they are dropped rather than aliased
-		// onto a real modifier.
-		{"caps-lock bit is ignored", "\x1b[97;17u", event.RuneKey('a', 0)},
-		{"num-lock bit is ignored", "\x1b[97;33u", event.RuneKey('a', 0)},
+		// The modifier value is 1 + bitfield, so 17/33/65/129 carry the
+		// hyper, meta, caps-lock, and num-lock bits; enhanced terminals
+		// report them for non-text keys and they surface as Mod bits.
+		{"hyper bit", "\x1b[97;17u", event.RuneKey('a', event.ModHyper)},
+		{"meta bit", "\x1b[97;33u", event.RuneKey('a', event.ModMeta)},
+		{"caps-lock bit", "\x1b[97;65u", event.RuneKey('a', event.ModCapsLock)},
+		{"num-lock bit", "\x1b[97;129u", event.RuneKey('a', event.ModNumLock)},
+		{"caps-lock and num-lock bits", "\x1b[97;193u", event.RuneKey('a', event.ModCapsLock|event.ModNumLock)},
 		{"shift+enter", "\x1b[13;2u", event.KeyPress(event.KeyEnter, event.ModShift)},
 		{"ctrl+enter", "\x1b[13;5u", event.KeyPress(event.KeyEnter, event.ModCtrl)},
 		{"alt+enter", "\x1b[13;3u", event.KeyPress(event.KeyEnter, event.ModAlt)},
@@ -126,22 +140,29 @@ func TestParserKittyDisambiguateKeys(t *testing.T) {
 		{"astral rune code", "\x1b[128516u", event.RuneKey('😄', 0)},
 		{"largest codepoint", "\x1b[1114111u", event.RuneKey(0x10FFFF, 0)},
 		{"space with a modifier", "\x1b[32;3u", event.RuneKey(' ', event.ModAlt)},
-		{"press event type", "\x1b[97;3;1u", kittyRune('a', event.ModAlt, 1)},
-		{"repeat event type coalesces", "\x1b[97;3;2u", kittyRune('a', event.ModAlt, 2)},
-		{"associated text is ignored", "\x1b[97;3;1;97u", kittyRune('a', event.ModAlt, 1)},
+		// Event types: the canonical form nests the type after a colon in
+		// the modifier field (CSI 97;1:3u is a release); the trailing
+		// semicolon field is the pre-standard spelling, still read.
+		{"press event type", "\x1b[97;3;1u", kittyRune('a', event.ModAlt, event.ActionPress)},
+		{"repeat event type", "\x1b[97;3;2u", kittyRune('a', event.ModAlt, event.ActionRepeat)},
+		{"release event type", "\x1b[97;3;3u", kittyRune('a', event.ModAlt, event.ActionRelease)},
+		{"canonical press subparameter", "\x1b[97;1:1u", kittyRune('a', 0, event.ActionPress)},
+		{"canonical repeat subparameter", "\x1b[97;3:2u", kittyRune('a', event.ModAlt, event.ActionRepeat)},
+		{"canonical release subparameter", "\x1b[97;3:3u", kittyRune('a', event.ModAlt, event.ActionRelease)},
+		{"canonical release of escape", "\x1b[27;5:3u", kittyKey(event.KeyEscape, event.ModCtrl, event.ActionRelease)},
+		{"canonical press wins over a junk trailing field", "\x1b[97;1:1;120u", kittyRune('a', 0, event.ActionPress)},
+		{"associated text is ignored", "\x1b[97;3;1;97u", kittyRune('a', event.ModAlt, event.ActionPress)},
 		{"alternate-key subparameters are stripped", "\x1b[97:65:97;3u", event.RuneKey('a', event.ModAlt)},
-		{"modifier subparameter is stripped", "\x1b[97;3:2u", event.RuneKey('a', event.ModAlt)},
 		// Junk in a parameter can only be bytes below the CSI final range,
 		// because anything from 0x40 up terminates the sequence; the
 		// tolerated junk below therefore uses punctuation.
 		{"junk modifier field is tolerated as unmodified", "\x1b[97;,u", event.RuneKey('a', 0)},
 		{"zero modifier value", "\x1b[97;0u", event.RuneKey('a', 0)},
-		// Release events belong to a level the backend never enables; an
-		// unrequested one surfaces as an unknown key instead of being
-		// silently dropped or misread as a press.
-		{"release event type is unknown", "\x1b[97;3;3u", event.KeyPress(event.KeyUnknown, 0)},
+		// Unrequested or unrepresentable event types surface as an unknown
+		// key instead of being silently dropped or misread as a press.
 		{"junk event type is unknown", "\x1b[97;3;,u", event.KeyPress(event.KeyUnknown, 0)},
 		{"out-of-range event type is unknown", "\x1b[97;3;9u", event.KeyPress(event.KeyUnknown, 0)},
+		{"out-of-range canonical event type is unknown", "\x1b[97;3:9u", event.KeyPress(event.KeyUnknown, 0)},
 		// The query and stack-management shapes share the final byte but
 		// never the leading parameter, and they must not decode as keys.
 		{"query reply shape is unknown", "\x1b[?1u", event.KeyPress(event.KeyUnknown, 0)},
@@ -378,6 +399,10 @@ func FuzzParserNeverPanics(f *testing.F) {
 		"\x1b[57344u", "\x1b[63743u", "\x1b[63744u", "\x1b[1114112u", "\x1b[55296u", "\x1b[57343:27;1:3;65u",
 		"\x1b[99999999999999999999u", "\x1b[9;2u", "\x1b[97;3;2;97u", "\x1b[97;;u", "\x1b[13;5u",
 		"\x1b[27;17u", "\x1b[27;33u", "\x1b[;2u", "\x1b[27;2;99999999999999999999u",
+		// Event-type subparameters (canonical colon form and the
+		// pre-standard trailing field) and the lock-state modifier bits.
+		"\x1b[97;1:3u", "\x1b[27;5:2u", "\x1b[13;1:1;13u", "\x1b[97;3:3u", "\x1b[97;3:,u",
+		"\x1b[97;65u", "\x1b[97;129u", "\x1b[97;193u", "\x1b[27;257u",
 	}
 	for _, seed := range kittySeeds {
 		seeds = append(seeds, []byte(seed))

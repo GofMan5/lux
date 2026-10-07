@@ -11,6 +11,25 @@ func keyAction(code event.KeyCode) Action {
 	return Action{Kind: Scroll, Event: event.KeyPress(code, 0)}
 }
 
+// TestListStateIgnoresKeyReleases pins the contract for direct Apply
+// callers: a kitty release neither moves selection nor activates, while a
+// repeat moves selection exactly like a press.
+func TestListStateIgnoresKeyReleases(t *testing.T) {
+	state := ListState{Selected: 1}
+	release := Action{Kind: Scroll, Event: event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyDown, Action: event.ActionRelease}}}
+	if changed, activated := state.Apply(release, 10, 3); changed || activated || state.Selected != 1 || state.Offset != 0 {
+		t.Fatalf("release changed=%v activated=%v state=%#v", changed, activated, state)
+	}
+	releaseEnter := Action{Kind: Activate, Event: event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyEnter, Action: event.ActionRelease}}}
+	if changed, activated := state.Apply(releaseEnter, 10, 3); changed || activated {
+		t.Fatalf("enter release changed=%v activated=%v", changed, activated)
+	}
+	repeat := Action{Kind: Scroll, Event: event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyDown, Action: event.ActionRepeat, Repeat: 1}}}
+	if changed, activated := state.Apply(repeat, 10, 3); !changed || activated || state.Selected != 2 {
+		t.Fatalf("repeat changed=%v activated=%v state=%#v", changed, activated, state)
+	}
+}
+
 func TestListStateKeyboardScrollAndBounds(t *testing.T) {
 	state := ListState{Selected: 1}
 	if changed, activated := state.Apply(keyAction(event.KeyPageDown), 10, 3); !changed || activated || state.Selected != 4 || state.Offset != 2 {

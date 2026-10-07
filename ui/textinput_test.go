@@ -16,6 +16,29 @@ func inputAction(next event.Event) Action {
 	return Action{Kind: Input, Event: next, Bounds: render.Rect{W: 20, H: 1}}
 }
 
+// TestTextInputIgnoresKeyReleases pins the contract for callers that feed
+// TextInput.Apply directly: a kitty release edits nothing, while a repeat
+// edits exactly like a press.
+func TestTextInputIgnoresKeyReleases(t *testing.T) {
+	input := TextInput{}
+	input.SetValue("ab")
+	release := event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Action: event.ActionRelease}}
+	if input.Apply(inputAction(release)) {
+		t.Fatal("a rune release was applied as an edit")
+	}
+	if input.Value != "ab" || input.Cursor != 2 {
+		t.Fatalf("release mutated input: %#v", input)
+	}
+	releaseBackspace := event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyBackspace, Action: event.ActionRelease}}
+	if input.Apply(inputAction(releaseBackspace)) || input.Value != "ab" {
+		t.Fatalf("backspace release deleted: %q", input.Value)
+	}
+	repeat := event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'c', Action: event.ActionRepeat, Repeat: 1}}
+	if !input.Apply(inputAction(repeat)) || input.Value != "abc" {
+		t.Fatalf("rune repeat = %q", input.Value)
+	}
+}
+
 func TestTextInputSanitizesAndBoundsWholeGraphemes(t *testing.T) {
 	input := TextInput{MaxBytes: 4}
 	input.SetValue("a\u754cb")

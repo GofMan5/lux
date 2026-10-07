@@ -140,8 +140,12 @@ func (t *TextInput) Redo() bool {
 // Apply applies one routed Input action and reports whether editable state
 // changed. It accepts committed text, bounded paste, navigation, deletion,
 // Ctrl+A, Ctrl+Left/Right UAX #29 word movement, and local mouse placement.
+// Key releases are inert: they change nothing and report no change.
 func (t *TextInput) Apply(action Action) bool {
 	if t == nil || action.Kind != Input {
+		return false
+	}
+	if action.Event.Kind == event.Key && action.Event.Key.Action == event.ActionRelease {
 		return false
 	}
 	original := t.state()

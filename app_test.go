@@ -134,6 +134,91 @@ func TestRunRendersAndRestores(t *testing.T) {
 	}
 }
 
+// keyLogModel records every key event that reaches Update and quits on the
+// first escape that is not a release, so a test can assert exactly which
+// key actions survived the run loop.
+type keyLogModel struct {
+	mu   sync.Mutex
+	keys []event.KeyEvent
+}
+
+func (m *keyLogModel) Update(next event.Event) Command {
+	if next.Kind != event.Key {
+		return nil
+	}
+	m.mu.Lock()
+	m.keys = append(m.keys, next.Key)
+	release := next.Key.Code == event.KeyEscape && next.Key.Action == event.ActionRelease
+	m.mu.Unlock()
+	if next.Key.Code == event.KeyEscape && !release {
+		return Quit()
+	}
+	return nil
+}
+
+func (m *keyLogModel) View(frame *Frame) {
+	frame.Canvas.Text(0, 0, "frame", render.Style{})
+}
+
+func TestRunFiltersKeyReleasesByDefault(t *testing.T) {
+	backend := newFakeBackend(20, 5)
+	model := &keyLogModel{}
+	done := make(chan error, 1)
+	go func() { done <- Run(context.Background(), model, WithBackend(backend), WithMaxFPS(240)) }()
+	select {
+	case <-backend.presented:
+	case <-time.After(hangTimeout):
+		t.Fatal("initial frame timeout")
+	}
+	// The release precedes the press in the FIFO event channel, so by the
+	// time the press quit the run, the release was already seen or skipped.
+	backend.events <- event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'q', Action: event.ActionRelease}}
+	backend.events <- event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'q', Action: event.ActionRepeat, Repeat: 1}}
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.keys) != 2 {
+		t.Fatalf("model saw %d keys, want the repeat and the press only: %+v", len(model.keys), model.keys)
+	}
+	if model.keys[0].Action != event.ActionRepeat || model.keys[0].Rune != 'q' {
+		t.Fatalf("first delivered key = %+v, want a repeat of q", model.keys[0])
+	}
+	if model.keys[1].Code != event.KeyEscape || model.keys[1].Action != event.ActionPress {
+		t.Fatalf("second delivered key = %+v, want the escape press", model.keys[1])
+	}
+}
+
+func TestRunWithKeyReleasesDeliversReleases(t *testing.T) {
+	backend := newFakeBackend(20, 5)
+	model := &keyLogModel{}
+	done := make(chan error, 1)
+	go func() { done <- Run(context.Background(), model, WithBackend(backend), WithKeyReleases(true), WithMaxFPS(240)) }()
+	select {
+	case <-backend.presented:
+	case <-time.After(hangTimeout):
+		t.Fatal("initial frame timeout")
+	}
+	backend.events <- event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'q', Mod: event.ModCtrl, Action: event.ActionRelease}}
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if len(model.keys) != 2 {
+		t.Fatalf("model saw %d keys, want release and press: %+v", len(model.keys), model.keys)
+	}
+	if model.keys[0].Action != event.ActionRelease || model.keys[0].Mod != event.ModCtrl || model.keys[0].Repeat != 0 {
+		t.Fatalf("first delivered key = %+v, want a ctrl+q release with zero repeats", model.keys[0])
+	}
+	if model.keys[1].Code != event.KeyEscape || model.keys[1].Action != event.ActionPress {
+		t.Fatalf("second delivered key = %+v, want the escape press", model.keys[1])
+	}
+}
+
 func TestRunSkipsStaleAnimationFrames(t *testing.T) {
 	backend := newFakeBackend(20, 5)
 	backend.delay = 30 * time.Millisecond

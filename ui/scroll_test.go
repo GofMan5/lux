@@ -11,6 +11,21 @@ import (
 
 func scrollAction(next event.Event) Action { return Action{Kind: Scroll, Event: next} }
 
+// TestScrollStateIgnoresKeyReleases pins the contract for direct Apply
+// callers: a kitty release scrolls nothing, while a repeat scrolls exactly
+// like a press.
+func TestScrollStateIgnoresKeyReleases(t *testing.T) {
+	state := ScrollState{}
+	release := event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyDown, Action: event.ActionRelease}}
+	if state.Apply(scrollAction(release), 20, 6) || state.Offset != 0 {
+		t.Fatalf("release scrolled: %#v", state)
+	}
+	repeat := event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyDown, Action: event.ActionRepeat, Repeat: 1}}
+	if !state.Apply(scrollAction(repeat), 20, 6) || state.Offset != 1 {
+		t.Fatalf("repeat = %#v", state)
+	}
+}
+
 func TestScrollRangeClampAndEnsureVisible(t *testing.T) {
 	state := ScrollState{Offset: 99}
 	if got := state.Range(10, 3); got != (VisibleRange{First: 7, Last: 10}) || state.Offset != 7 {

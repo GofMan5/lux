@@ -241,26 +241,43 @@ func decodeModifier(value int) event.Mod {
 	if bits&8 != 0 {
 		result |= event.ModSuper
 	}
+	if bits&16 != 0 {
+		result |= event.ModHyper
+	}
+	if bits&32 != 0 {
+		result |= event.ModMeta
+	}
+	if bits&64 != 0 {
+		result |= event.ModCapsLock
+	}
+	if bits&128 != 0 {
+		result |= event.ModNumLock
+	}
 	return result
 }
 
 // parseKittyKey decodes one CSI u key event from the kitty keyboard
-// protocol's disambiguate level — the only level the backend enables. At
-// that level the terminal uses CSI u exclusively for keys legacy encodings
-// could not express unambiguously: Esc, Esc and Alt+key, Ctrl-modified
-// letter keys, and Enter/Tab/Backspace carrying modifiers. Plain text and
-// functional keys keep their legacy encodings, so functional codepoints
-// (57344 and up) cannot arrive here; they still decode as unknown rather
-// than as junk runes, because a misbehaving terminal must not inject
-// private-use runes into a text field.
+// protocol's disambiguate and event-type levels — the two flags the
+// backend enables. At those levels the terminal uses CSI u exclusively
+// for keys legacy encodings could not express unambiguously: Esc and
+// Alt+key, Ctrl-modified letter keys, and Enter/Tab/Backspace carrying
+// modifiers. Plain text and functional keys keep their legacy encodings,
+// so functional codepoints (57344 and up) decode through the unknown
+// guard below rather than as junk runes, because a misbehaving terminal
+// must not inject private-use runes into a text field.
 //
-// The event-type and associated-text parameters belong to protocol levels
-// the backend never enables, so their absence is the spec and their
-// presence is decoded defensively: an auto-repeat coalesces into
-// KeyEvent.Repeat, and a release or anything unrepresentable surfaces as
-// one unknown key — the same honest cost a late probe report pays. The
-// query reply shape, CSI ? flags u, is rejected by the leading-parameter
-// check and falls through to the unknown-key fallback.
+// The event type nests as the second colon sub-parameter of the modifier
+// field — CSI 27;1:3u is a release — and some early implementations
+// trailed it as a third semicolon field, so both spellings are read and
+// only the spec's values 1-3 are honoured: press, auto-repeat, release.
+// Enter, Tab, and Backspace keep legacy bytes and never report releases
+// at these levels (the spec's shell-safety exception), so a release
+// carrying their codes is still decoded honestly rather than trusted.
+// The associated-text parameter belongs to a level the backend never
+// enables, so its absence is the spec and its presence is ignored.
+//
+// The query reply shape, CSI ? flags u, is rejected by the
+// leading-parameter check and falls through to the unknown-key fallback.
 func parseKittyKey(sequence string) (event.Event, bool) {
 	if len(sequence) < 4 || sequence[len(sequence)-1] != 'u' {
 		return event.Event{}, false
@@ -283,33 +300,47 @@ func parseKittyKey(sequence string) (event.Event, bool) {
 			mod = decodeModifier(value)
 		}
 	}
-	repeat := uint16(1)
-	if len(fields) > 2 {
-		value, _ := kittyNumber(fields[2])
-		switch value {
-		case 1: // press
-		case 2: // auto-repeat: one event coalesces the whole burst
-			repeat = 2
-		default: // release or garbage the backend never asked for
-			return event.KeyPress(event.KeyUnknown, 0), true
+	action := event.ActionPress
+	if len(fields) > 1 {
+		eventType, typed := kittyEventType(fields[1])
+		if !typed && len(fields) > 2 {
+			// The trailing semicolon field is the pre-standard spelling;
+			// honour it only when the canonical sub-parameter is absent.
+			value, parsed := kittyNumber(fields[2])
+			if !parsed {
+				// Unparseable trailing field: the 6.1 contract treated that
+				// as an unknown key, and a key nobody asked for stays
+				// unknown.
+				return event.KeyPress(event.KeyUnknown, 0), true
+			}
+			eventType, typed = value, true
+		}
+		if typed {
+			switch eventType {
+			case 1: // press
+			case 2: // auto-repeat: another activation, not a second press
+				action = event.ActionRepeat
+			case 3: // release: decoded in full for callers that opt in
+				action = event.ActionRelease
+			default:
+				return event.KeyPress(event.KeyUnknown, 0), true
+			}
 		}
 	}
-	// The fourth field (associated text) belongs to a level the backend
-	// never pushes; it is ignored rather than trusted.
 	switch code {
 	case 27:
-		return kittyKey(event.KeyEscape, mod, repeat), true
+		return kittyKey(event.KeyEscape, mod, action), true
 	case 13:
-		return kittyKey(event.KeyEnter, mod, repeat), true
+		return kittyKey(event.KeyEnter, mod, action), true
 	case 127:
-		return kittyKey(event.KeyBackspace, mod, repeat), true
+		return kittyKey(event.KeyBackspace, mod, action), true
 	case 9:
 		if mod&event.ModShift != 0 {
 			// Shift+Tab normalizes to BackTab without the shift bit so the
 			// event matches the legacy CSI Z encoding of the same key.
-			return kittyKey(event.KeyBackTab, mod&^event.ModShift, repeat), true
+			return kittyKey(event.KeyBackTab, mod&^event.ModShift, action), true
 		}
-		return kittyKey(event.KeyTab, mod, repeat), true
+		return kittyKey(event.KeyTab, mod, action), true
 	}
 	// Private use area U+E000..U+F8FF is exactly where the kitty protocol
 	// numbers its functional keys (57344 and up). Functional keys keep
@@ -319,14 +350,19 @@ func parseKittyKey(sequence string) (event.Event, bool) {
 	if code < 32 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) || (code >= 57344 && code <= 63743) {
 		return event.KeyPress(event.KeyUnknown, 0), true
 	}
-	key := kittyKey(event.KeyRune, mod, repeat)
+	key := kittyKey(event.KeyRune, mod, action)
 	key.Key.Rune = rune(code)
 	return key, true
 }
 
-// kittyKey builds the key event shape every CSI u decode shares.
-func kittyKey(code event.KeyCode, mod event.Mod, repeat uint16) event.Event {
-	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Mod: mod, Repeat: repeat}}
+// kittyKey builds the key event shape every CSI u decode shares. A
+// release reports no presses, so its coalesced repeat count is zero.
+func kittyKey(code event.KeyCode, mod event.Mod, action event.KeyAction) event.Event {
+	repeat := uint16(1)
+	if action == event.ActionRelease {
+		repeat = 0
+	}
+	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Mod: mod, Action: action, Repeat: repeat}}
 }
 
 // kittyNumber reads one CSI u parameter, tolerating the colon-separated
@@ -337,6 +373,21 @@ func kittyNumber(field string) (int, bool) {
 		field = field[:cut]
 	}
 	value, err := strconv.Atoi(field)
+	if err != nil || value < 0 {
+		return 0, false
+	}
+	return value, true
+}
+
+// kittyEventType reads the event-type sub-parameter of the CSI u modifier
+// field — the canonical wire form nests it after a colon (CSI 97;1:3u) —
+// and reports ok=false when the field carries no sub-parameter.
+func kittyEventType(field string) (int, bool) {
+	parts := strings.SplitN(field, ":", 3)
+	if len(parts) < 2 {
+		return 0, false
+	}
+	value, err := strconv.Atoi(parts[1])
 	if err != nil || value < 0 {
 		return 0, false
 	}

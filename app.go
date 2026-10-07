@@ -151,12 +151,23 @@ func WithReducedMotion(reduced bool) Option {
 	return func(config *config) error { config.reducedMotion = reduced; return nil }
 }
 
+// WithKeyReleases controls whether key release events reach the model.
+// Terminals that support the kitty keyboard protocol report releases for
+// every non-text key; by default the run loop filters them so every model
+// sees the same press and auto-repeat stream a legacy terminal produces.
+// Auto-repeat events pass through regardless — key repeat is input, not
+// release noise.
+func WithKeyReleases(enabled bool) Option {
+	return func(config *config) error { config.keyReleases = enabled; return nil }
+}
+
 type config struct {
 	backend                       Backend
 	input, output                 *os.File
 	maxFPS, maxWidth, maxHeight   int
 	fallbackWidth, fallbackHeight int
 	reducedMotion                 bool
+	keyReleases                   bool
 }
 
 func defaultConfig() config {
@@ -357,6 +368,12 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 		case next := <-events:
 			if next.Kind == event.Error {
 				return next.Err
+			}
+			if !settings.keyReleases && next.Kind == event.Key && next.Key.Action == event.ActionRelease {
+				// A release carries no activation: models written against
+				// legacy terminals would see every binding fire twice.
+				// Opting in via WithKeyReleases restores the raw stream.
+				continue
 			}
 			if done, err := applyEvent(model, next, settings, &width, &height, &dirty, startCommand); done || err != nil {
 				return err

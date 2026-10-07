@@ -71,9 +71,54 @@ const (
 	KeyF10
 	KeyF11
 	KeyF12
+	KeyF13
+	KeyF14
+	KeyF15
+	KeyF16
+	KeyF17
+	KeyF18
+	KeyF19
+	KeyF20
+	KeyF21
+	KeyF22
+	KeyF23
+	KeyF24
+	KeyF25
+	KeyF26
+	KeyF27
+	KeyF28
+	KeyF29
+	KeyF30
+	KeyF31
+	KeyF32
+	KeyF33
+	KeyF34
+	KeyF35
+	KeyCapsLock
+	KeyScrollLock
+	KeyNumLock
+	KeyPrintScreen
+	KeyPause
+	KeyMenu
+	KeyMediaPlay
+	KeyMediaPause
+	KeyMediaPlayPause
+	KeyMediaReverse
+	KeyMediaStop
+	KeyMediaFastForward
+	KeyMediaRewind
+	KeyMediaTrackNext
+	KeyMediaTrackPrevious
+	KeyMediaRecord
+	KeyVolumeDown
+	KeyVolumeUp
+	KeyVolumeMute
 )
 
-// Mod is a bit set of keyboard or pointer modifiers.
+// Mod is a bit set of keyboard or pointer modifiers. The eight bits mirror
+// the kitty keyboard protocol's modifier set: shift, alt, ctrl, and super
+// carry intent; hyper and meta are their extended kin; the two lock bits
+// report keyboard state that enhanced terminals attach to non-text keys.
 type Mod uint8
 
 const (
@@ -81,14 +126,33 @@ const (
 	ModAlt
 	ModCtrl
 	ModSuper
+	ModHyper
+	ModMeta
+	ModCapsLock
+	ModNumLock
 )
 
-// KeyEvent describes one key press. Repeat is greater than one when the
-// platform reports a coalesced auto-repeat.
+// KeyAction distinguishes a key press from a platform-reported auto-repeat
+// or release. Legacy input produces presses only, so ActionPress is the
+// zero value and every KeyEvent built without a terminal-reported action
+// decodes as a press.
+type KeyAction uint8
+
+const (
+	ActionPress KeyAction = iota
+	ActionRepeat
+	ActionRelease
+)
+
+// KeyEvent describes one key event. Action separates press, auto-repeat,
+// and release. Repeat is greater than one when a platform reports a
+// coalesced auto-repeat burst; a release reports no presses, so its Repeat
+// is zero.
 type KeyEvent struct {
 	Code   KeyCode
 	Rune   rune
 	Mod    Mod
+	Action KeyAction
 	Repeat uint16
 }
 
@@ -98,7 +162,7 @@ func (k KeyEvent) Is(code KeyCode, modifiers Mod) bool {
 }
 
 func (k KeyEvent) String() string {
-	parts := make([]string, 0, 3)
+	parts := make([]string, 0, 8)
 	if k.Mod&ModCtrl != 0 {
 		parts = append(parts, "ctrl")
 	}
@@ -108,14 +172,43 @@ func (k KeyEvent) String() string {
 	if k.Mod&ModShift != 0 {
 		parts = append(parts, "shift")
 	}
-	return strings.Join(append(parts, keyName(k)), "+")
+	if k.Mod&ModSuper != 0 {
+		parts = append(parts, "super")
+	}
+	if k.Mod&ModHyper != 0 {
+		parts = append(parts, "hyper")
+	}
+	if k.Mod&ModMeta != 0 {
+		parts = append(parts, "meta")
+	}
+	if k.Mod&ModCapsLock != 0 {
+		parts = append(parts, "caps-lock")
+	}
+	if k.Mod&ModNumLock != 0 {
+		parts = append(parts, "num-lock")
+	}
+	name := strings.Join(append(parts, keyName(k)), "+")
+	if k.Action == ActionRelease {
+		name = "released " + name
+	}
+	return name
 }
 
 func keyName(k KeyEvent) string {
 	if k.Code == KeyRune {
 		return string(k.Rune)
 	}
-	names := [...]string{"unknown", "rune", "enter", "escape", "backspace", "tab", "backtab", "up", "down", "left", "right", "home", "end", "pageup", "pagedown", "insert", "delete", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"}
+	names := [...]string{
+		"unknown", "rune", "enter", "escape", "backspace", "tab", "backtab", "up", "down", "left", "right", "home", "end",
+		"pageup", "pagedown", "insert", "delete",
+		"f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+		"f13", "f14", "f15", "f16", "f17", "f18", "f19", "f20", "f21", "f22", "f23", "f24",
+		"f25", "f26", "f27", "f28", "f29", "f30", "f31", "f32", "f33", "f34", "f35",
+		"capslock", "scrolllock", "numlock", "printscreen", "pause", "menu",
+		"mediaplay", "mediapause", "mediaplaypause", "mediareverse", "mediastop",
+		"mediafastforward", "mediarewind", "mediatracknext", "mediatrackprevious", "mediarecord",
+		"volumedown", "volumeup", "volumemute",
+	}
 	if int(k.Code) < len(names) {
 		return names[k.Code]
 	}

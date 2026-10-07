@@ -405,7 +405,15 @@ func (c *Context) Handle(next event.Event) (Action, bool) {
 
 func (c *Context) handleKeyLocked(next event.Event) (Action, bool) {
 	key := next.Key
-	plain := key.Mod&(event.ModCtrl|event.ModAlt|event.ModSuper) == 0
+	if key.Action == event.ActionRelease {
+		// A release carries no activation semantics: bindings, focus
+		// movement, and editors react to presses and auto-repeats only.
+		// Auto-repeats pass — key repeat is more input, not release noise.
+		return Action{}, false
+	}
+	// Lock bits report keyboard state, not intent: caps-lock must not
+	// change activation semantics, so plain tests the intent modifiers.
+	plain := key.Mod&(event.ModCtrl|event.ModAlt|event.ModSuper|event.ModHyper|event.ModMeta) == 0
 	if key.Code == event.KeyEscape && c.committed.modal.id != "" {
 		return Action{Target: c.committed.modal.id, Kind: Dismiss, Event: next}, true
 	}

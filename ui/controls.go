@@ -70,9 +70,13 @@ type ListState struct {
 }
 
 // Apply mutates selection/offset for a routed List action. rows is the number
-// of visible item rows. Enter/space activates without moving selection.
+// of visible item rows. Enter/space activates without moving selection. Key
+// releases are inert: they move nothing and activate nothing.
 func (s *ListState) Apply(action Action, count, rows int) (changed, activated bool) {
 	if s == nil {
+		return false, false
+	}
+	if action.Event.Kind == event.Key && action.Event.Key.Action == event.ActionRelease {
 		return false, false
 	}
 	beforeSelected, beforeOffset := s.Selected, s.Offset

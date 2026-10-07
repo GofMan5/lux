@@ -29,8 +29,12 @@ func (s *ScrollState) Range(content, rows int) VisibleRange {
 // Apply scrolls in response to a routed Scroll action. False for a movement at
 // a boundary lets the caller offer that same key or wheel action to a parent
 // viewport; pointer presses only focus and must not be propagated this way.
+// Key releases are inert and report no movement.
 func (s *ScrollState) Apply(action Action, content, rows int) bool {
 	if s == nil {
+		return false
+	}
+	if action.Event.Kind == event.Key && action.Event.Key.Action == event.ActionRelease {
 		return false
 	}
 	before := s.Offset
