@@ -70,7 +70,7 @@ type resizeWatcher struct {
 	signals chan os.Signal
 }
 
-func (w *resizeWatcher) start(ctx context.Context, file *os.File, events chan<- event.Event) {
+func (w *resizeWatcher) start(ctx context.Context, file *os.File, resizes chan event.Event) {
 	w.signals = make(chan os.Signal, 1)
 	signal.Notify(w.signals, syscall.SIGWINCH)
 	go func(signals <-chan os.Signal) {
@@ -83,10 +83,11 @@ func (w *resizeWatcher) start(ctx context.Context, file *os.File, events chan<- 
 				if err != nil {
 					continue
 				}
-				select {
-				case events <- event.ResizeTo(width, height):
-				default:
-				}
+				// The signal is already consumed, so a non-blocking send
+				// could drop the only notification; the last-wins slot keeps
+				// the newest size pending no matter how deep the input
+				// queue is.
+				deliverResize(resizes, event.ResizeTo(width, height))
 			}
 		}
 	}(w.signals)

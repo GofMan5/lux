@@ -15,9 +15,14 @@ import (
 
 // defaultProbeTimeout bounds capability negotiation. A terminal that answers
 // the probe usually does so in single-digit milliseconds; slow links spend the
-// rest as grace. A report arriving after the deadline is ignored on purpose:
-// keystrokes typed during the probe are still replayed, only late reports are
-// dropped, so the worst case is a startup delay — never a stuck Open.
+// rest as grace. A report that arrives after the deadline is not filtered:
+// suppressing report-shaped sequences then would also eat pasted input that
+// merely looks like one. A late report instead reaches the parser, which
+// knows neither the DA1 'c' nor the DECRPM '$y' final byte, so it surfaces as
+// a single unknown-key event — the honest cost on links slower than the
+// budget, where raising LUX_TUI_PROBE_TIMEOUT is the real remedy. Keystrokes
+// typed during the probe are still replayed, so the worst case is a startup
+// delay plus that one cosmetic event — never a stuck Open.
 const defaultProbeTimeout = 150 * time.Millisecond
 
 // probeRequest is written once. The primary device attributes report proves
@@ -160,12 +165,15 @@ func parseProbeReply(stream []byte) (probeReply, []byte) {
 
 // reportEnd locates the final byte of a report candidate, the first byte in
 // the CSI final range. DECRPM's '$' introducer sits below that range, so the
-// scan naturally lands on 'y'. The scan window matches the parser's
-// maxSequence: Windows Terminal answers DA1 with a 36-39 byte report
+// scan naturally lands on 'y'. The window must stay above real report sizes —
+// Windows Terminal answers DA1 with a 36-39 byte report
 // (?61;4;6;7;14;21;22;23;24;28;32;42;52c), so a shorter cap would reject a
-// complete, well-formed reply as leftover, burn the whole probe timeout, and
-// leak the reply as keystrokes. The body validators and maxProbeStream remain
-// the real guards.
+// complete reply as leftover, burn the whole probe timeout, and leak the
+// reply as keystrokes. Beyond that it is deliberately one byte stricter than
+// the parser's maxSequence: a report that long is pathological, and letting
+// it stay leftover surfaces it as one unknown key instead of classifying a
+// shape that long. The body validators and maxProbeStream remain the real
+// guards.
 func reportEnd(rest []byte) (int, bool) {
 	for i := 3; i < len(rest) && i < maxSequence; i++ {
 		if rest[i] >= 0x40 && rest[i] <= 0x7e {

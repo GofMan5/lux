@@ -189,3 +189,93 @@ func TestTerminalSizeAnswersThroughInputHandle(t *testing.T) {
 		t.Fatalf("terminalSize through the input handle = %dx%d, want positive", width, height)
 	}
 }
+
+// TestDeliverResizeIsLastWins pins the resize watcher's one-slot channel:
+// delivering into a slot that already holds a resize must replace it with
+// the newer size, not drop the new one. This is the guarantee that makes a
+// resize survive an input queue sitting 64 events deep — the old
+// non-blocking send into the shared queue lost the resize exactly there,
+// and neither watcher could retry it (the Windows poller had already
+// advanced its baseline, Unix had already consumed the SIGWINCH).
+func TestDeliverResizeIsLastWins(t *testing.T) {
+	stale := event.ResizeTo(80, 24)
+	fresh := event.ResizeTo(100, 50)
+
+	slot := make(chan event.Event, 1)
+	deliverResize(slot, stale)
+	if got := <-slot; got.Width != stale.Width || got.Height != stale.Height {
+		t.Fatalf("delivery into empty slot = %dx%d, want %dx%d", got.Width, got.Height, stale.Width, stale.Height)
+	}
+
+	slot = make(chan event.Event, 1)
+	slot <- stale
+	deliverResize(slot, fresh)
+	got := <-slot
+	if got.Width != fresh.Width || got.Height != fresh.Height {
+		t.Fatalf("delivery into occupied slot = %dx%d, want the newer %dx%d", got.Width, got.Height, fresh.Width, fresh.Height)
+	}
+}
+
+// TestNextEventDeliversResizeBehindFullQueue pins the merge: a resize that
+// lands while the shared input queue is full must still reach the app, and
+// ahead of the buffered keystrokes, because it carries the newest terminal
+// truth. With the old design the watcher's non-blocking send was silently
+// dropped and the layout stayed stale until the next size change.
+func TestNextEventDeliversResizeBehindFullQueue(t *testing.T) {
+	backend := &Backend{
+		opened:  true,
+		plain:   false,
+		events:  make(chan event.Event, 64),
+		resizes: make(chan event.Event, 1),
+	}
+	for i := 0; i < cap(backend.events); i++ {
+		backend.events <- event.RuneKey('a', 0)
+	}
+	deliverResize(backend.resizes, event.ResizeTo(90, 30))
+
+	next, err := backend.NextEvent(context.Background())
+	if err != nil {
+		t.Fatalf("NextEvent with full queue and pending resize: %v", err)
+	}
+	if next.Kind != event.Resize {
+		t.Fatalf("first event with pending resize = %v, want a resize", next.Kind)
+	}
+	if next.Width != 90 || next.Height != 30 {
+		t.Fatalf("pending resize = %dx%d, want 90x30", next.Width, next.Height)
+	}
+
+	next, err = backend.NextEvent(context.Background())
+	if err != nil {
+		t.Fatalf("NextEvent after the resize: %v", err)
+	}
+	if next.Kind == event.Resize {
+		t.Fatal("queued keystrokes were displaced by a stale resize replay")
+	}
+}
+
+// TestPresentAbandonsSlotWaitWhenContextDone pins the bounded slot acquire.
+// Present used to take the write slot with a plain blocking send, so a
+// second Present parked behind a writer stuck in one Write call forever —
+// the exact hang Close avoids through its bounded restoreGrace acquire. The
+// slot here is deliberately held for the whole test, and the only way out
+// is the context.
+func TestPresentAbandonsSlotWaitWhenContextDone(t *testing.T) {
+	backend := &Backend{}
+	slot := backend.writeSlotChan()
+	slot <- struct{}{} // a writer stuck in one long Write call
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	frame := render.NewBuffer(4, 1)
+
+	done := make(chan error, 1)
+	go func() { done <- backend.Present(ctx, frame) }()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Present behind a held slot = %v, want %v", err, context.DeadlineExceeded)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("Present parked forever behind a held write slot")
+	}
+}

@@ -57,9 +57,10 @@ func duplicateFile(file *os.File, name string) (*os.File, error) {
 // output handle and fails with an invalid-handle error on the input handle,
 // so a caller holding the input side — the resize poller, the probe-time
 // size snapshot — resolves the real answer by opening the console's own
-// output. The open is a few microseconds, noise next to the poller's 100 ms
-// cadence, and it also keeps Size() honest when stdout is redirected while a
-// console is still attached.
+// output. Measured under ambient load, the fallback cycle costs tens of
+// microseconds (open, query, close), about 1.4 ms per second at the poller's
+// 100 ms cadence, and it also keeps Size() honest when stdout is redirected
+// while a console is still attached.
 func terminalSize(file *os.File) (int, int, error) {
 	if width, height, err := term.GetSize(int(file.Fd())); err == nil {
 		return width, height, nil
@@ -107,7 +108,7 @@ type resizeWatcher struct {
 	cancel context.CancelFunc
 }
 
-func (w *resizeWatcher) start(parent context.Context, file *os.File, events chan<- event.Event) {
+func (w *resizeWatcher) start(parent context.Context, file *os.File, resizes chan event.Event) {
 	ctx, cancel := context.WithCancel(parent)
 	w.cancel = cancel
 	go func() {
@@ -123,11 +124,11 @@ func (w *resizeWatcher) start(parent context.Context, file *os.File, events chan
 				if err != nil || nextWidth == width && nextHeight == height {
 					continue
 				}
+				// Advancing the baseline before the delivery is safe:
+				// deliverResize's last-wins slot always accepts the newest
+				// size, so a deep input queue can delay it but never drop it.
 				width, height = nextWidth, nextHeight
-				select {
-				case events <- event.ResizeTo(width, height):
-				default:
-				}
+				deliverResize(resizes, event.ResizeTo(width, height))
 			}
 		}
 	}()

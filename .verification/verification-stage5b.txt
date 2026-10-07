@@ -223,12 +223,17 @@ commit, pinned by tests):
   exact dead handle, asserts a positive size; ran live on this console:
   PASS — it fails without the fallback). The poller call path is the same
   terminalSize, three lines of glue around it.
-- B-pin gap (self-found, closed here): the round-2 B fix had no test that
+- B-pin gap (self-found, narrowed here): the round-2 B fix had no test that
   fails if the pre/post comparison in Open is mutated. Fix: the decision
   is extracted into pure resizeDuringProbe(sizeKnown, pre, post, postErr)
   and table-tested by TestResizeDuringProbe (5 rows: unknown pre size
   quiet, failed post query quiet, unchanged quiet, width change, height
-  change — asserting Kind/Width/Height of the synthesized event).
+  change — asserting Kind/Width/Height of the synthesized event). Round-4
+  honesty note: this pins the comparison, not the Open wiring — deleting
+  the snapshot block and the call site together keeps the whole suite
+  green (a2f02b66's mutation M3), so the wiring is review-verified only;
+  an Open-level pin would need fakes for MakeRaw/VT/console detection,
+  which the repo's no-seam test style does not buy.
 - NIT 1 (documented, not fixed): a probe reply split exactly at the
   deadline (head delivered, tail >35 ms later on a slow ssh) is returned
   unclassified — leftover prefill replays the head, the parser shows the
@@ -244,3 +249,126 @@ one errcheck fix: defer-close of the CONOUT$ file), race terminal+render
 ok, GOOS linux/darwin/windows build ok (compile gate; the binaries are
 reproduced only at stage close). No benchmarks re-run: the change touches
 startup and a 10 Hz poller, not the per-frame path.
+
+11. Round-4 adversarial review (post-commit tree: 063dfa6 working tree)
+---------------------------------------------------------------------
+Two independent reviewers: 52fee989 (verdict below, statically traced,
+tests not run) and a2f02b66 (targeted at exactly the 063dfa6 diff:
+CONOUT$ fallback, resizeDuringProbe, pins, comments; verdict appended
+after it landed).
+
+52fee989 verdict: 0 BUG, 2 RISK, 3 NIT. Findings and disposition (all
+fix-forward, never amend):
+- RISK 2 (fixed): a resize delivered while the app is still draining a
+  64-deep event queue was silently DROPPED and never retried — the
+  watchers' send was non-blocking into the shared queue, the Windows
+  poller had already advanced its size baseline past the change, and
+  Unix had already consumed the SIGWINCH. Worst case is a paste plus a
+  resize: the layout stays stale until the NEXT size change. Fix: the
+  watchers now deliver into a dedicated one-slot last-wins channel.
+  deliverResize(slot, resize) tries a plain send; if the slot holds a
+  stale size it drains it and retries, so the newest size is delayed by
+  queue depth, never lost. NextEvent polls the resize slot with
+  priority over the shared queue (a resize carries the newest terminal
+  truth and would otherwise sit behind up to 64 buffered keys), then
+  selects on both channels; the shared post-processing (closed check,
+  consecutive-resize coalescing, zero-At default, Error kind) moved into
+  deliverEvent so both paths share one implementation. Pinned by
+  TestDeliverResizeIsLastWins (empty-slot and occupied-slot rows) and
+  TestNextEventDeliversResizeBehindFullQueue (64 queued keys, resize
+  delivered first, keys not displaced after).
+- NIT 1 (fixed): a resize landing in the microseconds between Open's
+  post-probe snapshot and the watcher registration was lost on both
+  platforms (Unix: SIGWINCH before signal.Notify; Windows: poller
+  baseline already reads the new size, no diff, no event). Fix: the
+  watcher now starts BEFORE the post-probe snapshot, and the replay
+  offers its event into the resize slot as a plain non-blocking send —
+  the watcher's report is authoritative and a replay never displaces
+  it; equal sizes coalesce in NextEvent. No test: the window is real
+  microseconds; the ordering is structural.
+- NIT 3 (fixed): Present acquired the write slot with a plain blocking
+  send — a second Present parked behind a writer stuck in one long
+  Write call forever, the exact hang Close avoids with its bounded
+  restoreGrace acquire. Fix: the acquire now selects on ctx.Done() and
+  returns ctx.Err() without touching the slot. Pinned by
+  TestPresentAbandonsSlotWaitWhenContextDone (slot deliberately held,
+  Present bails on a 50 ms deadline; with the old code it parks to the
+  10 s hang timeout and fails).
+- RISK 1 (fixed as documentation): the defaultProbeTimeout comment
+  claimed late reports are "dropped on purpose". They are not: a report
+  arriving after the deadline is fully read by readLoop and parses as a
+  complete CSI with an unknown final ('c' for DA1, '$y' for DECRPM), so
+  the app sees 1–3 phantom KeyUnknown events — on any link with RTT
+  beyond the 150 ms budget, every launch. Filtering report-shaped
+  sequences at readLoop would also eat pasted input that merely looks
+  like a report, so the correct fix is the truth: the comment now
+  states the phantom-key cost and points slow links at
+  LUX_TUI_PROBE_TIMEOUT. Distinct from the torn-report case already
+  documented at the negotiate loop (report split exactly at the
+  deadline replays as a leading ESC plus literal runes).
+- NIT 2 (documented as deliberate): reportEnd's scan window is one byte
+  stricter than the parser's maxSequence (i < vs <=). The comment
+  previously claimed the two "match". The strictness is kept on
+  purpose: a report that long is pathological (real DA1s run 36-39
+  bytes), and leaving it in leftover surfaces it as one unknown key
+  instead of classifying a shape that long; the body validators and
+  maxProbeStream remain the real guards.
+- Reviewer's VERIFIED-CORRECT list (negotiation loop and deadline
+  unwind, maxProbeStream cap, parseProbeReply grammar and leftover
+  replay, env maps, featureFromStatus, Open ordering and unwind, Close
+  bounded restore, NextEvent dedupe, Present slot serialization and
+  model discard, readLoop prefill and escape-delay, encoder sync
+  gating, first-frame nil guards, detectCapabilities, existing pins)
+  accepted as given.
+
+a2f02b66 verdict (independent review of exactly `git show 063dfa6`,
+run on a pristine git-archive snapshot in %TEMP%, repo untouched;
+0 BUG, 0 RISK, 3 NIT):
+- Mutation matrix, each mutation restored between runs: removing the
+  CONOUT$ fallback → pin FAILS ("handle is invalid"); dropping the
+  !sizeKnown or postErr guards → pin FAILS the matching row;
+  O_RDWR→O_WRONLY → pin FAILS ("access is denied" — GetConsoleScreenBufferInfo
+  needs read access, so O_RDWR is required, not conventional; O_RDONLY
+  would also query fine); deleting the Open wiring → suite stays GREEN
+  (the gap below). Baseline all PASS.
+- Empirical probes on Windows: CONOUT$ answers through the attached
+  console regardless of stdout redirection (the harness itself ran with
+  piped stdout, 120x50); a detached no-console process fails the
+  CONOUT$/CONIN$ opens with errno 6 cleanly, no hang or panic; a
+  4-goroutine 1.5 s hammer ran 20146 open/query/close fallback cycles
+  with zero errors; the full fallback cycle costs 66-140 µs under
+  ambient load (~1.4 ms/s at 10 Hz) — the poller's deferred close is a
+  non-issue; error replacement in terminalSize preserves the more
+  accurate (CONOUT$) diagnostic identity; NextEvent dedupe cannot eat
+  the replayed event (lastResize not initialized in Open, Close resets
+  lastResizeOK).
+- NIT 1 (fixed): the terminalSize comment claimed the CONOUT$ open is
+  "a few microseconds"; measured it is 66-140 µs. Comment now states
+  the measured tens-of-microseconds figure and the 1.4 ms/s budget.
+- NIT 2 (fixed): Size()'s doc said "Redirected streams do not have
+  one", stale since 063dfa6 — on Windows, piped stdout with an attached
+  console now answers through the console. Doc reworded to name the
+  Windows case explicitly.
+- NIT 3 (fixed as documentation): the section-10 claim "B-pin gap
+  closed here" overstated: the pin covers resizeDuringProbe, not the
+  Open wiring (deleting the wiring keeps the suite green). Section 10
+  now states the boundary and why an Open-level pin is not bought
+  (it would need MakeRaw/VT/console-detection fakes, against the
+  repo's no-seam test style).
+- Notably, the reviewer independently confirmed the pre-existing
+  microseconds-wide post-snapshot→watcher-registration gap that the
+  round-4 NIT-1 fix above removes (watcher now registers before the
+  post-probe snapshot).
+
+Gates re-run on the round-4 fix-forward tree: gofmt clean, vet clean,
+go test -count=1 ./... (10 packages ok, the three new pins pass:
+TestDeliverResizeIsLastWins, TestNextEventDeliversResizeBehindFullQueue,
+TestPresentAbandonsSlotWaitWhenContextDone — the last one measured its
+50 ms bail, proving it actually waited on the held slot),
+golangci-lint 0 issues, race ./internal/terminal/ ./render/ ok,
+GOOS linux/darwin/windows compile ok (round-2 hashes stand: the
+rebuild-and-hash ceremony runs only at stage close; the round-4 change
+does not touch the per-frame path, and no benchmarks were re-run under
+ambient load).
+
+

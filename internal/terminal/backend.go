@@ -41,6 +41,7 @@ type Backend struct {
 	previous     *render.Buffer
 	parser       *parser
 	events       chan event.Event
+	resizes      chan event.Event
 	cancel       context.CancelFunc
 	readDone     chan struct{}
 	resize       resizeWatcher
@@ -52,7 +53,7 @@ type Backend struct {
 // New constructs a closed backend. Nil files are allowed for tests and plain
 // output-only use, but an interactive Open requires both terminal handles.
 func New(input *os.File, output *os.File) *Backend {
-	return &Backend{input: input, output: output, parser: newParser(), events: make(chan event.Event, 64)}
+	return &Backend{input: input, output: output, parser: newParser(), events: make(chan event.Event, 64), resizes: make(chan event.Event, 1)}
 }
 
 // Open activates raw input and terminal modes when both handles are terminals.
@@ -140,15 +141,25 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	b.cancel = cancel
 	b.readDone = make(chan struct{})
 	b.events = make(chan event.Event, 64)
+	b.resizes = make(chan event.Event, 1)
+	// The watcher registers before the post-probe snapshot is taken, so a
+	// resize landing in the microseconds between the two is caught by
+	// whichever of them sees it first: Unix buffers the SIGWINCH, the
+	// Windows poller notices the change on its first tick, and the replay
+	// below covers everything before the watcher existed.
+	b.resize.start(readCtx, b.input, b.resizes)
 	// A resize that landed inside the probe window is replayed here as the
 	// first event, so the app's first layout reflects the real terminal size
-	// instead of the pre-probe snapshot; the channel has no reader yet, but a
-	// single event fits the 64-slot buffer and NextEvent drains it.
+	// instead of the pre-probe snapshot. The offer is plain, not
+	// deliverResize: the watcher's report is the authoritative one, so a
+	// replay never displaces it, and equal sizes coalesce in NextEvent.
 	postWidth, postHeight, postErr := terminalSize(b.input)
 	if resize, resized := resizeDuringProbe(sizeKnown, preWidth, preHeight, postWidth, postHeight, postErr); resized {
-		b.events <- resize
+		select {
+		case b.resizes <- resize:
+		default:
+		}
 	}
-	b.resize.start(readCtx, b.input, b.events)
 	// Keystrokes that raced the probe travel to the read loop as a prefill:
 	// Open still holds the mutex here, so replaying events into the channel
 	// in place could wedge Open against a full buffer on a large paste, and
@@ -170,6 +181,32 @@ func resizeDuringProbe(sizeKnown bool, preWidth, preHeight, postWidth, postHeigh
 	return event.ResizeTo(postWidth, postHeight), true
 }
 
+// deliverResize writes a resize into the watcher's one-slot channel with
+// last-wins semantics. The shared input queue can sit 64 events deep while
+// the app drains a paste, and a resize that merely attempted a non-blocking
+// send would be dropped and never retried: the Windows poller advances its
+// size baseline before the send and Unix has already consumed the SIGWINCH.
+// Overwriting the slot instead guarantees the newest size is only delayed
+// by the queue depth, never lost; NextEvent coalesces the duplicates that
+// delivers. Overwriting the slot instead guarantees the newest size is only
+// delayed by the queue depth, never lost; NextEvent coalesces the duplicates
+// that leaves behind. The slot is bidirectional because draining the stale
+// event is half of the last-wins swap.
+func deliverResize(slot chan event.Event, resize event.Event) {
+	select {
+	case slot <- resize:
+	default:
+		select {
+		case <-slot:
+		default:
+		}
+		select {
+		case slot <- resize:
+		default:
+		}
+	}
+}
+
 // NextEvent waits for the next decoded input or resize event.
 func (b *Backend) NextEvent(ctx context.Context) (event.Event, error) {
 	if ctx == nil {
@@ -186,35 +223,60 @@ func (b *Backend) NextEvent(ctx context.Context) (event.Event, error) {
 		return event.Event{}, ctx.Err()
 	}
 	for {
+		// A pending resize outranks queued input: it carries the newest
+		// terminal truth, and its one-slot channel would otherwise sit
+		// behind up to 64 buffered key events.
+		select {
+		case next := <-b.resizes:
+			if done, ev, err := b.deliverEvent(next); done {
+				return ev, err
+			}
+			continue
+		default:
+		}
 		select {
 		case <-ctx.Done():
 			return event.Event{}, ctx.Err()
 		case next := <-b.events:
-			b.mu.Lock()
-			stillOpen := b.opened
-			b.mu.Unlock()
-			if !stillOpen {
-				return event.Event{}, errors.New("terminal: backend is closed")
+			if done, ev, err := b.deliverEvent(next); done {
+				return ev, err
 			}
-			if next.Kind == event.Resize {
-				b.mu.Lock()
-				if b.lastResizeOK && next.Width == b.lastResizeW && next.Height == b.lastResizeH {
-					b.mu.Unlock()
-					continue
-				}
-				b.lastResizeW, b.lastResizeH = next.Width, next.Height
-				b.lastResizeOK = true
-				b.mu.Unlock()
+		case next := <-b.resizes:
+			if done, ev, err := b.deliverEvent(next); done {
+				return ev, err
 			}
-			if next.At.IsZero() {
-				next.At = time.Now()
-			}
-			if next.Kind == event.Error {
-				return next, next.Err
-			}
-			return next, nil
 		}
 	}
+}
+
+// deliverEvent applies the post-processing every event shares on its way out
+// of NextEvent: the closed check, resize coalescing against the last size
+// the app actually saw, and the timestamp default. done=false asks the
+// caller to keep waiting — the event was a coalesced duplicate.
+func (b *Backend) deliverEvent(next event.Event) (done bool, ev event.Event, err error) {
+	b.mu.Lock()
+	stillOpen := b.opened
+	b.mu.Unlock()
+	if !stillOpen {
+		return true, event.Event{}, errors.New("terminal: backend is closed")
+	}
+	if next.Kind == event.Resize {
+		b.mu.Lock()
+		if b.lastResizeOK && next.Width == b.lastResizeW && next.Height == b.lastResizeH {
+			b.mu.Unlock()
+			return false, event.Event{}, nil
+		}
+		b.lastResizeW, b.lastResizeH = next.Width, next.Height
+		b.lastResizeOK = true
+		b.mu.Unlock()
+	}
+	if next.At.IsZero() {
+		next.At = time.Now()
+	}
+	if next.Kind == event.Error {
+		return true, next, next.Err
+	}
+	return true, next, nil
 }
 
 // Present renders a frame. Interactive terminals receive changed row runs;
@@ -227,7 +289,14 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		ctx = context.Background()
 	}
 	slot := b.writeSlotChan()
-	slot <- struct{}{}
+	// The acquire honors ctx the same way Close's bounded restoreGrace does:
+	// a Present parked behind a writer stuck in one Write call must surface
+	// the cancellation instead of parking forever.
+	select {
+	case slot <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	defer func() { <-slot }()
 	b.mu.Lock()
 	if !b.opened {
@@ -275,7 +344,11 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	return nil
 }
 
-// Size returns the current terminal size. Redirected streams do not have one.
+// Size returns the current terminal size, preferring the output handle and
+// falling back to the input side. A stream redirected away from the terminal
+// has no size of its own — with the notable Windows case that stdout piped
+// to a file while a console stays attached still answers through that
+// console. When neither side is a terminal, there is no size to report.
 func (b *Backend) Size() (int, int, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
