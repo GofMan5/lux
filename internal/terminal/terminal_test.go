@@ -57,6 +57,41 @@ func TestParserMousePasteFocusAndFunctions(t *testing.T) {
 	}
 }
 
+func TestParserMouseAllMotion(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want event.MouseEvent
+	}{
+		{"hover motion", "\x1b[<35;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseNone}},
+		{"hover motion without flag", "\x1b[<3;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseNone}},
+		{"drag with button", "\x1b[<32;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseLeft}},
+		{"press", "\x1b[<0;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MousePress, Button: event.MouseLeft}},
+		{"release keeps button", "\x1b[<0;5;2m", event.MouseEvent{X: 4, Y: 1, Action: event.MouseRelease, Button: event.MouseLeft}},
+		{"release middle", "\x1b[<1;5;2m", event.MouseEvent{X: 4, Y: 1, Action: event.MouseRelease, Button: event.MouseMiddle}},
+		{"release without button", "\x1b[<3;5;2m", event.MouseEvent{X: 4, Y: 1, Action: event.MouseRelease, Button: event.MouseNone}},
+		{"shifted hover", "\x1b[<39;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseMove, Button: event.MouseNone, Mod: event.ModShift}},
+		{"wheel right", "\x1b[<67;5;2M", event.MouseEvent{X: 4, Y: 1, Action: event.MouseWheel, Button: event.MouseWheelRight}},
+	}
+	for _, tc := range cases {
+		got := newParser().feed([]byte(tc.in), false)
+		if len(got) != 1 || got[0].Kind != event.Mouse {
+			t.Fatalf("%s: events = %#v", tc.name, got)
+		}
+		if got[0].Mouse != tc.want {
+			t.Fatalf("%s: mouse = %#v, want %#v", tc.name, got[0].Mouse, tc.want)
+		}
+	}
+	// Out-of-range and malformed sequences still fall through to the
+	// unknown-key escape hatch.
+	for _, bad := range []string{"\x1b[<0;0;2M", "\x1b[<0;5;0M", "\x1b[<256;5;2M", "\x1b[<0;5;2X", "\x1b[<0;5M"} {
+		got := newParser().feed([]byte(bad), false)
+		if len(got) == 0 || got[0].Kind != event.Key || !got[0].Key.Is(event.KeyUnknown, 0) {
+			t.Fatalf("bad sequence %q decoded as %#v", bad, got)
+		}
+	}
+}
+
 func TestParserBoundedMalformedInput(t *testing.T) {
 	parser := newParser()
 	got := parser.feed(append([]byte{0x1b, '['}, []byte(strings.Repeat("1", maxSequence+5))...), false)
@@ -458,6 +493,11 @@ func FuzzParserNeverPanics(f *testing.F) {
 		"\x1b[57376u", "\x1b[57398;5u", "\x1b[57400u", "\x1b[57414;3u", "\x1b[57427u",
 		"\x1b[57430;1:3u", "\x1b[57441;2u", "\x1b[29~", "\x1b[34;5~", "\x08", "\x1b\x08",
 		"\x1b\t", "\x1b\x1b", "\x1b\x1b[A", "\x1b\x1b[Z", "\x1b\x1b[<0;1;1M",
+		// All-motion mouse shapes: hover without a button, releases, wheels,
+		// and bit combinations past the button cap.
+		"\x1b[<35;3;4M", "\x1b[<3;3;4M", "\x1b[<32;1;2M", "\x1b[<0;1;2m",
+		"\x1b[<67;1;2M", "\x1b[<64;1;2m", "\x1b[<255;1;1M", "\x1b[<256;1;1M",
+		"\x1b[<288;1;1M", "\x1b[<99999999999999999999;1;1M", "\x1b[<0;0;0M",
 	}
 	for _, seed := range kittySeeds {
 		seeds = append(seeds, []byte(seed))

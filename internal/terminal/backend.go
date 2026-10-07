@@ -17,8 +17,12 @@ import (
 )
 
 const (
-	enterTerminal = "\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[?1002h\x1b[?1006h"
-	leaveTerminal = "\x1b[?1006l\x1b[?1002l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[?1049l\x1b[0m"
+	// Mouse tracking asks for 1003 all-motion rather than 1002
+	// motion-while-pressed: hover states need plain pointer motion with no
+	// button held, which 1003 reports as SGR button 35. The 1006 SGR
+	// encoding rides along as before.
+	enterTerminal = "\x1b[?1049h\x1b[?25l\x1b[?1004h\x1b[?2004h\x1b[?1003h\x1b[?1006h"
+	leaveTerminal = "\x1b[?1006l\x1b[?1003l\x1b[?2004l\x1b[?1004l\x1b[?25h\x1b[?1049l\x1b[0m"
 	// kittyEnter pushes the kitty keyboard protocol's disambiguate and
 	// event-type flags (0b11, written as 3): ambiguous keys arrive as
 	// complete CSI u sequences while plain text and functional keys keep

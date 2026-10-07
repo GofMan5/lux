@@ -165,6 +165,34 @@ of a terminal without the protocol (or the reverse) is accepted for now;
 distinguishing them is deferred to DA1-based provenance. Disabling
 negotiation with `LUX_TUI_PROBE_TIMEOUT=off` restores the pure legacy path.
 
+## Mouse
+
+The adapter enables SGR-encoded all-motion tracking (`CSI ? 1003 h` with
+`CSI ? 1006 h` on enter, and the matching resets on every exit path) instead
+of 1002's motion-only-while-pressed, so hover states update without a held
+button:
+
+- plain pointer motion arrives as a move with `MouseNone`: xterm encodes it
+  as button code 35 (the motion bit 32 over the no-button code 3), and the
+  decoder maps that shape to a move instead of mistaking it for a release —
+  only the lowercase `m` final byte ever means release;
+- press, drag, wheel, and modifier semantics are unchanged: drags are moves
+  with the held button, wheels are bit 64 plus a direction, and
+  shift/alt/ctrl ride bits 4/8/16;
+- releases keep the real button: SGR closes a press with the same button code
+  and the `m` final byte, so `Button` reports `Left`/`Middle`/`Right` on
+  release rather than collapsing to `MouseNone` (the no-button code 3 on a
+  release still decodes as `MouseNone`). The built-in widgets treat releases
+  as inert either way;
+- out-of-range or malformed mouse reports fall through to the unknown-key
+  escape hatch, never to a panic or a stuck parser.
+
+A terminal that ignores the 1003 enable degrades to whatever tracking it
+implements on its own; the decoder accepts any SGR report the stream
+carries. Legacy X10-encoded mouse (`ESC [ M` plus three raw bytes) is not
+decoded because SGR is enabled on every path that has a mouse at all, and
+the ancient byte encoding cannot survive raw mode's binary transparency.
+
 ## Required degradation ladder
 
 Future features must preserve meaning in this order:

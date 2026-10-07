@@ -152,7 +152,9 @@ never invent one: a silent or slow terminal keeps the conservative defaults,
 and redirected output skips the probe entirely for the plain-text profile.
 The kitty query is the one enable-only verdict — a flags reply turns on the
 enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
-its C0 alias. Keystrokes that race the probe are replayed in order, never
+its C0 alias. Mouse tracking is all-motion (1003 with SGR 1006): hover states
+follow plain pointer motion, and SGR releases carry the real button.
+Keystrokes that race the probe are replayed in order, never
 dropped. `LUX_TUI_PROBE_TIMEOUT` raises the 150 ms budget or turns
 negotiation off for deterministic runs. Features degrade in this order:
 

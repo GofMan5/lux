@@ -51,6 +51,11 @@ work and the API may still change.
   emulators diverge: `0x08` is Ctrl+Backspace, `CSI 29 ~` is Menu, a
   doubled escape prefixes Alt-modified arrows, and `~` codes 25-34 map to
   F13-F20. Silence keeps the legacy key path untouched.
+- All-motion mouse tracking (`1003` with SGR `1006`): hover states update on
+  plain pointer motion. xterm's no-button motion report (SGR button 35)
+  decodes as a move instead of a phantom release — only the `m` final byte
+  means release — and SGR releases carry the real button instead of
+  collapsing to `MouseNone`.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

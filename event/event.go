@@ -239,7 +239,9 @@ const (
 	MouseWheelRight
 )
 
-// MouseEvent uses zero-based cell coordinates.
+// MouseEvent uses zero-based cell coordinates. Button names the involved
+// button for presses, drags, and SGR releases; pure hover motion carries
+// MouseNone.
 type MouseEvent struct {
 	X      int
 	Y      int

@@ -568,8 +568,17 @@ func parseMouse(sequence string) (event.MouseEvent, bool) {
 	if button&64 != 0 {
 		mouse.Action = event.MouseWheel
 		mouse.Button = [...]event.MouseButton{event.MouseWheelUp, event.MouseWheelDown, event.MouseWheelLeft, event.MouseWheelRight}[base]
-	} else if final == 'm' || base == 3 {
+	} else if final == 'm' {
+		// SGR closes a press with the same button code and the lowercase
+		// final byte, so the button survives the release instead of
+		// collapsing to none.
 		mouse.Action = event.MouseRelease
+		mouse.Button = [...]event.MouseButton{event.MouseLeft, event.MouseMiddle, event.MouseRight, event.MouseNone}[base]
+	} else if base == 3 {
+		// The no-button code with the press final byte is 1003 all-motion
+		// hover: xterm reports plain pointer motion as 32|3 = 35, and only
+		// the 'm' final byte ever means release.
+		mouse.Action = event.MouseMove
 		mouse.Button = event.MouseNone
 	} else {
 		mouse.Button = [...]event.MouseButton{event.MouseLeft, event.MouseMiddle, event.MouseRight, event.MouseNone}[base]

@@ -74,6 +74,20 @@ func TestReverseHitCaptureAndKeyboardFocus(t *testing.T) {
 	}
 }
 
+func TestHoverMotionWithoutButtonConsumed(t *testing.T) {
+	var ctx Context
+	presented(&ctx, []region{
+		{id: "list", bounds: render.Rect{Y: 4, W: 20, H: 5}, flags: Focusable | Scrollable},
+	}, modal{})
+	hover := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: 3, Y: 6, Action: event.MouseMove, Button: event.MouseNone}}
+	if _, handled := ctx.Handle(hover); !handled {
+		t.Fatal("hover motion over a region was not consumed")
+	}
+	if !ctx.Hovered("list") {
+		t.Fatal("hover motion did not update hover")
+	}
+}
+
 func TestInputScrollAndFocusLoss(t *testing.T) {
 	var ctx Context
 	presented(&ctx, []region{
