@@ -113,6 +113,13 @@ Launch the adaptive animated 3D showcase:
 go run ./examples/showcase
 ```
 
+Or the multiline editor, which exercises wrap, grapheme caret moves, bounded
+undo, and the clipboard port:
+
+```sh
+go run ./examples/textedit
+```
+
 The module currently declares Go 1.23. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before extending the core.
 
@@ -131,8 +138,17 @@ navigation, deletion, wide-cell mouse placement, drag selection, and horizontal
 scrolling. The focused field also owns the real terminal cursor, so IME
 candidate windows and screen readers follow the caret instead of a painted cell.
 It includes byte-bounded undo/redo and an application-supplied clipboard port,
-but remains intentionally single-line; password hardening, multiline editing,
-RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
+but remains intentionally single-line; password hardening, RTL visual
+reordering, OS clipboard adapters, and IME preedit are not claimed.
+
+`ui.TextArea` extends the same grapheme contract to multiline documents:
+logical lines, soft wrap in word or character mode, a vertical viewport with
+wheel and key scrolling, selection painting, bounded undo/redo, and the same
+clipboard port. Layout is cached as a dirty range, so editing near the caret
+re-wraps only the touched lines, and ASCII boundary probes take a constant-time
+fast path before falling back to the grapheme scanner. What is not claimed:
+per-row incremental rewrap of a single huge line, hard tabs beyond fixed
+4-column stops, RTL visual reordering, and IME preedit.
 
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,

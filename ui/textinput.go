@@ -690,7 +690,17 @@ func graphemePrefix(value string, maxBytes int) string {
 
 func floorBoundary(value string, position int) int {
 	position = min(max(position, 0), len(value))
-	if position == len(value) {
+	if position == 0 || position == len(value) {
+		return position
+	}
+	// ASCII fast path: an ASCII byte that is a rune start and not the LF of a
+	// CR LF pair always begins its own grapheme cluster (no ASCII rune is
+	// Extend, ZWJ, SpacingMark, Prepend, or a regional indicator), so the
+	// boundary is exactly here. Non-ASCII neighborhoods take the exact scan.
+	if value[position] < utf8.RuneSelf && value[position-1] < utf8.RuneSelf {
+		if value[position] == '\n' && value[position-1] == '\r' {
+			return position - 1
+		}
 		return position
 	}
 	boundary := 0
@@ -754,6 +764,29 @@ func ceilBoundary(value string, position int) int {
 }
 
 func previousBoundary(value string, position int) int {
+	position = min(max(position, 0), len(value))
+	if position == 0 {
+		return 0
+	}
+	// ASCII fast path: when the byte at the position and the byte before it
+	// are both ASCII (and not a CR LF pair), the position is a cluster
+	// boundary and the preceding ASCII rune forms its own cluster unless it
+	// is the LF of a CR LF pair. Both common navigation cases resolve here
+	// without the full grapheme scan.
+	if position < len(value) && value[position] < utf8.RuneSelf && value[position-1] < utf8.RuneSelf &&
+		!(value[position] == '\n' && value[position-1] == '\r') {
+		if value[position-1] == '\n' && position >= 2 && value[position-2] == '\r' {
+			return position - 2
+		}
+		return position - 1
+	}
+	if position == len(value) && value[position-1] < utf8.RuneSelf &&
+		(position == 1 || value[position-2] < utf8.RuneSelf) {
+		if value[position-1] == '\n' && position >= 2 && value[position-2] == '\r' {
+			return position - 2
+		}
+		return position - 1
+	}
 	position = floorBoundary(value, position)
 	previous := 0
 	graphemes := uniseg.NewGraphemes(value)

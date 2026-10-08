@@ -217,6 +217,18 @@ func (c *Context) revealDelta(container ID) int {
 	return c.focusDeltaLocked(container)
 }
 
+// focusPending reports whether the next focusable region to register will
+// claim the frame's focus: nothing holds focus and nothing has claimed it
+// yet this View. Widgets that must act on focus before they register (for
+// example to reveal the caret before recording their content limits) use
+// this prediction so the first frame a static app paints already shows the
+// caret; such an app may never repaint otherwise.
+func (c *Context) focusPending() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.begun && c.viewFocus == "" && c.focused == ""
+}
+
 func (c *Context) focusDeltaLocked(container ID) int {
 	holder, ok := regionByID(c.committed, container)
 	if !ok || holder.flags&Scrollable == 0 || holder.bounds.Empty() {

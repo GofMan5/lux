@@ -166,11 +166,12 @@ event loop losslessly, so the tax never swallows input.
 
 Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
 show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
-with 0 alloc/op. Ctrl-word movement is 0 alloc/op but linear in text length:
-roughly 11 us at 32 B, 0.42 ms at 1 KiB, and 34 ms at 64 KiB. The current
-single-line editor is therefore tuned for ordinary form fields, not documents;
-a cached boundary table belongs in a future document editor rather than this
-small control.
+with 0 alloc/op. Ctrl-word movement is 0 alloc/op and exact through the
+grapheme scanner, but both boundary probes first test the bytes at the
+caret: when the text around the position is ASCII the probes return in
+constant time, which is the common case for code and prose. A pure non-ASCII
+neighborhood still scans linearly — roughly 34 ms at 64 KiB — so a document
+that is entirely one long non-ASCII line keeps that old cost.
 
 The editor's horizontal window is recomputed with one grapheme pass per frame.
 It was previously measured inside a loop, which is quadratic and made a pasted
@@ -185,8 +186,23 @@ unbreakable run wider than the limit. A 64 KiB paragraph therefore stays
 in the same tens-of-milliseconds per-field class as the editor window
 above in every wrap mode — the budget the text-truth stage is held to —
 and the per-mode medians are recorded in the stage 7 verification
-artifacts. The wrap is stateless and recomputes per call; caching a
-document's layout is the TextArea slice's business, not this function's.
+artifacts. The wrap is stateless and recomputes per call; the document-level
+cache that avoids re-wrapping untouched lines lives in `ui.TextArea` instead.
+
+`ui.TextArea` holds the wrap as a dirty-range cache: an edit invalidates from
+the mutated line to the end of its logical neighborhood and re-wraps only
+those lines, so a keystroke in a 400-line document re-wraps one line and
+measures about 78 us/op with 7 alloc/op, where a full re-layout of the same
+document costs about 4.8 ms. A single huge line defeats the line-granularity
+cache by construction: a 128 KiB one-line document re-wraps that line per
+keystroke, about 720 us/op after the boundary fast paths (previously
+142 ms, before `floorBoundary` scanned the whole prefix on every edit).
+Its full layout pass is about 31 ms and 47.5k allocs, and a 64 KiB line
+lands in the same tens-of-milliseconds budget the wrap contract above
+holds. Painting a 400-line viewport is about 0.80 ms with 3 alloc/op.
+What is still future work, honestly: incremental per-row rewrap inside one
+logical line, so a growing single paragraph stays flat instead of paying
+the whole-line wrap; the cache stops at line granularity.
 
 The fixed-row virtual range for a declared one-million-row viewport remains
 O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and

@@ -1,0 +1,150 @@
+Stage 7, slice 5 — TextArea multiline EGC editor + examples/textedit + fuzz — local verification, 2026-10-08
+=============================================================================================================
+
+Scope (ROADMAP.md, stage 7 item 5): the multiline editor, the largest piece
+of the stage. ui.TextArea: EGC-correct editing on logical lines, soft wrap
+(word/char) from slice 4, vertical scrolling through its own Scroll state
+(reusing the ScrollViewport semantics), caret placement, selection, bounded
+undo/redo in the TextInput pattern, paste sanitization and MaxBytes bound,
+the clipboard port, a dirty-range layout cache, and the UAX #29 boundary
+contract. Acceptance items: wrap of 64 KiB inside the PERFORMANCE.md budget
+(measured in slices 4-5 benchmarks), TextArea survives fuzz editing,
+examples/textedit ships.
+Code: ui/textarea.go (TextArea: state, Apply/Undo/Redo/SetValue/Text/
+Selection/SelectedText/ReplaceSelection/Copy/Cut/Paste, applyKey/
+applyHistoryKey/applyScroll/applyMouse, insertLines/deleteRange,
+normalize/sanitizeMultiline/sanitizeLine/limitLines/trimPartsToBudget,
+the textAreaLayout cache with buildLayout/ensureLayout/invalidate/
+invalidateRange/spliceRows/recountRows, caretPosition/positionAt/
+lineRowOf/rowStarts, drawAreaRow), ui/clipboard.go (Copy/Cut/Paste for
+the area), ui/textinput.go (ASCII fast paths in floorBoundary/
+previousBoundary shared with the area's boundary moves),
+ui/context.go (focusPending: first-frame caret for static apps),
+examples/textedit/main.go (full editor demo: wrap toggle, clipboard
+port, status line, adaptive footer, tiny-terminal guard).
+Tests: ui/textarea_test.go (grapheme editing goldens, word/line/paragraph
+navigation, vertical goal-column moves, selection and drag, mouse mapping,
+wrap modes, scroll invariants, undo/redo bounds and coalescing, paste
+sanitization and byte budget, layout cache invariants pinned by
+validateLayout, empty-replacement deletion regression, repeat-burst
+bounding (moveBound/graphemeCount), boundary goldens
+through textBoundary, first-frame caret regression, FuzzTextAreaInvariants,
+BenchmarkTextAreaLayout/Keystroke/Draw), ui/clipboard_test.go (area
+Copy/Cut/Paste against a memory clipboard), examples/textedit/main_test.go
+(direct View painting incl. caret-on-first-frame, e2e through the
+interactive backend: caret visible in the first static frame, grapheme
+append of a combining mark, enter splits lines, ctrl+z undo, esc quits).
+Docs: README.md (TextArea paragraph with claimed/not-claimed list,
+examples/textedit launch), docs/PERFORMANCE.md (dirty-range cache
+paragraph + ASCII boundary fast-path paragraph, fresh benchmark medians),
+CHANGELOG.md (Added: TextArea + first-frame caret; Fixed: empty-paste
+selection deletion; Performance: boundary fast path + dirty-range cache).
+THIRD_PARTY_NOTICES.md: unchanged — no new dependency; everything sits on
+the already-credited rivo/uniseg stack.
+
+Sources: no new external fetch this slice. The boundary and width
+authorities are the slices 1-4 stack (uniseg + 18.0.0 width overlay +
+wrap machinery); the clipboard stays the explicit application-supplied
+port from the TextInput slice.
+
+Mechanism (pinned by tests, traced to code):
+  - state: Lines []string (no embedded newlines), Line/Offset caret,
+    AnchorLine/AnchorOffset selection anchor, Wrap render.WrapMode,
+    Scroll ScrollState, MaxBytes/UndoBytes bounds; zero value ready
+  - EGC truth: every caret/anchor offset is forced to a grapheme
+    boundary by normalize and kept there by insert/delete operations;
+    boundary goldens run through the same textBoundary helper the
+    fuzz invariants use; a combining mark typed after "!" appends to
+    the same cluster ("scroll.!" + U+0301)
+  - layout cache: buildLayout wraps a logical line into rows only when
+    its recorded line bytes changed or its width/policy changed
+    (invalidate/invalidateRange track a dirty range from the edit);
+    a keystroke re-wraps the edited line, not the document; validateLayout
+    pins that every row is a byte slice of its line between recorded
+    starts; spliceRows/recountRows keep row counts and totals coherent
+    after inserts/deletes
+  - caret mapping: caretPosition maps (Line, Offset) to a wrapped row
+    and cell; the caret at the end of a width-filling row flows to the
+    next row's first cell; doc-end caret on a full last visual row
+    paints no caret (known edge, not asserted, documented)
+  - scroll: EnsureVisible keeps the caret row inside the viewport when
+    focused; wheel and scroll keys move the viewport independently of
+    the caret; positionAtPoint maps a click back through the layout to
+    a boundary caret
+  - history: snapshots coalesce per edit group, bounded by UndoBytes
+    (trimHistory drops oldest); redo stack cleared on new edits;
+    applyHistoryKey recognizes ctrl+z/y through RuneKey events
+  - paste: sanitization normalizes \r\n and lone \r to \n, drops other
+    control graphemes, splits into lines, and trims to the MaxBytes
+    budget; "x\ny" pasted at (0,0) of ["ab","cd"] yields ["x","yab","cd"]
+    (the suffix follows the last pasted line, VS Code semantics);
+    an empty replacement still deletes the selection (regression)
+  - first-frame caret: Context.focusPending lets the first focusable
+    region act on focus before registration (caret reveal before the
+    content limits are recorded), so a static app's only frame already
+    paints the caret; Focus is committed on present as before
+  - shortcuts: while the editor holds focus, ctrl+w/c/x/v arrive via
+    Owner+ScopeFocused shortcuts registered in View; Esc needs a
+    Priority ScopeApp shortcut because the focused area consumes plain
+    keys as Input routing
+
+Test evidence (Windows amd64, i5-10400F, Go 1.25.5, 2026-10-08):
+  - gofmt -l .: empty; go vet ./...: clean
+  - go test ./... -count=1 -timeout 300s: 11/11 ok
+  - fuzz RE-RUN after the insertLines empty-replacement fix (required:
+    the previous run predated the change): go test ./ui/ -run '^$'
+    -fuzz FuzzTextAreaInvariants -fuzztime 30s: PASS, 414,389 execs,
+    0 failures, 141 new interesting inputs (total corpus 1,119)
+  - coverage: go test ./ui/ -count=1 -coverprofile: 90.0% of
+    statements package-wide; textarea.go functions mostly 90-100%
+    (lowest: sanitizeLine 24.0% — its control-grapheme drop branches
+    are exercised by the fuzz corpus rather than unit tests;
+    applyHistoryKey 53.8% — the alt/super fall-through paths)
+  - benchmarks (same machine, -benchmem, -benchtime 2s, count=1):
+      BenchmarkTextAreaKeystroke/many-lines            33830 runs   78.1 us/op    13,856 B/op       7 allocs/op
+      BenchmarkTextAreaKeystroke/single-line-128KiB     3156 runs  719.5 us/op   262,231 B/op       8 allocs/op
+      BenchmarkTextAreaLayout/many-lines-400             505 runs    4.8 ms/op   178,955 B/op   9,396 allocs/op
+      BenchmarkTextAreaLayout/single-line-128KiB           74 runs   30.8 ms/op   835,302 B/op  47,536 allocs/op
+      BenchmarkTextAreaDraw                              3010 runs  798.9 us/op       46 B/op       3 allocs/op
+    (many-lines = 400 lines x 32 B; the 128 KiB document is one line.)
+    The 64 KiB class: a 64 KiB paragraph wraps in ~16 ms (slice 4 wrap
+    benchmarks), inside the tens-of-milliseconds budget; the single
+    128 KiB line layout (~31 ms) is the honest upper bound of the
+    line-granularity cache, quoted in PERFORMANCE.md as future work
+    (per-row incremental rewrap)
+  - full suite in docker: docker run --rm -v E:\Projects\lux-tui:/src
+    -w /src golang:1.25-alpine go test ./... -count=1: 11/11 ok, and
+    re-run on the two touched packages after the repeat-burst test
+    landed: ui + examples/textedit ok (the module-download stderr
+    lines are downloads, not failures; pwsh exit code 1 is the known
+    misclassification noted in earlier artifacts)
+  - go mod verify: all modules verified
+
+Doc-truth cross-check:
+  - README "dirty range ... re-wraps only the touched lines" ->
+    invalidateRange + the keystroke benchmark above
+  - README "not claimed: per-row incremental rewrap ... hard tabs
+    beyond fixed 4-column stops, RTL, IME preedit" -> no code claims
+    them; tabs inside a wrapped row follow the slice-4 four-column
+    stops, TextArea itself keeps tab a plain inputable grapheme
+  - PERFORMANCE.md "~78 us / 7 alloc" and "~720 us" -> the benchmark
+    medians above, exact machine numbers deliberately live here
+  - CHANGELOG "empty replacement now clears the selection" -> the
+    insertLines empty-parts deleteRange regression test
+  - CHANGELOG "first focusable control paints its caret on the very
+    first frame" -> TestTextAreaFirstFramePaintsCaret + the textedit
+    direct-View and e2e caret assertions
+
+Known limits (honest, not fixed this slice):
+  - the layout cache is line-granular: editing a single huge line
+    re-wraps that whole line per keystroke (~0.72 ms at 128 KiB);
+    per-row incremental rewrap is future work, documented
+  - a caret at the very end of a document whose last visual row is
+    exactly full paints no caret cell (the flow-over cell would be
+    outside the buffer); not asserted anywhere, left as an edge
+  - golangci-lint: NOT RUN (not installed on this machine; go vet +
+    gofmt ran instead)
+
+Stage 7 is not closed: this was the last implementation slice; the
+stage-close ritual (acceptance cross-check, .verification/stage7.txt,
+ROADMAP status) follows as its own chore commit.

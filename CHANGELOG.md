@@ -227,6 +227,22 @@ work and the API may still change.
   actually draws, and the output graphemes are an in-order subsequence of
   the input that drops only whitespace consumed at soft breaks and hard
   breaks.
+- Multiline editor (`ui.TextArea`): logical lines with the same EGC contract
+  as `TextInput` — caret and selection stay on grapheme boundaries, wide
+  cells and combining marks are never split. Soft wrap in word or character
+  mode (`Wrap render.WrapMode`), a vertical viewport with wheel and key
+  scrolling (`Scroll`), selection painting, word/line/paragraph navigation
+  and edits, bounded undo/redo (`UndoBytes`), paste sanitization and
+  `MaxBytes` bound, `Copy`/`Cut`/`Paste` through the clipboard port, and a
+  dirty-range layout cache so a keystroke re-wraps only the edited lines.
+  `examples/textedit` demonstrates the widget end to end. Not claimed:
+  per-row incremental rewrap of a single huge line, hard tabs beyond the
+  wrap's four-column stops, RTL visual reordering, IME preedit.
+- First-frame caret: the first focusable control now paints its caret on
+  the very first frame it registers in, because a static app may never
+  repaint afterwards. Focus is normally committed only when a frame is
+  presented, so before this a static app's first paint showed no caret
+  until the first edit.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
@@ -248,8 +264,18 @@ work and the API may still change.
   are preserved; callback cancellation causes survive wrapping.
 - Equal-row diff guards and post-scroll re-marks keep an idle screen unchanged
   row by row.
+- Pasting an empty string (or newline-only text) into a `ui.TextArea` with an
+  active selection replaced the selection with nothing but left the deleted
+  text behind — an empty replacement now clears the selection like any other
+  paste does.
 
 ### Performance
 
 - Word navigation no longer allocates.
 - The editor window recomputes in a single pass.
+- Boundary probes test the bytes at the caret first: an ASCII neighborhood
+  answers in constant time instead of walking the grapheme scanner, which
+  turns a 128 KiB single-line edit from ~142 ms per keystroke into ~0.72 ms.
+- `ui.TextArea` holds its wrap layout as a dirty-range cache, so a keystroke
+  in a 400-line document re-wraps one line (~78 us, 7 allocs) instead of the
+  whole document.
