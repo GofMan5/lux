@@ -337,6 +337,14 @@ work and the API may still change.
   defaults) for rows with children, and clips the label to the bounds. Not
   claimed: inline node filtering, per-node styling, drag-and-drop
   reordering, lazy async children, horizontal tree scrolling.
+- `docs/CUSTOM-CONTROL.md`: the "your own control in an evening" recipe —
+  state, style, `Apply`, region registration, and the two wiring lines —
+  walked through a stepper `[− 42 +]` whose exact code is compiled and
+  tested as `ui/stepper_recipe_test.go`, so the document cannot drift from
+  the truth it teaches. Includes the testing ladder (Apply table, paint,
+  routing rungs), the free-vs-owned split the framework hands every
+  control, and the pitfalls list (duplicate-ID panics, press-as-Scroll on
+  Scrollable-only regions, release-commit timing for Activatable ones).
 - First-frame caret: the first focusable control now paints its caret on
   the very first frame it registers in, because a static app may never
   repaint afterwards. Focus is normally committed only when a frame is

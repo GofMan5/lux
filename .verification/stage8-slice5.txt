@@ -1,0 +1,86 @@
+# Stage 8 — Slice 5: "Your own control in an evening" recipe
+Date: 2026-10-08
+HEAD at start: 9fea379 (feat: sparkline and tree widgets)
+
+## Scope
+ROADMAP stage 8 item 5: the document that shows a user how to build their own
+control in one evening using the Region+Handle+draw pattern, on a worked
+example. Deliverable: docs/CUSTOM-CONTROL.md + the executable proof.
+
+## Truths written into the doc
+- The recipe's worked example is a Stepper `[− 42 +]`: StepperState
+  (zero value = 0, unbounded; Max > Min bounds; Step <= 0 reads as 1),
+  StepperStyle (zero values inherit Normal), Apply(action Action), and
+  Context.Stepper(id, canvas, bounds, state, style).
+- THE DOC CANNOT ROT: the exact stepper code lives in
+  ui/stepper_recipe_test.go (package ui) and runs under `go test ./ui/`.
+  Editing one without the other fails the doc's own claim.
+- Routing truths the doc states and the tests prove:
+  * A press on a Scrollable-only region arrives as Scroll ON THE PRESS with
+    region-local X — that is how one ID serves two halves (X==0 minus,
+    X==W-1 plus, middle inert).
+  * Key releases are inert (event.KeyEvent{Action: event.ActionRelease}).
+  * Enter/Space are inert for the stepper: not an Activatable region, no
+    commit semantics claimed.
+  * Wheel up/left = +step, wheel down/right = −step; PageUp/PageDown = ×10.
+  * action.X is region-local even inside clipped/scrolled regions.
+  * Registering a duplicate ID during Begin..End panics on purpose.
+- The doc's wiring snippet mirrors examples/widgets/main.go's real
+  Update/View loop (Handle → switch action.Target → Apply; Begin/End with
+  defer, draw through frame.Canvas).
+- Testing ladder documented: (1) Apply table tests, (2) paint test with
+  Begin/End + cell readback, (3) routing test via committed snapshot +
+  Handle (press at absolute 12,1 → local X 8 → +1), (4) app-level
+  interactive e2e (examples/widgets/main_test.go).
+- Free-vs-owned table: framework owns hit-testing, focus/Tab/hover/capture,
+  routing kinds, EGC clipping, release-commit geometry; the author owns
+  Apply, draw, the shared layout truth, the not-claimed list.
+- Not-claimed for the stepper: drag-seek (gauge's contract), digit typing
+  (Input territory), float mode, repeat-on-hold, external spin buttons.
+
+## Tests (ui/stepper_recipe_test.go, 5 functions)
+- TestStepperApplyKeys: right ×2, left, PageDown ×10, key-release inert,
+  Activate-kind inert. (Found and fixed a test-math bug during red phase:
+  PageDown is +10 by the doc's convention, not −10.)
+- TestStepperApplyBounds: Home/End clamp to Min/Max; step at Max is
+  changed=false; Home on an unbounded stepper is inert (no Min/Max range).
+- TestStepperApplyPointer: minus half −1, plus half +1, middle press inert,
+  wheel up +1, mouse release inert, nil *StepperState inert.
+- TestStepperPaint: 20×3 buffer, bounds X4 Y1 W9 H1, value 42 → exact row
+  "    -  42   +" (read back cell-by-cell; no Buffer.Row helper exists).
+- TestStepperRoutingEndToEnd: presented() snapshot + ctx.Handle: press
+  (12,1) → {Target "stepper", Kind Scroll, X 8} → Apply → 1; KeyRight →
+  Scroll → Apply → 2.
+
+## Gates
+- gofmt -l . → clean.
+- go vet ./... → clean.
+- go test ./... -count=1 -timeout 300s → ok 13/13 packages.
+- docker golang:1.25-alpine go test ./... -count=1 → DOCKER_EXIT=0.
+  (First docker run reported DOCKER_EXIT=True: PowerShell interpolated $?
+  before docker saw it; re-run with single-quoted sh -c fixed the harness,
+  not the code.)
+- go mod verify → all modules verified.
+- golangci-lint: not run (not installed here); recorded as skipped.
+- Fuzz: N/A for this slice (no new parser surface).
+- Benchmarks: N/A — doc + tests only, no production-path code; draw path is
+  test-only. No PERFORMANCE.md change: nothing shipped in the hot path.
+
+## Docs
+- docs/CUSTOM-CONTROL.md (new): the recipe — free-vs-owned table, five
+  pieces, full stepper code, wiring snippet, testing ladder, pitfalls
+  (duplicate IDs, draw-after-End, state mutation in View, local coords,
+  press-Scroll vs release-Activate timing, Page semantics ownership),
+  not-claimed list, further-reading pointers (context.go, tree.go,
+  checkbox.go, INTERACTION.md).
+- README.md: docs list gains "Your own control in an evening"; the widget
+  paragraph gains a pointer paragraph after the sparkline/tree text.
+- CHANGELOG.md: Added entry for docs/CUSTOM-CONTROL.md.
+
+## Not claimed
+- The stepper is NOT a shipped ui.Stepper production widget: it lives in a
+  _test file by design — it is teaching material that compiles, and adding
+  a production stepper would duplicate the point of the recipe.
+- No godoc Example* for a custom control (Examples document the shipped
+  API; the recipe documents authoring a new one).
+- No theme system here (slice 6), no OSC runtime extras.

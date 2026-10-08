@@ -215,6 +215,12 @@ motion page, the file tree its own — and the showcase's frame-time history
 run them end to end. Not claimed: inline node filtering, per-node styling,
 drag-and-drop reordering, lazy async children.
 
+The control set is also a recipe, not a wall: building your own widget —
+state, style, `Apply`, region registration, two wiring lines — is a
+[docs/CUSTOM-CONTROL.md](docs/CUSTOM-CONTROL.md) evening walk, and the
+document's worked stepper compiles and runs as a test in the `ui` package,
+so the recipe cannot rot.
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`
@@ -329,6 +335,7 @@ GPU engine.
 - [Architecture](docs/ARCHITECTURE.md)
 - [Compatibility](docs/COMPATIBILITY.md)
 - [Interaction model](docs/INTERACTION.md)
+- [Your own control in an evening](docs/CUSTOM-CONTROL.md)
 - [Research snapshot](docs/RESEARCH.md)
 - [Performance contract](docs/PERFORMANCE.md)
 - [Contributing](CONTRIBUTING.md)
