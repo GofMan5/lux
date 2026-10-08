@@ -247,15 +247,15 @@ landed too: the probe latches DA1 and DA2 (first answerer wins) and reads
 `$TMUX`/`$STY`/`$TERM`, so a pane that answered through tmux or GNU screen
 keeps the legacy input path even when a mis-routed or forged reply claims
 kitty support — that closes the keyboard-truth stage. The text-truth stage
-is underway: the 18.0.0 width overlay and the width policy landed first,
-and Unicode core mode 2027 follows the probe verdicts with a guaranteed
+has landed: the 18.0.0 width overlay and the width policy, Unicode core
+mode 2027 following the probe verdicts with a guaranteed
 reset on every exit path (an explicit width policy suppresses it, since
-one stream follows one width authority). Word wrap has landed on that
-same authority: `WrapLines` and `Canvas.TextWrap` measure every grapheme
-through the width policy, never split a cluster, and charge control
-graphemes zero cells exactly as the canvas draws them, with the
-multiline TextArea still to come; beyond it,
-variable-height virtualization and semantic
+one stream follows one width authority), word wrap (`WrapLines` and
+`Canvas.TextWrap` measure every grapheme through the width policy, never
+split a cluster, and charge control graphemes zero cells exactly as the
+canvas draws them), and the multiline `TextArea` on the same boundary
+authority — that closes the text-truth stage. Next: the widget-truth
+stage, variable-height virtualization and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a

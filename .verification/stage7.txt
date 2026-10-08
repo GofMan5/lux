@@ -1,0 +1,118 @@
+LUX TUI stage 7 — «Text truth» — close verification
+UTC: 2026-10-08
+Baseline: 1397080291ff311cd93de37ca3edd89c96b21486 (stage 6 close)
+Closed at: f3784fa4db98891d4aae7d8e9483dfda5d505efa
+
+Goal (ROADMAP.md stage 7): text measured and edited the way the terminal
+does it — current-Unicode width truth, an explicit width policy, the
+terminal's own word when it speaks Unicode core 2027, wrap that never
+splits a grapheme, and the multiline editor built on those foundations.
+
+Items, commits, and what landed:
+
+  1. Unicode 18.0.0 width overlay — cb1404d. uniseg v0.4.7 stays the
+     segmentation engine; a data-only overlay (33 wide ranges / 1357
+     codepoints, 53 zero ranges / 145 codepoints, derived offline from
+     the 18.0.0 UCD against measured uniseg behavior) corrects cell
+     widths where the shipped tables lag: I Ching trigrams and
+     hexagrams, Tangut/Jurchen, CJK Extension I, new emoji, and the
+     16.0 Extend reclassifications. Clusters translate through legacy
+     stand-ins so RI pairs, Hangul LVT, GB11, and VS15/VS16 composition
+     stay engaged. THIRD_PARTY_NOTICES gains the Unicode License v3.
+  2. Width policy — b89ce1d. render.WidthPolicy (Ambiguous=1/2, VS16
+     presentation switch, emoji default), threaded through terminalWidth
+     and selectable at lux.Run/Backend; every canvas measurement
+     answers to exactly one authority.
+  3. Unicode core mode 2027 — 60fa3c9. Capability-gated on the
+     contour-terminal/terminal-unicode-core probe verdict: where the
+     terminal answers, it owns the width authority for its stream
+     (the Ultraviolet-in-lipgloss position); an explicit width policy
+     suppresses the mode, and the uniseg+overlay stack is the fallback.
+     Reset rides the same exit paths as the rest of the mode stack.
+  4. Word wrap — 0657ef9. render.WrapMode (word/char), WrapLines/
+     WrapLinesWith, MeasureWrap/MeasureWrapWith, render.TextMetrics,
+     Canvas.TextWrap: one linear pass (re-scan only for unbreakable
+     runs), hard breaks split, whitespace consumed at soft breaks,
+     tabs on four-column stops relative to the wrapped line, control
+     graphemes kept at zero cells exactly as Canvas.Text draws them
+     (a fuzz-found fix: dropping them let neighbors re-fuse into
+     clusters nobody measured), hyphenation off by design (a soft
+     hyphen is a zero-width codepoint two width authorities would
+     disagree on). Fuzz corpus seed committed as the regression.
+  5. TextArea — f3784fa. The stage's largest piece: multiline EGC-
+     correct editing on logical lines, soft wrap in both modes, a
+     vertical viewport with wheel and key scrolling, selection with
+     mouse drag and shift+arrows, word/line/paragraph navigation,
+     bounded coalesced undo/redo, clipboard port Copy/Cut/Paste, paste
+     sanitization and MaxBytes, a dirty-range layout cache (keystroke
+     78 us / 7 allocs on 400 lines vs 4.8 ms full re-layout), ASCII
+     boundary fast paths (128 KiB single-line keystroke 142 ms ->
+     0.72 ms), the first-frame caret fix (focusPending in
+     ui/context.go, so a static app's only frame paints its caret),
+     and examples/textedit as the demo with direct-View and e2e tests
+     through the interactive backend.
+
+Acceptance criteria mapping (ROADMAP.md stage 7 «Приёмка»):
+  - «UAX #29 conformance-прогон»: the engine conforms to the data it
+    ships — GraphemeBreakTest 15.0.0: 602/602 lines pass; against
+    18.0.0 data: 827/853, with the 26 fails being the GB9c-style
+    ConjunctLinker Indic conjunct rules (Unicode 16+) that uniseg
+    v0.4.7 predates. That is segmentation drift, not width drift: the
+    overlay keeps widths correct for the new codepoints, and the split
+    ZWJ/Indic-cluster cases are documented in COMPATIBILITY.md as
+    known practical drift a future uniseg upgrade absorbs. Recorded
+    per-fact in stage7-slice1.txt.
+  - «wrap на 64 KiB текста ≤ budget из PERFORMANCE.md»: slice 4
+    benchmarks hold the 64 KiB paragraph wrap in ~16 ms, inside the
+    tens-of-milliseconds budget PERFORMANCE.md publishes; the honest
+    upper bound of the line-granular TextArea cache (a single 128 KiB
+    line, full layout 30.8 ms) is quoted in the same doc as future
+    work rather than hidden.
+  - «TextArea выдерживает fuzz-редактирование»: FuzzTextAreaInvariants
+    re-run after the last code change (the empty-paste deletion fix):
+    30 s, 414,389 execs, 0 failures, corpus 1,119 interesting inputs.
+  - «пример examples/textedit»: shipped and covered two ways — a
+    direct-View test asserting painted cells, title, status line,
+    caret, and wrap toggle, plus an e2e test through the interactive
+    backend that types graphemes (including a combining mark), splits
+    lines with Enter, undoes with ctrl+z, and quits with Esc.
+
+Validation at close (2026-10-08, HEAD f3784fa):
+  - gofmt -l . : clean
+  - go vet ./... : PASS
+  - go mod verify : all modules verified
+  - go test ./... -count=1 : PASS (Windows, 11 packages)
+  - docker golang:1.25-alpine go test ./... -count=1 : PASS (11/11),
+    re-run on ui + examples/textedit after the final test landed
+  - ui package coverage: 90.0% of statements
+  - FuzzTextAreaInvariants 30 s: PASS, 414,389 execs (above)
+  - golangci-lint: NOT RUN — the binary is not installed in this local
+    environment; vet + gofmt + the full sweeps above are the local bar
+    (CI runs the lint matrix on push).
+  - Per-slice evidence: .verification/stage7-slice1.txt …
+    stage7-slice5.txt (commands, derivation sources, honesty ledgers).
+
+Honesty ledger:
+  - the 18.0.0 conformance gap (26 GraphemeBreakTest lines) is a
+    documented uniseg v0.4.7 limit, not a silent pass; the ROADMAP's
+    «width overlay» fallback path was taken exactly as planned.
+  - the TextArea layout cache is line-granular: editing one huge line
+    re-wraps that whole line (~0.72 ms at 128 KiB); per-row
+    incremental rewrap is future work, stated in README and
+    PERFORMANCE.md, and the one-line 128 KiB layout cost (~31 ms) is
+    published, not buried.
+  - a caret at the very end of a document whose last visual row is
+    exactly full paints no caret cell; known edge, not asserted
+    anywhere, recorded in stage7-slice5.txt.
+  - not claimed anywhere in the docs: per-row incremental rewrap,
+    hard tabs beyond four-column stops, RTL visual reordering, IME
+    preedit, OS clipboard adapters (the port stays
+    application-supplied).
+  - the docker lane used golang:1.25-alpine; CI pins go 1.23.x +
+    stable, so the CI matrix is broader than this local run.
+  - benchmark medians (i5-10400F, 2 s benchtime) are machine-specific;
+    PERFORMANCE.md frames them as this machine's measurements.
+
+Stage 7 is closed. Next: stage 8 «Widget truth» (Table, Select/Dropdown,
+Checkbox/Radio, Tabs, Gauge/Spinner, Sparkline/Tree, theme document),
+per the updated README Direction.
