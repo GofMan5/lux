@@ -1,0 +1,107 @@
+Stage 8, slice 1 — ui.Table: virtualized tabular widget — local verification, 2026-10-08
+====================================================================================
+
+Scope (ROADMAP.md, stage 8 item 1): table widget truth. Code:
+ui/table.go (TableColumn, ColumnLayout, TableState.Apply, Table drawing),
+ui/controls.go (clipTextEllipsis shared with the widget), examples/table/
+(main.go, main_test.go). Tests: ui/table_test.go (17 tests + benchmark).
+Docs: README.md (widget paragraph after ui.TextArea), CHANGELOG.md (Added),
+docs/PERFORMANCE.md (table benchmark paragraph).
+
+API (verified by test, not by inspection):
+  - TableColumn{Title, Width, Weight}: Width >= 1 fixed, 0 rubber by
+    Weight (default 1); gutters fixed 1 cell between columns.
+  - ColumnLayout(columns, width) is pure and never reorders columns:
+    budget = width - fixed - (count-1); no rubber or budget <= 0 ->
+    rubber collapses to 0; else baseline 1 per rubber + floor(extras *
+    weight / totalWeight), remainder to the LAST rubber column.
+    Pinned values: 6 fixed + 2 rubber at width 30 -> [6,11,11], 12 ->
+    [6,2,2], 11 -> [6,1,2], 9 -> [6,1,0], 8 -> [6,0,0]; weights 1:3 at
+    16 -> [4,11]; single rubber at 10 -> [10].
+  - TableState zero value is ready: Selected/Offset clamp on entry, a
+    count of 0 resets navigation but KEEPS sort fields, key releases are
+    inert, keys Up/Down/Home/End/Page move selection and keep it visible
+    (Page rows = max(rows, 1)), wheel (rows/3 min 1, four directions)
+    moves Offset ONLY — viewport decoupled from selection, clamped to
+    [0, count-rows], and 100 wheels at 1M rows clamp at count-rows.
+  - Header press (Y==0 when any column has a Title) maps via columnAt
+    through ColumnLayout: same column flips SortDesc, a new column resets
+    ascending; SortRequested is reported to the app, which re-slices its
+    own data — the widget NEVER reorders rows (pinned by test).
+  - Body press selects Offset + bodyRow; presses at or below content
+    height change nothing (matches the router's below-content guard).
+  - Drawing: EGC-correct clipping with a policy-aware ellipsis
+    (clipTextEllipsis), wide graphemes never split (3-cell column holding
+    U+4E16U+754C renders one CJK grapheme + "…", continuation cell
+    untouched), full-width selected-row fill, header underline fallback,
+    "▲"/"▼" sort marker on the active column, ambiguous-2 policy keeps
+    the ellipsis and CJK at 2 cells ("世界世界" at width 5 -> "世…").
+  - Virtualization: rowAt called exactly once per visible row — 9 calls
+    for 1M rows in a 40x10 viewport, identical to a 100-row source;
+    a second draw of the selected-last-row state still calls 9 and lands
+    Offset at count-9.
+  - Duplicate-ID contract: one Table per id per frame (RegionWithOptions
+    panics otherwise); the test suite draws twice through two Contexts.
+
+Test evidence (windows/amd64, 2026-10-08):
+  gofmt -l .                           empty (after one gofmt -w of the
+                                       new example test)
+  go vet ./...                         clean
+  go test ./... -count=1 -timeout 300s ok, all 12 packages
+  go test ./ui/ -count=1 -cover        ok, coverage 90.2% (was 90.0%)
+  docker golang:1.25-alpine
+      go test ./... -count=1           ok, all 12 packages
+  go mod verify                        all modules verified
+  fuzz: not applicable — no new parser or editor; Table is a state
+      reducer over already-fuzzed primitives (event, clipText)
+  golangci-lint: NOT RUN (not installed on this machine)
+  new ui tests: TestColumnLayoutFixedAndRubber,
+      TestTableStateKeyboardNavigation (boundary Down at the last row:
+      first Down changes state — ensureVisible pulls Offset 0 -> 93 —
+      the second Down is a no-op; both asserted),
+      TestTableStateKeyReleasesAreInert,
+      TestTableStateWheelScrollsViewportOnly,
+      TestTableStateHeaderPressRequestsSort (gutter x inert, body press
+      never sorts), TestTableStatePressSelectsRow (below-content press
+      inert), TestTableStateCountZeroResets, TestTableStateNilReceiver,
+      TestTableVirtualizesRows, TestTableDrawHeaderSelectionAndEllipsis,
+      TestTableEGCAndWideClipping, TestTableZeroColumnsAndNilRowAt,
+      TestTableDisabledResetsAndBlocks, TestColumnAtMapsCells,
+      BenchmarkTableDraw
+  new example tests: TestTableSortsByHeaderAndView (lexical NAME sort
+      asc + desc flip, numeric CPU sort, painted header/status/footer),
+      TestTableTinyTerminalGuards, TestTableEndToEndKeysClickAndQuit
+      (keys navigate, two absolute header clicks sort asc then desc, a
+      body click selects, Escape quits — via a real Run loop with an
+      in-memory backend)
+  examples/table: 200k-row deterministic dataset (multiplicative hash,
+      no PRNG), fixed ID/CPU%/MEM + rubber NAME/STATE columns, the SAME
+      tableColumns slice passed to Apply and Table so header hit-testing
+      matches the drawn layout, app-owned index order re-sorted on
+      SortRequested (numeric for ID/CPU/MEM, lexical for NAME/STATE)
+
+Benchmarks (i5-10400F, windows/amd64, Go 1.25.5, -benchtime=2s, count=1,
+honest single-run provenance):
+  BenchmarkTableDraw: 120x40 viewport over a 1,000,000-row source,
+      selection mid-table: 1.78 ms/op, 2293 B/op, 41 allocs/op.
+      Paint cost is the visible window (39 rows), not the row count.
+      Like BenchmarkTextAreaDraw the benchmark draws without registering
+      regions, so the number is pure paint, not frame bookkeeping.
+
+Not claimed (doc truth, mirrored in README + CHANGELOG):
+  - horizontal scrolling
+  - row height above one cell
+  - per-cell content styling (styles are per-state, not per-cell)
+  - empty-table header sort clicks: the router's below-content guard
+    drops clicks where mouse.Y-originY >= contentHeight, so a zero-row
+    table with a header cannot be sorted by clicking its header — keys
+    and non-empty tables are unaffected
+  - the table itself reordering rows: sorting is a request the app
+    fulfills; examples/table shows the pattern
+  - IME preedit
+
+Authorities consulted before writing docs: stage-8 roadmap item and the
+in-repo List/TextArea precedents (registration, disabled flags, style
+fallbacks, routed action shapes). External widget-truth cross-checks
+(bubbletea/lipgloss table precedents) are deferred to the stage-8 close
+verification where doc-truth citations are finalized.

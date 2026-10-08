@@ -238,6 +238,18 @@ work and the API may still change.
   `examples/textedit` demonstrates the widget end to end. Not claimed:
   per-row incremental rewrap of a single huge line, hard tabs beyond the
   wrap's four-column stops, RTL visual reordering, IME preedit.
+- `ui.Table`: virtualized tabular data with fixed-width and rubber columns
+  (`Width` fixed, `Weight` shares the leftover), a header row with
+  click-to-sort reporting (the app re-slices its own data; the widget never
+  mutates the source), keyboard and wheel navigation, row selection with
+  viewport-follow, wheel-decoupled viewport scrolling, EGC-correct cell
+  clipping with a policy-aware ellipsis, and a zero-value ready
+  `TableState`. `rowAt` supplies only the visible window, so a million-row
+  table paints 39 rows. `examples/table` demonstrates the full pattern with
+  200k rows, numeric and lexical sorts, and selection. Not claimed:
+  horizontal scrolling, row height above one cell, per-cell content
+  styling, empty-table header sorting (the router drops below-content
+  clicks), IME preedit.
 - First-frame caret: the first focusable control now paints its caret on
   the very first frame it registers in, because a static app may never
   repaint afterwards. Focus is normally committed only when a frame is

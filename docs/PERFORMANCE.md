@@ -209,6 +209,16 @@ O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and
 48 ns (80 rows), all 0 alloc/op. Applications draw only that returned range;
 LUX does not materialize one million IDs or strings.
 
+`ui.Table` extends that virtualization to tabular data: `BenchmarkTableDraw`
+paints a 120×40 table over a one-million-row source (39 visible rows, three
+columns, a selection mid-table) in about 1.8 ms per full repaint with 41
+alloc/op on the same machine (i5-10400F, Go 1.25.5, `-benchtime=2s`,
+`-count=1`). The cost is the visible window plus per-cell EGC clipping, not
+the row count — `rowAt` is called exactly once per visible row, a property
+pinned by test, so a million-row and a hundred-row source paint identically.
+Wheel scrolling repaints at the same cost after the viewport-only decoupling:
+the offset moves without pulling the selection into view.
+
 Wheel routing through nested viewports is 0 alloc/op and grows with nesting
 depth in its worst case, where every level is exhausted and the whole enclosure
 chain is walked: about 173 ns for 2 levels, 242 ns for 8, and 516 ns for 32 in

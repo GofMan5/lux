@@ -150,6 +150,17 @@ fast path before falling back to the grapheme scanner. What is not claimed:
 per-row incremental rewrap of a single huge line, hard tabs beyond fixed
 4-column stops, RTL visual reordering, and IME preedit.
 
+`ui.Table` renders virtualized tabular data: fixed-width and rubber columns
+(Weight shares the leftover width), a header row with click-to-sort, keyboard
+and wheel navigation, and row selection with viewport-follow. The widget asks
+the application for one row at a time through `rowAt`, so a million-row source
+paints only the visible window — the 120×40 million-row benchmark costs
+~1.8 ms per repaint with 41 allocations. Sorting stays a request: the table
+reports `SortRequested` and the app re-slices its own data, so the widget never
+mutates the source. Not claimed: horizontal scrolling, row height above one
+cell, per-cell content styling, and IME preedit. `examples/table` shows the
+full pattern with 200k rows.
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`

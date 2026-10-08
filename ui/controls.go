@@ -246,6 +246,27 @@ func fallbackStyle(preferred, fallback render.Style) render.Style {
 	return preferred
 }
 
+// clipTextEllipsis truncates text like clipText and appends an ellipsis when
+// the text had to be cut. The ellipsis is measured with the same width policy
+// so ambiguous-width or multi-grapheme ellipses stay consistent; an ellipsis
+// that does not fit the width degrades to a plain clip.
+func clipTextEllipsis(text string, width int, policy render.WidthPolicy, ellipsis string) string {
+	if width <= 0 {
+		return ""
+	}
+	if render.TextWidthWith(text, policy) <= width {
+		return text
+	}
+	if ellipsis == "" {
+		return clipText(text, width, policy)
+	}
+	ellipsisWidth := render.TextWidthWith(ellipsis, policy)
+	if ellipsisWidth >= width {
+		return clipText(text, width, policy)
+	}
+	return clipText(text, width-ellipsisWidth, policy) + ellipsis
+}
+
 // clipText truncates text to width cells, never splitting a grapheme.
 // Measuring with the canvas's policy keeps the truncation consistent with
 // what the same canvas draws for those graphemes.
