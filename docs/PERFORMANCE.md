@@ -164,6 +164,13 @@ exactly one bounded wait of 150 ms by default, tunable or disableable via
 `LUX_TUI_PROBE_TIMEOUT`. Bytes typed during the probe are replayed into the
 event loop losslessly, so the tax never swallows input.
 
+The window title rides that same startup write and the matching restore
+write, not its own syscalls: `WithTitle` costs zero additional Write calls
+and zero per-frame bytes — the title is a lifecycle claim written once
+between the probe and the alternate screen (a push, the OSC 0 string, and
+the enter it joins in one write; the pop on the leave write). The title
+bytes themselves are bounded by the title's length plus eight.
+
 Current local interaction baselines (Windows amd64, i5-10400F, Go 1.25.5)
 show topmost hit routing at roughly 72 ns/op for 10, 100, and 1,000 regions,
 with 0 alloc/op. Ctrl-word movement is 0 alloc/op and exact through the

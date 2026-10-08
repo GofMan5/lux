@@ -506,7 +506,7 @@ func colorName(depth capability.ColorDepth) string {
 }
 
 func main() {
-	if err := lux.Run(context.Background(), newShowcase()); err != nil {
+	if err := lux.Run(context.Background(), newShowcase(), lux.WithTitle("lux-tui — widget showcase")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

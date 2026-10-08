@@ -111,25 +111,26 @@ func (m *testModel) View(frame *Frame) {
 }
 
 // TestDefaultBackendOptions pins the app-side wiring of the backend Run
-// constructs for itself: the base set always carries the pixel-mouse and
-// hyperlink opt-ins from the settings, and an explicit text width policy
-// appends exactly one suppression — the UnicodeCore(false) override — so an
+// constructs for itself: the base set always carries the pixel-mouse,
+// hyperlink, and title opt-ins from the settings — the title is the
+// backend's own no-op when empty — and an explicit text width policy
+// appends exactly one suppression, the UnicodeCore(false) override, so an
 // explicit width claim and mode 2027 never both steer the same stream. The
-// identity of the base options belongs to the terminal package's own tests;
-// here the observable contract is the shape: two defaults, three with a
-// policy, and the third only when the policy is nonzero.
+// identity of the base options belongs to the terminal package's own
+// tests; here the observable contract is the shape: three defaults, four
+// with a policy, and the fourth only when the policy is nonzero.
 func TestDefaultBackendOptions(t *testing.T) {
 	base := defaultBackendOptions(config{})
-	if len(base) != 2 {
-		t.Fatalf("default options = %d entries, want the pixel-mouse and hyperlink defaults", len(base))
+	if len(base) != 3 {
+		t.Fatalf("default options = %d entries, want the pixel-mouse, hyperlink, and title defaults", len(base))
 	}
 	explicit := defaultBackendOptions(config{widthPolicy: render.WidthPolicy{AmbiguousWidth: 2}})
-	if len(explicit) != 3 {
+	if len(explicit) != 4 {
 		t.Fatalf("explicit-policy options = %d entries, want the defaults plus the Unicode core suppression", len(explicit))
 	}
-	// The settings still steer the base pair: a zero policy with the app
-	// defaults is the only zero-claim shape, and the pixel/hyperlink
-	// toggles are carried by the same pair the policy test counts above.
+	// The settings still steer the base set: a zero policy with the app
+	// defaults is the only zero-claim shape, and the pixel/hyperlink/title
+	// toggles are carried by the same set the policy test counts above.
 	settings := defaultConfig()
 	settings.widthPolicy = render.WidthPolicy{AmbiguousWidth: 2}
 	withPolicy := defaultBackendOptions(settings)

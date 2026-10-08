@@ -608,6 +608,43 @@ The frame contract keeps regions honest on every path:
   into ambiguity;
 - the diff compares both URI and ID, so a changed target repaints the cell.
 
+## Window title (OSC 0 and the XTWINOPS stack)
+
+`lux.WithTitle` sets the terminal window and tab title as a lifecycle
+claim: the title is written once, in the same Write as the enter
+sequences, and restored once, in the same Write as the leave — never per
+frame, never on the plain path. The set is OSC 0 (`ESC ] 0 ; title BEL`,
+the icon-and-window form) and the restore is bracketed by the XTWINOPS
+title stack: `CSI 22;0 t` pushes both titles before the set, `CSI 23;0 t`
+pops them after the modes reset on every exit path — the enter-failure
+branch, Present-write failure, Close, and the panic cleanup all ride the
+same leave assembly.
+
+The stack is what makes the restore exact on a compliant terminal, and it
+is the one part of the program that cannot be detected: there is no
+report for the stack depth a reply could be parsed from without ambiguity
+(`CSI 21 t` answers with an OSC string that parses as keystrokes when
+misrouted), so no probe is sent and the honest matrix is the cost:
+
+| Terminal class | OSC 0 | CSI 22;0/23;0 | Exit behavior |
+|---|---|---|---|
+| xterm, VTE (GNOME and friends), kitty, Alacritty, foot, WezTerm | yes | yes | previous title restored exactly |
+| tmux (outer window) | yes | yes | previous title restored exactly; pane titles are a separate mechanism |
+| Windows Terminal / ConPTY | yes (tab title) | no | program title persists on exit — ConPTY has no title stack |
+| ConHost legacy console | yes (window title) | no | program title persists on exit |
+| plain pipe, `TERM=dumb` | n/a | n/a | no title bytes written at any point |
+
+The title string itself is sanitized before any write: C0 controls, DEL,
+and C1 runes are stripped, because a BEL or ESC inside the OSC string
+would terminate it early and leak the rest of the title as commands;
+graphic runes from any script pass through unchanged, and invalid UTF-8
+is passed as-is (it cannot inject a control sequence). An empty title
+after sanitization is an opt-out: no title bytes are written at all.
+
+Not claimed: runtime retitling after Open, per-frame titles, the
+icon-only OSC 1 form, title handling in a custom `Backend` (the interface
+is unchanged; an adapter owns its own title policy).
+
 ## Required degradation ladder
 
 Future features must preserve meaning in this order:

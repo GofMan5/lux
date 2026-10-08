@@ -233,6 +233,20 @@ terminals and redirected output while color themes stay opt-in —
 `ui.DefaultTheme()` is a function, so restyling means passing your own
 value, never mutating a shared one.
 
+The window title is a lifecycle claim, not a per-frame one. `lux.WithTitle`
+writes the title through OSC 0 bracketed by the XTWINOPS title stack — the
+push (CSI 22;0 t) rides the same terminal write as the enter sequences and
+the pop (CSI 23;0 t) the same write as the restore on every exit path, so
+the syscall count does not change and the previous title comes back exactly
+on terminals with the stack (xterm, kitty, VTE-family, tmux), while
+terminals without it keep the program's title on exit — the documented
+matrix. Control runes in the title are stripped before it is written: a BEL
+or ESC would end the OSC string early and leak the rest as commands. Plain
+and redirected output never writes title bytes, and the option only steers
+the terminal backend Run constructs for itself — a custom adapter owns its
+title policy. Not claimed: runtime retitling, a per-frame title, the
+terminal's icon-only OSC 1 form.
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`

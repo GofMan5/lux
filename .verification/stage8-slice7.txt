@@ -1,0 +1,90 @@
+Stage 8, slice 7: window title with stack-based restore
+Date: 2026-10-08
+Machine: Windows amd64, i5-10400F, Go 1.25.5 (host), golang:1.25-alpine (docker)
+
+WHAT
+- lux.WithTitle(title string) Option; terminal.Title(title string) Option.
+- Title written once via OSC 0 ("\x1b]0;<title>\a"), bracketed by the
+  XTWINOPS title stack: CSI 22;0 t (push) rides the enter write, CSI 23;0 t
+  (pop) rides the leave write on every exit path (Open-failure branch,
+  Present-write failure path reuses the same leave assembly via writeSlot
+  contract, Close, panic cleanup) — zero additional Write syscalls.
+- sanitizeTitle strips C0 (<0x20), DEL (0x7f), and C1 (U+0080..U+009F)
+  runes before any write: a BEL/ESC inside an OSC string would terminate it
+  early and leak the rest as commands. Graphic runes (any script) pass;
+  invalid UTF-8 passes as-is (cannot inject a control sequence). Runes are
+  handled as runes, so multi-byte UTF-8 never corrupts.
+- sequences(pixel, kitty, win32, unicodeCore bool, title string) (enter,
+  leave string): the enter/leave latch assembly extracted from Open and
+  Close into one pure table. Behavior-identical ordering: title push+set
+  lead the enter; title pop closes the leave (after every mode reset).
+  Kitty enter/leave order is now table-pinned (was only Open-inline).
+- App wiring: config.title, defaultBackendOptions appends
+  terminal.Title(settings.title) unconditionally (empty = inert no-op;
+  plain/default builds stay byte-identical). Public Backend interface
+  unchanged: custom adapters own their own title policy.
+- b.title is opt-level state (like hyperlinkOpted), survives Close, so
+  Open-after-Close re-pushes the title.
+- Invariants pinned by tests: plain path (TERM=dumb + pipe) writes zero
+  title bytes at Open/frame/Close; backend without title never emits
+  titlePush/titlePop/OSC 0; pop only when configured; sanitized-only
+  emission; no probe/parser/encoder/capability changes (negotiate,
+  capability.Set, vtgrid, encoder all untouched).
+
+FILES
+- internal/terminal/backend.go: titlePush/titlePop constants; Backend.title
+  field; Title Option; sanitizeTitle/unsafeTitleRune/setWindowTitle
+  helpers; sequences() helper; Open/Close rewired to sequences().
+- internal/terminal/backend_title_test.go: NEW — TestTitleSanitization
+  (8 cases: C0/DEL/C1 stripped, Cyrillic/CJK/emoji preserved),
+  TestTitleOptionSanitizesAtConstruction, TestSequencesTitle (5 rows: no
+  title / alone / +kitty / +pixel / all latches ordering),
+  TestCloseRestoresWindowTitle (latched: suffix kittyLeave+leaveTerminal+
+  titlePop, count 1; unlatched: zero title bytes),
+  TestPlainBackendWithTitleNeverWrites (dumb+pipe: file == "ok\n", no ESC).
+- app.go: WithTitle Option + doc; config.title; defaultBackendOptions.
+- app_test.go: TestDefaultBackendOptions counts updated 2->3 / 3->4.
+- examples/showcase/main.go: lux.WithTitle("lux-tui — widget showcase").
+- README.md: title paragraph after theme; docs/COMPATIBILITY.md: new
+  "Window title (OSC 0 and the XTWINOPS stack)" section with terminal
+  matrix (stack vs no-stack honesty); docs/PERFORMANCE.md: zero-syscall/
+  zero-per-frame note; CHANGELOG.md Added entry; docs/ROADMAP.md: slice
+  marked done, OSC 9;4 / 9;777 / 52 folded into stage 9.
+
+GATES (all green)
+- gofmt -l . → empty.
+- go vet ./... → clean (host + docker).
+- go test ./... -count=1 -timeout 300s → ok, 13/13 packages
+  (host: lux, capability, event, 4x examples, internal/terminal, layout,
+  motion, render, scene3d, ui).
+- docker run --rm -e GOFLAGS=-buildvcs=false golang:1.25-alpine:
+  sh -c 'go vet ./... && go test ./... -count=1 -timeout 300s && go mod
+  verify' → DOCKER_EXIT=0, "all modules verified".
+- go mod verify → clean (host).
+- golangci-lint: NOT RUN (not available in this environment; recorded as
+  skipped, consistent with all stage 8 slices).
+- Fuzz: N/A (no new parser/encoder surface; input never feeds sanitize
+  beyond the rune-classification already covered by table tests).
+- Benchmarks ./ui -benchtime=2s -count=1 -benchmem: all within noise of
+  the stage-8 baselines (title is a lifecycle write, zero per-frame
+  bytes): TabsDraw 81697-82186 ns (base 83354), GaugeDraw 13085 (13004),
+  SpinnerDraw 544.8-561.4 (540.4), SparklineDraw 15073 (15501),
+  TreeDraw 198267 (197103), TableDraw 1624931-1644029 (1633540, 2256 B
+  41 allocs), CheckboxDraw 12279 (12276), RadioGroupDraw 23699 (23767),
+  SelectDrawOpen 6271 (6262), SelectDrawClosed 5426 (5642),
+  TextAreaDraw 687244-691052 (694483).
+
+DESIGN NOTES (decisions recorded for the audit trail)
+- Stack (22;0/23;0) over query-and-restore (CSI 21 t reply is an OSC
+  string that parses as keystrokes when misrouted — ambiguous, rejected)
+  and over plain set-then-hope. Terminals without the stack ignore both
+  operations: the title persists after exit there — documented in
+  COMPATIBILITY.md matrix (ConPTY/ConHost), not silently mishandled.
+- No capability gating: the stack has no detectable reply, so a gate
+  would be a guess; the honest matrix is cheaper.
+- OSC 0 (icon+window) over OSC 2 (window only): one sequence, both
+  surfaces, and tmux propagates both.
+- Title bytes: push(6)+OSC head(4)+title+BEL(1)+pop(6) — bounded by
+  len(title)+17, once per Open, once per Close.
+- not claimed: runtime retitling after Open, per-frame titles, OSC 1
+  icon-only form, CSI 21 t query, title support in custom Backends.

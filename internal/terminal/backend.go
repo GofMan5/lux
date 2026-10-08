@@ -88,7 +88,21 @@ const (
 	// other mode it enters.
 	unicodeCoreEnter = "\x1b[?2027h"
 	unicodeCoreLeave = "\x1b[?2027l"
-	escapeDelay      = 35 * time.Millisecond
+	// titlePush and titlePop are the XTWINOPS title stack: CSI 22;0 t
+	// saves the icon and window titles, CSI 23;0 t restores them. The
+	// stack is the only restore mechanism that needs no report parsing —
+	// the CSI 21 t title query has no uniform reply shape across
+	// terminals, and a misparsed reply would leak as keystrokes — so the
+	// push rides the enter Write, the pop rides the leave Write on every
+	// exit path, and the pair is the same contract kitty's flag stack
+	// already follows: never pop what was not pushed. A terminal without
+	// the stack ignores both operations, which leaves the program's title
+	// behind on exit there — the documented matrix, not a silent failure:
+	// OSC 0 itself is honored by every terminal that passes the
+	// interactive gate.
+	titlePush   = "\x1b[22;0t"
+	titlePop    = "\x1b[23;0t"
+	escapeDelay = 35 * time.Millisecond
 )
 
 // Backend is a VT-first terminal adapter. Its methods serialize lifecycle and
@@ -128,19 +142,24 @@ type Backend struct {
 	// it to decide whether the reset belongs in the restore.
 	unicodeCoreOpted *bool
 	unicodeCore      bool
-	features         capability.Set
-	state            *term.State
-	restoreVT        func() error
-	previous         *render.Buffer
-	parser           *parser
-	events           chan event.Event
-	resizes          chan event.Event
-	cancel           context.CancelFunc
-	readDone         chan struct{}
-	resize           resizeWatcher
-	lastResizeW      int
-	lastResizeH      int
-	lastResizeOK     bool
+	// title holds the sanitized window title the application asked for.
+	// An empty string means no title program: nothing is pushed, set, or
+	// popped on any path. It survives Close — it is an application choice,
+	// not a probe latch, so a second Open restores the same title.
+	title        string
+	features     capability.Set
+	state        *term.State
+	restoreVT    func() error
+	previous     *render.Buffer
+	parser       *parser
+	events       chan event.Event
+	resizes      chan event.Event
+	cancel       context.CancelFunc
+	readDone     chan struct{}
+	resize       resizeWatcher
+	lastResizeW  int
+	lastResizeH  int
+	lastResizeOK bool
 }
 
 // Option configures a Backend at construction time, before any Open.
@@ -184,6 +203,87 @@ func UnicodeCore(enabled bool) Option {
 		set := enabled
 		b.unicodeCoreOpted = &set
 	}
+}
+
+// Title sets the terminal window and icon title for the next Open. The
+// title is sanitized — C0 controls, DEL, and one-byte C1 controls are
+// stripped, because a BEL or ESC inside an OSC 0 string would end the
+// sequence early and leak the rest of the title as commands — while every
+// graphic rune, Unicode included, passes through. An empty title after
+// sanitization means no title program: the backend writes no title bytes
+// at all. The title is a lifecycle write, not a per-frame one: it rides
+// the same Write call as the enter sequences, and its restore rides the
+// leave. Plain and redirected streams never write title bytes, because
+// they never write the enter either. The choice is honored per Open, like
+// every other Option.
+func Title(title string) Option {
+	return func(b *Backend) { b.title = sanitizeTitle(title) }
+}
+
+// sanitizeTitle returns title without the bytes an OSC string cannot
+// carry: C0 controls (a BEL would end the title early, an ESC would start
+// a new sequence), DEL, and the one-byte C1 controls. Graphic bytes —
+// including every multi-byte UTF-8 sequence — pass through, so a title in
+// any script survives intact; invalid UTF-8 is left as-is too, because it
+// cannot inject a control sequence into a terminal in UTF-8 mode.
+func sanitizeTitle(title string) string {
+	if strings.IndexFunc(title, unsafeTitleRune) < 0 {
+		return title
+	}
+	var clean strings.Builder
+	clean.Grow(len(title))
+	for _, r := range title {
+		if !unsafeTitleRune(r) {
+			clean.WriteRune(r)
+		}
+	}
+	return clean.String()
+}
+
+// unsafeTitleRune reports whether r is a control rune an OSC 0 title must
+// never carry: C0, DEL, or C1.
+func unsafeTitleRune(r rune) bool {
+	return r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f)
+}
+
+// setWindowTitle builds the OSC 0 sequence that sets the icon and window
+// title to title. The BEL terminator is the portable form: every terminal
+// that honors OSC at all accepts it.
+func setWindowTitle(title string) string {
+	return "\x1b]0;" + title + "\a"
+}
+
+// sequences builds the enter and leave byte strings for a latch state.
+// Open and Close both call it, so the restore a terminal receives on any
+// exit path — the enter failure below, Present's write error, or Close —
+// is exactly the inverse of the enter it received, assembled from one
+// table instead of two hand-maintained compositions. Order: the title
+// push and set lead the enter (the title changes before any mode the
+// modes could interact with), and the title pop closes the leave (the
+// stack unwinds after every mode is reset, mirroring the enter order in
+// reverse — the same discipline the kitty pop follows).
+func sequences(pixel, kitty, win32, unicodeCore bool, title string) (enter, leave string) {
+	enter, leave = enterTerminal, leaveTerminal
+	if pixel {
+		enter, leave = enterPixel, leavePixel
+	}
+	if kitty {
+		enter += kittyEnter
+		leave = kittyLeave + leave
+	}
+	if win32 {
+		enter += win32Enter
+		leave = win32Leave + leave
+	}
+	if unicodeCore {
+		enter += unicodeCoreEnter
+		leave = unicodeCoreLeave + leave
+	}
+	if title != "" {
+		enter = titlePush + setWindowTitle(title) + enter
+		leave = leave + titlePop
+	}
+	return enter, leave
 }
 
 // New constructs a closed backend. Nil files are allowed for tests and plain
@@ -305,22 +405,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// that enterPixel just put in flight.
 	b.parser.pixelMouse = b.pixel
 	b.parser.win32Input = b.win32
-	enter, leave := enterTerminal, leaveTerminal
-	if b.pixel {
-		enter, leave = enterPixel, leavePixel
-	}
-	if b.kitty {
-		enter += kittyEnter
-		leave = kittyLeave + leave
-	}
-	if b.win32 {
-		enter += win32Enter
-		leave = win32Leave + leave
-	}
-	if b.unicodeCore {
-		enter += unicodeCoreEnter
-		leave = unicodeCoreLeave + leave
-	}
+	enter, leave := sequences(b.pixel, b.kitty, b.win32, b.unicodeCore, b.title)
 	b.opened = true
 	if err := writeAll(b.writer, []byte(enter)); err != nil {
 		// The pop rides the same write as the legacy restore: a pop without
@@ -620,7 +705,7 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore
+	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore, title := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore, b.title
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
@@ -650,21 +735,10 @@ func (b *Backend) Close() error {
 			// so this is a plain reset — and the Unicode core reset leads
 			// them all: it was the last mode entered, so it leaves first,
 			// restoring the terminal's own clustering before the modes that
-			// rode underneath it. Sharing one Write with leaveTerminal is
-			// what guarantees each restore happens wherever the others do.
-			leave := leaveTerminal
-			if pixel {
-				leave = leavePixel
-			}
-			if kitty {
-				leave = kittyLeave + leave
-			}
-			if win32 {
-				leave = win32Leave + leave
-			}
-			if unicodeCore {
-				leave = unicodeCoreLeave + leave
-			}
+			// rode underneath it. The title pop closes the leave. sequences
+			// builds this from the same table Open used, which is what
+			// guarantees each restore happens wherever the others do.
+			_, leave := sequences(pixel, kitty, win32, unicodeCore, title)
 			result = errors.Join(result, writeAll(writer, []byte(leave)))
 			<-b.writeSlotChan()
 		}

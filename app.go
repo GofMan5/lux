@@ -182,6 +182,20 @@ func WithHyperlinks(enabled bool) Option {
 	return func(config *config) error { config.hyperlinks = enabled; return nil }
 }
 
+// WithTitle sets the terminal window and tab title while the program runs
+// and restores the previous title on exit. The title is written once, in
+// the same terminal write as the enter sequences — not per frame — using
+// OSC 0 bracketed by the XTWINOPS title stack (CSI 22;0 t before, CSI 23;0
+// after), so terminals with the stack get their title back exactly and
+// terminals without it keep the program's title, the documented trade.
+// Control runes in the title are stripped before it is written: a BEL or
+// ESC would end the OSC string early and leak the rest as commands. An
+// empty title opts out. The option applies to the terminal backend Run
+// constructs for itself; a custom backend owns its own title policy.
+func WithTitle(title string) Option {
+	return func(config *config) error { config.title = title; return nil }
+}
+
 // WithWidthPolicy sets how the terminal measures ambiguous graphemes: East
 // Asian Ambiguous characters one or two cells wide, emoji presentation
 // selectors honored or ignored, emoji one or two cells wide. The default
@@ -214,6 +228,7 @@ type config struct {
 	keyReleases                   bool
 	pixelMouse                    bool
 	hyperlinks                    bool
+	title                         string
 	widthPolicy                   render.WidthPolicy
 }
 
@@ -226,9 +241,11 @@ func defaultConfig() config {
 // width policy is the one claim that forbids mode 2027: an explicit policy
 // means the application owns the width contract for this stream, so the
 // backend opts out of the terminal's Unicode core mode even on terminals
-// that answered the probe. Everything else follows the settings directly.
+// that answered the probe. The title always rides along — an empty string
+// is the backend's no-op, so plain streams and default builds stay
+// byte-identical. Everything else follows the settings directly.
 func defaultBackendOptions(settings config) []terminal.Option {
-	options := []terminal.Option{terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks)}
+	options := []terminal.Option{terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks), terminal.Title(settings.title)}
 	if settings.widthPolicy != (render.WidthPolicy{}) {
 		options = append(options, terminal.UnicodeCore(false))
 	}

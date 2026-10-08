@@ -369,6 +369,21 @@ work and the API may still change.
   Explicitly styled widgets render exactly as before. Not claimed: a
   global mutable theme, per-instance theming inside one Context, theme
   files or runtime hot-swap, and any widget-specific role beyond the four.
+- `lux.WithTitle` and `terminal.Title`: the terminal window title, written
+  once through OSC 0 bracketed by the XTWINOPS title stack — the push
+  (`CSI 22;0 t`) rides the enter write and the pop (`CSI 23;0 t`) the
+  leave on every exit path, so the previous title returns exactly on
+  stack-supporting terminals (xterm, kitty, VTE-family, tmux) and the
+  syscall count is unchanged. Control runes in the title (C0, DEL, C1)
+  are stripped before any write: a BEL or ESC would end the OSC string
+  early and leak the remainder as commands. Plain and redirected output
+  never writes title bytes, and an empty title opts out entirely. The
+  enter/leave assembly for every latch is now built by one table
+  (`sequences`) shared by Open and Close, so the restore a terminal
+  receives is guaranteed to be the inverse of the enter it received.
+  Not claimed: runtime retitling, per-frame titles, the icon-only OSC 1
+  form, a capability probe for the title stack, or title support in
+  custom adapters (the public `Backend` interface is unchanged).
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
