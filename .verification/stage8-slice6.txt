@@ -1,0 +1,87 @@
+Stage 8, slice 6 — Theme and Context override
+Date: 2026-10-08
+Headline: one palette (Text, Muted, Accent, Danger) resolved per Context; no
+global mutable style table anywhere.
+
+Scope
+-----
+- ui/theme.go: Theme struct (four render.Style roles), DefaultTheme() as a
+  FUNCTION so no shared table can be mutated, Context.UseTheme/Theme with
+  mu-guarded read/write and a themeSet flag (zero-value Context stays
+  DefaultTheme), themedStyle(explicit, role, base) resolution helper.
+- ui/context.go: theme + themeSet fields.
+- Wiring (zero-value style fields resolve through roles; explicit always
+  wins; zero role falls back to the widget default):
+  * gauge.go: Fill→Accent, Track→Muted
+  * spinner.go: Style→Accent
+  * sparkline.go: Fill→Accent
+  * tabs.go: Selected→Accent, Normal→Muted, DisabledStyle→Danger
+  * table.go: Normal→Text, Header→Muted (underline kept in every branch),
+    Selected→Accent, DisabledStyle→Danger
+  * select.go: Normal→Text, Popup→Muted, OptionNormal→Text,
+    OptionSelected→Accent, DisabledStyle→Danger
+  * checkbox.go: Normal→Text, marker run→Accent (Normal is its explicit
+    override; label stays Text), DisabledStyle→Danger — the marker/label
+    split is one extra Text call with explicit cell math
+  * checkbox.go RadioGroup: Normal→Text, Selected→Accent,
+    DisabledStyle→Danger
+  * tree.go: Normal→Text, Selected→Accent, DisabledStyle→Danger
+- DefaultTheme is attributes-only: Muted=Dim, Accent=Bold, Danger=Reverse,
+  Text zero. Monochrome terminals and redirected output survive; color
+  themes are opt-in values.
+- Default visuals change where zero styles were painted (documented in
+  README/CHANGELOG): selected tabs/rows bold, unselected tabs and headers
+  dim (header keeps underline), gauge fill / spinner / sparkline bold,
+  disabled reverse-video, checkbox markers bold while labels stay plain.
+
+Tests
+-----
+- ui/theme_test.go: DefaultTheme attribute values; context scoping (no leak
+  between Contexts); themedStyle resolution table; gauge override (custom
+  theme paints Accent fill + Muted track; zero Theme paints zero styles);
+  explicit style beats theme; checkbox marker bold + label plain under
+  DefaultTheme; table header dim+underline, selected row bold, body plain
+  under DefaultTheme; default bold selected tab.
+- ui/example_theme_test.go: ExampleContext_UseTheme godoc example (default
+  bold/dim vs opted-out zero Theme).
+- Full suite green with the new default visuals — existing paint tests are
+  text-based, so no fallout; no e2e adjustments needed.
+
+Gates (all passed)
+------------------
+- gofmt -l .        : empty
+- go vet ./...      : clean
+- go test ./... -count=1 -timeout 300s : ok, 13/13 packages (host)
+- docker golang:1.25-alpine, GOFLAGS=-buildvcs=false, single-quoted
+  sh -c (PowerShell must not interpolate $?): DOCKER_EXIT=0
+- go mod verify     : all modules verified
+- golangci-lint     : NOT RUN (not installed on host; recorded as skipped)
+- Fuzz              : N/A (no fuzz targets in module)
+
+Benchmarks (i5-10400F, Go 1.25.5, -benchtime=2s -count=1 -benchmem)
+-------------------------------------------------------------------
+Post-theme draw benchmarks vs pre-theme baselines — no movement outside
+noise, alloc/op unchanged everywhere:
+- TabsDraw 83354 ns (was ~81635), 384 B, 2 allocs
+- GaugeDraw 13004 ns (was ~12964), 96 B, 1
+- SpinnerDraw 540.4 ns (was ~516.2), 96 B, 1 — +24 ns is the single
+  mutex-guarded Context.Theme() read per draw
+- SparklineDraw 15501 ns (was ~15442), 96 B, 1
+- TreeDraw 197103 ns (was ~197233), 394 B, 11
+- TableDraw 1633540 ns (was ~1635760), 2253 B, 41
+Rationale: theme resolution is one comparable struct check per zero-value
+style field and one Theme() read per widget draw; no allocation added.
+Checkbox/Radio benchmarks (no pre-theme baseline recorded): 12276 ns / 2
+allocs, 23767 ns / 4 allocs.
+
+Not claimed
+-----------
+- A global mutable theme table (deliberately absent; tview.Styles-style
+  global mutation is what this slice answers — see ROADMAP).
+- Per-instance theming inside one Context, theme files, runtime hot-swap.
+- A themed example app page (examples pass explicit styles; theme coverage
+  is proven at the ui layer).
+- Radio/tree per-row marker theming: rows resolve as one run, matching the
+  single-Text-call paint.
+- Doc-code coupling: docs/CUSTOM-CONTROL.md ↔ ui/stepper_recipe_test.go
+  untouched by this slice.

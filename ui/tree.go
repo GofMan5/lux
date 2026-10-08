@@ -153,7 +153,9 @@ func (s *TreeState) ensureVisible(count, rows int) {
 	s.Offset = min(max(s.Offset, 0), max(count-rows, 0))
 }
 
-// TreeStyle defines tree row states. Zero values inherit Normal. The branch
+// TreeStyle defines tree row states. Zero values resolve through the
+// context theme: Normal reads Text, Selected reads Accent, DisabledStyle
+// reads Danger; explicit styles always win. The branch
 // markers default to ASCII ("+" collapsed, "-" expanded, "" leaf) so the
 // tree aligns on any terminal, including CJK-ambiguous-width renderers;
 // restyle them to "▸"/"▾" when the renderer is trusted.
@@ -204,8 +206,10 @@ func (c *Context) Tree(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
+	theme := c.Theme()
+	body := themedStyle(style.Normal, theme.Text, style.Normal)
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", style.Normal)
+	canvas.Fill(bounds, " ", body)
 	policy := canvas.WidthPolicy()
 	for row := 0; row < bounds.H; row++ {
 		index := state.Offset + row
@@ -216,11 +220,11 @@ func (c *Context) Tree(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		if rowAt != nil {
 			current = rowAt(index)
 		}
-		visual := style.Normal
+		visual := body
 		if style.Disabled {
-			visual = fallbackStyle(style.DisabledStyle, visual)
+			visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 		} else if index == state.Selected {
-			visual = fallbackStyle(style.Selected, visual)
+			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
 				visual = fallbackStyle(style.Focused, visual)
 			} else if c.Hovered(id) {

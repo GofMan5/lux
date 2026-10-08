@@ -11,9 +11,12 @@ type CheckboxState struct {
 	Checked bool
 }
 
-// CheckboxStyle defines checkbox visual states. Zero values inherit Normal.
-// Marker pair: Checked/Unchecked, ASCII by default so a CJK-locale terminal
-// cannot widen the control; restyle to taste.
+// CheckboxStyle defines checkbox visual states. Zero values resolve through
+// the context theme: Normal reads Text, and the marker run (the "[x]" glyph
+// pair) reads Accent when the row style is still zero, so the control's glyph
+// pops while the label stays body text; DisabledStyle reads Danger. Explicit
+// styles always win. Marker pair: Checked/Unchecked, ASCII by default so a
+// CJK-locale terminal cannot widen the control; restyle to taste.
 type CheckboxStyle struct {
 	Normal        render.Style
 	Focused       render.Style
@@ -57,10 +60,11 @@ func (c *Context) Checkbox(id ID, canvas *render.Canvas, bounds render.Rect, sta
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
-	visual := style.Normal
+	theme := c.Theme()
+	visual := themedStyle(style.Normal, theme.Text, style.Normal)
 	switch {
 	case style.Disabled:
-		visual = fallbackStyle(style.DisabledStyle, visual)
+		visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 	case c.Pressed(id):
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
@@ -68,6 +72,10 @@ func (c *Context) Checkbox(id ID, canvas *render.Canvas, bounds render.Rect, sta
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}
+	// The marker run reads the Accent role (Normal is its explicit
+	// override), falling back to the row style: the glyph is the
+	// control, the label is body text.
+	markerVisual := themedStyle(style.Normal, theme.Accent, visual)
 	canvas = canvas.Clip(bounds)
 	canvas.Fill(render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: 1}, " ", visual)
 	checked, empty := style.Checked, style.Unchecked
@@ -81,8 +89,12 @@ func (c *Context) Checkbox(id ID, canvas *render.Canvas, bounds render.Rect, sta
 	if !state.Checked {
 		marker = empty
 	}
-	text := clipText(marker+" "+label, bounds.W, canvas.WidthPolicy())
-	canvas.Text(bounds.X, bounds.Y, text, visual)
+	canvas.Text(bounds.X, bounds.Y, clipText(marker+" ", bounds.W, canvas.WidthPolicy()), markerVisual)
+	markerCells := render.TextWidth(marker)
+	if bounds.W > markerCells+1 {
+		label := clipText(label, bounds.W-markerCells-1, canvas.WidthPolicy())
+		canvas.Text(bounds.X+markerCells+1, bounds.Y, label, visual)
+	}
 }
 
 // RadioState is the persistent choice of one radio group. Selected indexes
@@ -91,7 +103,9 @@ type RadioState struct {
 	Selected int
 }
 
-// RadioStyle defines radio row states. Zero values inherit Normal. Marker
+// RadioStyle defines radio row states. Zero values resolve through the
+// context theme: Normal reads Text, Selected reads Accent, DisabledStyle
+// reads Danger; explicit styles always win. Marker
 // pair: Selected/Empty, ASCII by default ("(*)"/"( )").
 type RadioStyle struct {
 	Normal        render.Style
@@ -187,8 +201,10 @@ func (c *Context) RadioGroup(id ID, canvas *render.Canvas, bounds render.Rect, s
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
+	theme := c.Theme()
+	body := themedStyle(style.Normal, theme.Text, style.Normal)
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", style.Normal)
+	canvas.Fill(bounds, " ", body)
 	marker, empty := style.Marker, style.Empty
 	if marker == "" {
 		marker = "(*)"
@@ -200,12 +216,12 @@ func (c *Context) RadioGroup(id ID, canvas *render.Canvas, bounds render.Rect, s
 		if row >= len(labels) {
 			break
 		}
-		visual := style.Normal
+		visual := body
 		prefix := empty
 		if style.Disabled {
-			visual = fallbackStyle(style.DisabledStyle, visual)
+			visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 		} else if row == state.Selected {
-			visual = fallbackStyle(style.Selected, visual)
+			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
 				visual = fallbackStyle(style.Focused, visual)
 			} else if c.Hovered(id) {

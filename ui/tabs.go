@@ -155,7 +155,9 @@ func (s *TabsState) Apply(action Action, labels []string) (changed, activated bo
 	return changed, activated
 }
 
-// TabsStyle defines tab strip states. Zero values inherit Normal. Visual
+// TabsStyle defines tab strip states. Zero values resolve through the
+// context theme: Normal reads Muted, Selected reads Accent, DisabledStyle
+// reads Danger; explicit styles always win. Visual
 // states apply to the selected tab only; the other tabs always draw Normal,
 // and hover styling is not claimed (the router reports hover per region, not
 // per tab).
@@ -202,10 +204,11 @@ func (c *Context) Tabs(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
-	visual := style.Selected
+	theme := c.Theme()
+	visual := themedStyle(style.Selected, theme.Accent, style.Selected)
 	switch {
 	case style.Disabled:
-		visual = fallbackStyle(style.DisabledStyle, style.Normal)
+		visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, style.Normal))
 	case c.Pressed(id):
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
@@ -213,9 +216,10 @@ func (c *Context) Tabs(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}
+	unselected := themedStyle(style.Normal, theme.Muted, style.Normal)
 	canvas = canvas.Clip(bounds)
 	for _, slot := range slots {
-		fill := style.Normal
+		fill := unselected
 		if slot.index == state.Selected {
 			fill = visual
 		}

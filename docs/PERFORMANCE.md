@@ -254,5 +254,14 @@ chain is walked: about 173 ns for 2 levels, 242 ns for 8, and 516 ns for 32 in
 the same run. Real interfaces nest a few levels, so no parent index is justified
 yet.
 
+Theme resolution (stage 8, slice 6) adds one comparable struct check per
+resolved style field plus one guarded `Context.Theme()` read per widget
+draw — no allocation. Re-running the same draw benchmarks after the wiring
+shows no movement outside run noise: the spinner (the smallest draw, one
+cell) moves from about 0.52 µs to about 0.54 µs, which is the cost of the
+one mutex-guarded theme read; the other widgets stay within a few percent
+(Tabs 83 vs 82 µs, Gauge 13 µs, Sparkline 15.5 vs 15.4 µs, Tree 197 µs,
+Table 1.63 ms), and `alloc/op` counts are unchanged everywhere.
+
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

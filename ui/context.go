@@ -123,6 +123,9 @@ type Context struct {
 	pointerKnown bool
 	pointerX     int
 	pointerY     int
+
+	theme    Theme
+	themeSet bool
 }
 
 // Begin starts registration for frame. A viewport change immediately

@@ -25,7 +25,8 @@ type SparklineState struct {
 	Max    float64
 }
 
-// SparklineStyle defines the glyph style. Zero values draw unstyled.
+// SparklineStyle defines the glyph style. A zero Fill resolves through the
+// context theme's Accent.
 type SparklineStyle struct {
 	Fill render.Style
 }
@@ -88,7 +89,8 @@ func (s *SparklineState) rangeOf() (lo, hi float64) {
 // values (the latest value is always the rightmost column); a shorter
 // series starts at the left edge and leaves the rest blank. Only glyph
 // cells are painted — no track, no background fill — so the application
-// owns whatever sits under the sparkline, same as text. The sparkline is
+// owns whatever sits under the sparkline, same as text. A zero Fill
+// resolves through the context theme's Accent. The sparkline is
 // display-only by design — no region, no routing, no focus; an
 // interactive scrub would need its own press contract and is not claimed.
 func (c *Context) Sparkline(canvas *render.Canvas, bounds render.Rect, state *SparklineState, style SparklineStyle) {
@@ -98,6 +100,7 @@ func (c *Context) Sparkline(canvas *render.Canvas, bounds render.Rect, state *Sp
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
+	fill := themedStyle(style.Fill, c.Theme().Accent, style.Fill)
 	canvas = canvas.Clip(bounds)
 	// Resolve the range once: Fraction would rescan Values for every
 	// column otherwise.
@@ -112,12 +115,12 @@ func (c *Context) Sparkline(canvas *render.Canvas, bounds render.Rect, state *Sp
 		cells := sparkFraction(state.Values[first+column], lo, hi) * float64(bounds.H)
 		full := min(int(cells), bounds.H)
 		for k := 0; k < full; k++ {
-			canvas.Put(bounds.X+column, bottom-k, "█", style.Fill)
+			canvas.Put(bounds.X+column, bottom-k, "█", fill)
 		}
 		remainder := cells - float64(full)
 		level := int(math.Ceil(remainder * 8))
 		if level > 0 && full < bounds.H {
-			canvas.Put(bounds.X+column, bottom-full, sparkGlyphs[level-1], style.Fill)
+			canvas.Put(bounds.X+column, bottom-full, sparkGlyphs[level-1], fill)
 		}
 	}
 }

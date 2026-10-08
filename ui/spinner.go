@@ -7,7 +7,8 @@ import (
 )
 
 // SpinnerStyle picks the glyph orbit and pacing. Frames are single-cell
-// glyphs; the first frame is the resting glyph before any time passes.
+// glyphs; the first frame is the resting glyph before any time passes. A
+// zero Style resolves through the context theme's Accent.
 type SpinnerStyle struct {
 	Frames        []string
 	FrameDuration time.Duration
@@ -56,9 +57,10 @@ func spinnerFrame(age, duration time.Duration, frames int) int {
 // region, no routing, no focus; "busy" is a state the app owns, the spinner
 // only tells time. The app passes now (usually time.Time Now) so the drawn
 // frame is deterministic for tests and replayable for the interaction lab;
-// drawing the same (state, now) always paints the same glyph. The glyph draws
-// at bounds' origin and clips to bounds.W, so a wider bounds leaves the cells
-// to the right for the app to use. Not claimed: multi-cell frames, an
+// drawing the same (state, now) always paints the same glyph. A zero Style
+// resolves through the context theme's Accent. The glyph draws at bounds'
+// origin and clips to bounds.W, so a wider bounds leaves the cells to the
+// right for the app to use. Not claimed: multi-cell frames, an
 // indeterminate marquee, frame scheduling (the runtime's pacer owns that).
 func (c *Context) Spinner(canvas *render.Canvas, bounds render.Rect, state *SpinnerState, now time.Time, style SpinnerStyle) {
 	if canvas == nil || bounds.Empty() {
@@ -80,6 +82,7 @@ func (c *Context) Spinner(canvas *render.Canvas, bounds render.Rect, state *Spin
 	if glyph == "" {
 		glyph = frames[0]
 	}
+	visual := themedStyle(style.Style, c.Theme().Accent, style.Style)
 	canvas = canvas.Clip(bounds)
-	canvas.Text(bounds.X, bounds.Y, glyph, style.Style)
+	canvas.Text(bounds.X, bounds.Y, glyph, visual)
 }

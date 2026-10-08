@@ -20,10 +20,11 @@ type SelectState struct {
 }
 
 // SelectStyle defines the closed box and the open popup states. Zero values
-// inherit: closed states fall back to Normal, popup option states to
-// OptionNormal. The popup is intentionally borderless so its drawn cells
-// and its press rows stay the same rectangle; style the Popup fill against
-// the surrounding panel instead of a border.
+// resolve through the context theme: Normal and OptionNormal read Text,
+// OptionSelected reads Accent, Popup and DisabledStyle read Muted and Danger
+// respectively; explicit styles always win. The popup is intentionally
+// borderless so its drawn cells and its press rows stay the same rectangle;
+// style the Popup fill against the surrounding panel instead of a border.
 type SelectStyle struct {
 	Normal        render.Style
 	Focused       render.Style
@@ -197,10 +198,11 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 	if marker == "" {
 		marker = "▾"
 	}
-	visual := style.Normal
+	theme := c.Theme()
+	visual := themedStyle(style.Normal, theme.Text, style.Normal)
 	switch {
 	case style.Disabled:
-		visual = fallbackStyle(style.DisabledStyle, visual)
+		visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 	case c.Pressed(id) || state.Open:
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
@@ -222,9 +224,9 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 	if popup.Empty() {
 		return
 	}
-	popupStyle := fallbackStyle(style.Popup, style.OptionNormal)
+	popupStyle := themedStyle(style.Popup, theme.Muted, fallbackStyle(style.Popup, style.OptionNormal))
 	canvas.Fill(popup, " ", popupStyle)
-	optionNormal := fallbackStyle(style.OptionNormal, style.Normal)
+	optionNormal := themedStyle(style.OptionNormal, theme.Text, fallbackStyle(style.OptionNormal, style.Normal))
 	for row := 0; row < popup.H; row++ {
 		index := state.Offset + row
 		if index >= count {
@@ -232,7 +234,7 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 		}
 		optionVisual := optionNormal
 		if index == state.Selected {
-			optionVisual = fallbackStyle(style.OptionSelected, optionNormal)
+			optionVisual = themedStyle(style.OptionSelected, theme.Accent, fallbackStyle(style.OptionSelected, optionNormal))
 			if c.Focused(id) {
 				optionVisual = fallbackStyle(style.OptionFocused, optionVisual)
 			}

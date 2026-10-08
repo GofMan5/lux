@@ -216,9 +216,11 @@ func columnAt(columns []TableColumn, width, x int) int {
 	return -1
 }
 
-// TableStyle defines table row states. Zero values inherit Normal; the header
-// falls back to Normal plus an underline attribute. Ellipsis defaults to the
-// single ellipsis codepoint, clipped to the column like any other text.
+// TableStyle defines table row states. Zero values resolve through the
+// context theme: Normal reads Text, Header reads Muted (plus an underline
+// either way), Selected reads Accent, DisabledStyle reads Danger; explicit
+// styles always win. Ellipsis defaults to the single ellipsis codepoint,
+// clipped to the column like any other text.
 type TableStyle struct {
 	Normal        render.Style
 	Header        render.Style
@@ -261,8 +263,10 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
+	theme := c.Theme()
+	body := themedStyle(style.Normal, theme.Text, style.Normal)
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", style.Normal)
+	canvas.Fill(bounds, " ", body)
 	policy := canvas.WidthPolicy()
 	ellipsis := style.Ellipsis
 	if ellipsis == "" {
@@ -271,10 +275,18 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 	widths := ColumnLayout(columns, bounds.W)
 
 	if header > 0 {
+		// The header row is structure: it always underlines, and a zero
+		// Header style resolves through the theme's Muted before falling
+		// back to Normal.
 		headerVisual := style.Header
 		if headerVisual == (render.Style{}) {
-			headerVisual = style.Normal
-			headerVisual.Attrs |= render.AttrUnderline
+			if muted := theme.Muted; muted != (render.Style{}) {
+				muted.Attrs |= render.AttrUnderline
+				headerVisual = muted
+			} else {
+				headerVisual = body
+				headerVisual.Attrs |= render.AttrUnderline
+			}
 		}
 		headerRect := render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: 1}
 		canvas.Fill(headerRect, " ", headerVisual)
@@ -304,11 +316,11 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 		if index >= count {
 			break
 		}
-		visual := style.Normal
+		visual := body
 		if style.Disabled {
-			visual = fallbackStyle(style.DisabledStyle, visual)
+			visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 		} else if index == state.Selected {
-			visual = fallbackStyle(style.Selected, visual)
+			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
 				visual = fallbackStyle(style.Focused, visual)
 			} else if c.Hovered(id) {

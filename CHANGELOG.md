@@ -350,6 +350,25 @@ work and the API may still change.
   repaint afterwards. Focus is normally committed only when a frame is
   presented, so before this a static app's first paint showed no caret
   until the first edit.
+- `ui.Theme` and `Context.UseTheme`: one palette across the widget set —
+  four roles (Text, Muted, Accent, Danger) resolved per Context, with no
+  global mutable style table anywhere (`DefaultTheme()` is a function, so
+  a palette value is passed, never mutated in place). The resolution rule
+  is uniform: a zero-value style field reads its role, an explicit style
+  always wins, a zero role falls back to the widget's own default.
+  `DefaultTheme` is attributes-only (dim structure, bold accents,
+  reverse-video disabled), so the built-in look survives monochrome
+  terminals and redirected output; color themes are opt-in values. All
+  nine styled widgets resolve through it: table body/headers/selected,
+  tab selected/unselected, gauge fill/track, spinner, sparkline, select
+  popup/options, checkbox (marker reads Accent, label reads Text), radio
+  rows, tree rows. Default visuals therefore change where zero styles were
+  painted: selected rows and tabs, gauge fills, spinners, sparklines,
+  radio choices, tree selections, and checkbox markers render bold or dim
+  where they previously rendered plain; headers render dim+underline.
+  Explicitly styled widgets render exactly as before. Not claimed: a
+  global mutable theme, per-instance theming inside one Context, theme
+  files or runtime hot-swap, and any widget-specific role beyond the four.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
