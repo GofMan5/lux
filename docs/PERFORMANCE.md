@@ -228,6 +228,19 @@ rows, and `BenchmarkSelectDrawClosed`/`BenchmarkSelectDrawOpen` about
 own visible rows, never the option count, and one switch reuses the anchor
 row's region rectangle for the closed box.
 
+The stage 8 display widgets round out the same table (same machine,
+`-benchtime=2s`, `-count=1`): `BenchmarkTabsDraw` about 98 µs with 3
+alloc/op for a 120-column strip over twelve eight-character labels — slot
+layout plus styled text per tab, independent of any tab count beyond the
+strip width that actually fits; `BenchmarkGaugeDraw` about 15 µs with 1
+alloc/op for an 80-cell bar (49 full, one half, 30 track cells — one Put per
+cell, like every other cell-addressed widget); `BenchmarkSpinnerDraw` about
+0.57 µs with 1 alloc/op for one glyph cell, which is what an
+absolute-time phase should cost. These benchmarks match
+`BenchmarkTableDraw` in scope: no `Begin`, so region registration and focus
+bookkeeping are outside the measured loop; registration is one bounded
+append per control per frame.
+
 Wheel routing through nested viewports is 0 alloc/op and grows with nesting
 depth in its worst case, where every level is exhausted and the whole enclosure
 chain is walked: about 173 ns for 2 levels, 242 ns for 8, and 516 ns for 32 in

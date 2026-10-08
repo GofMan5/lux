@@ -797,8 +797,13 @@ func firstFocusRegion(state snapshot) (region, bool) {
 }
 
 func scrollKey(code event.KeyCode) bool {
+	// Horizontal arrows are navigation keys too: a horizontal strip (tabs,
+	// later a horizontal list) owns its left/right keys the way a vertical
+	// list owns up/down. They never bubble — keyScrollTarget only reasons
+	// about vertical clamps — so an enclosing vertical viewport cannot
+	// steal them from the focused region.
 	switch code {
-	case event.KeyUp, event.KeyDown, event.KeyHome, event.KeyEnd, event.KeyPageUp, event.KeyPageDown:
+	case event.KeyUp, event.KeyDown, event.KeyHome, event.KeyEnd, event.KeyPageUp, event.KeyPageDown, event.KeyLeft, event.KeyRight:
 		return true
 	default:
 		return false

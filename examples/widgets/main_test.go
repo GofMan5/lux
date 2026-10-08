@@ -10,6 +10,7 @@ import (
 	"github.com/lux-tui/lux/capability"
 	"github.com/lux-tui/lux/event"
 	"github.com/lux-tui/lux/render"
+	"github.com/lux-tui/lux/ui"
 )
 
 // hangTimeout bounds a test that would otherwise wait forever; a loaded
@@ -37,6 +38,35 @@ func TestCatalogPaintsTableAndStatus(t *testing.T) {
 	}
 	if !strings.Contains(rowText(painted, 2), "Table") {
 		t.Fatalf("first row missing: %q", rowText(painted, 2))
+	}
+	// The same row carries the tabs strip on the right: each label renders
+	// in its slot, so the strip reads " table  form  motion ".
+	tabs := rowText(painted, 2)
+	if !strings.Contains(tabs, " table ") || !strings.Contains(tabs, " form ") || !strings.Contains(tabs, " motion ") {
+		t.Fatalf("tabs strip missing labels: %q", tabs)
+	}
+	// Row 12 is the display-only pair: the gauge tracks the row-zero
+	// selection (1 of 8 over 20 cells = 2.5 cells, so 2 full, 1 half), the
+	// spinner ticks on the wall clock, and the label explains both.
+	instrumented := rowText(painted, 12)
+	if !strings.Contains(instrumented, "██▌") {
+		t.Fatalf("gauge fill missing: %q", instrumented)
+	}
+	if !strings.Contains(instrumented, strings.Repeat("░", 4)) {
+		t.Fatalf("gauge track missing: %q", instrumented)
+	}
+	if !strings.Contains(instrumented, "syncing") {
+		t.Fatalf("spinner label missing: %q", instrumented)
+	}
+	glyph := painted.Cell(24, 12).Grapheme
+	inSet := false
+	for _, frame := range ui.SpinnerBraille {
+		if glyph == frame {
+			inSet = true
+		}
+	}
+	if !inSet {
+		t.Fatalf("spinner glyph %q is not a braille frame", glyph)
 	}
 	// The status line reports the row-zero selection.
 	foundStatus, foundFooter := false, false
@@ -116,23 +146,32 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 6}}
 	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.station == 1 })
 
-	// The closed select opens on its release, popup over the panel. The state
-	// is reported inside View, before Present commits the grown popup region,
-	// so the press that follows also waits for a presented frame.
+	// The closed select opens on its release, popup over the panel. The
+	// state is reported inside View, before Present commits the grown
+	// popup region, so settle waits for a frame whose follow-up proves the
+	// commit already ran.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 10}}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 10}}
 	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.open })
-	waitFrame(t, backend.frames)
+	settle(t, backend.frames)
 
 	// Pressing a popup option picks it (row 11 is option index 0 under
-	// offset 0); the release commits and closes the dropdown. Each step
-	// waits for its frame so the next input lands on a committed region.
+	// offset 0); the release commits and closes the dropdown. The popup
+	// geometry never moves, so the release lands on the same committed
+	// region without another settle.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 11}}
 	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.choice == 0 })
-	waitFrame(t, backend.frames)
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 11}}
 	waitStateWhere(t, app.observe, func(state catalogState) bool { return !state.open && state.choice == 0 })
-	waitFrame(t, backend.frames)
+
+	// The tabs strip picks on press: slot 2 ("form") spans panel-local
+	// X 7-12, so absolute X 48 with the strip at X 40 lands inside it.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.tab == 1 })
+	// The press moved focus to the strip, so the arrow keys now drive the
+	// selection without another click.
+	backend.events <- event.KeyPress(event.KeyRight, 0)
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.tab == 2 })
 
 	// The priority Escape shortcut quits even while a widget holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
@@ -170,5 +209,23 @@ func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	case <-time.After(hangTimeout):
 		t.Fatal("frame timeout")
 		return nil
+	}
+}
+
+// settle waits until the interaction snapshot of a freshly painted frame is
+// committed. ui.Context commits through Frame.OnPresented, which the runtime
+// runs immediately after a successful Present, so a following frame proves
+// the previous commit already ran. The catalog keeps drawing (the spinner is
+// a live clock), so fresh frames always arrive. It returns the last frame it
+// observed.
+func settle(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
+	t.Helper()
+	for {
+		select {
+		case <-frames:
+		default:
+			waitFrame(t, frames)
+			return waitFrame(t, frames)
+		}
 	}
 }

@@ -28,6 +28,10 @@ func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
 	if !changed || app.scenes.Selected != 1 {
 		t.Fatalf("scene = %#v", app.scenes)
 	}
+	moved, _ := app.pages.Apply(ui.Action{Kind: ui.Scroll, Event: event.KeyPress(event.KeyRight, 0), Bounds: render.Rect{W: 40}}, pageNames)
+	if !moved || app.pages.Selected != 1 {
+		t.Fatalf("pages = %#v", app.pages)
+	}
 	app.showHelp = true
 	if !app.showHelp {
 		t.Fatal("help state failed")
@@ -65,7 +69,7 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 	app.controls.Offset = controlsContent
 	app.View(frame)
 	painted = frame.Canvas.Buffer()
-	for _, want := range []string{"FORM CONTROLS", "slow spin", "FRAME TELEMETRY", "renderer"} {
+	for _, want := range []string{"FORM CONTROLS", "slow spin", "FRAME TELEMETRY", "renderer", "DISPLAY WIDGETS", "loading"} {
 		found := false
 		for y := 0; y < 36 && !found; y++ {
 			found = strings.Contains(rowText(painted, y), want)
@@ -73,6 +77,27 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 		if !found {
 			t.Fatalf("%q was not rendered after scrolling the panel", want)
 		}
+	}
+	// The tab strip renders every label as its own slot on one row.
+	tabsRow := ""
+	for y := 0; y < 36; y++ {
+		if text := rowText(painted, y); strings.Contains(text, "edit") {
+			tabsRow = text
+		}
+	}
+	if !strings.Contains(tabsRow, "table") || !strings.Contains(tabsRow, "form") {
+		t.Fatalf("tab row missing labels: %q", tabsRow)
+	}
+	// The gauge row pairs fill cells with track cells at 1 of 4 pages, and
+	// leaves room for the spinner and its label on the same row.
+	gaugeRow := ""
+	for y := 0; y < 36; y++ {
+		if text := rowText(painted, y); strings.Contains(text, "loading") {
+			gaugeRow = text
+		}
+	}
+	if !strings.Contains(gaugeRow, "█") || !strings.Contains(gaugeRow, "░") {
+		t.Fatalf("gauge row missing fill/track cells: %q", gaugeRow)
 	}
 }
 
@@ -138,6 +163,58 @@ func TestShowcaseFormControlsEndToEnd(t *testing.T) {
 	}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: x, Y: y}}
 	waitStateWhere(t, app.observe, func(state showcaseState) bool { return !state.open && state.motion == 2 })
+}
+
+func TestShowcaseDisplayWidgetsEndToEnd(t *testing.T) {
+	// The display section sits below the fold at this size, so the panel
+	// scrolls it into view first. The tab strip then takes a completed click
+	// on the third slot, and the horizontal arrows must serve the focused
+	// strip — not the enclosing vertical panel — which is the nested
+	// horizontal-navigation contract the router fix pinned.
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newShowcase()
+	app.observe = make(chan showcaseState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	defer func() {
+		backend.events <- event.RuneKey('q', event.ModCtrl)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(hangTimeout):
+			t.Error("showcase did not quit")
+		}
+	}()
+	waitFrame(t, backend.frames)
+	settle(t, backend.frames)
+
+	for range 3 {
+		backend.events <- wheelAt(5, 8, false)
+	}
+	scrolled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls >= 18 })
+	settle(t, backend.frames)
+
+	// Doc row 39 is the strip; panel-local x 13 lands inside "table", the
+	// third slot (slots: edit 0-5, list 6-11, table 12-18, form 19-24).
+	x, y := 5+13, controlsBodyTop+39-scrolled.controls
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: x, Y: y}}
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: x, Y: y}}
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.page == 2 })
+	settle(t, backend.frames)
+
+	// The press focused the strip, so Right selects the last tab even though
+	// a vertical viewport encloses the strip.
+	backend.events <- event.KeyPress(event.KeyRight, 0)
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.page == 3 })
+	// Page 4 of 4 fills the gauge bar: the whole row of block cells with no
+	// track left, plus the spinner cell and its label.
+	painted := settle(t, backend.frames)
+	gaugeRow := rowText(painted, controlsBodyTop+40-scrolled.controls)
+	if !strings.Contains(gaugeRow, "█") || strings.Contains(gaugeRow, "░") {
+		t.Fatalf("full gauge row still shows track: %q", gaugeRow)
+	}
 }
 
 type interactiveBackend struct {

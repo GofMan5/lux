@@ -281,6 +281,36 @@ work and the API may still change.
   output. Not claimed: fuzzy filtering, auto-flip above the anchor when the
   popup would clip the screen bottom, multi-select, app-side click-outside
   close, app-side Escape close (plain Escape never routes to regions).
+- `ui.Tabs`: zero-value `TabsState` strip over an app-owned label slice.
+  Each tab is its label plus one padding cell per side, and the same layout
+  math drives both drawing and pointer hits, so a press on slot x selects
+  that tab directly. Navigation selects like a radio group: Left/Right,
+  Home/End, and wheel steps move the choice, and the closing release
+  reports `activated` while keeping it — a strip has nothing to commit. The
+  strip virtualizes: `Offset` is the first drawn tab, and `keepTabVisible`
+  advances it minimally so the selected tab's slot stays whole (a tab wider
+  than the strip clips from the left edge instead of vanishing). Vertical
+  and page keys are inert, key releases are inert. `examples/widgets` (page
+  tabs over a status readout) and the showcase's Interaction Lab embed
+  live strips end to end — the showcase one nested inside the panel's
+  vertical scroll viewport, which is the case the horizontal-arrow routing
+  fix below exists for. Not claimed: multi-row strips, underline accent
+  rows, overflow markers, drag reordering, per-tab hover.
+- `ui.Gauge`: display-only determinate progress. `GaugeState{Value, Max}`
+  clamps Max to at least 1 and `Fraction` to [0, 1]; the bar is full block
+  cells, a half-block cell when the remainder is at least half a cell, then
+  light-shade track to the end, repeated on every row of a taller bounds.
+  No region, no routing, no focus: "seek" would need its own press contract
+  and is not claimed.
+- `ui.Spinner`: display-only spinning glyph driven by absolute time.
+  `SpinnerState{Started}` plus `Age(now)` pick the frame — the phase is a
+  pure function of wall clock, so 10 FPS and 240 FPS presenters draw the
+  same glyph at the same instant. The app passes `now`, which makes drawing
+  deterministic for tests and replay. Presets: `SpinnerASCII` (`|/-\`),
+  `SpinnerBraille` (ten-phase), `SpinnerArc` (four-phase disc). A zero
+  `Started` paints the resting first frame. No region, no routing, no
+  focus, and frame scheduling stays the runtime pacer's job. Not claimed:
+  multi-cell frames, an indeterminate marquee.
 - First-frame caret: the first focusable control now paints its caret on
   the very first frame it registers in, because a static app may never
   repaint afterwards. Focus is normally committed only when a frame is
@@ -311,6 +341,16 @@ work and the API may still change.
   active selection replaced the selection with nothing but left the deleted
   text behind — an empty replacement now clears the selection like any other
   paste does.
+- Horizontal arrows now route to the focused region: `KeyLeft`/`KeyRight`
+  were missing from the router's scroll-key set, so a focused horizontal
+  widget (a tab strip, later a horizontal list) dropped them on the floor
+  instead of scrolling, and the unhandled key never bubbled anywhere. They
+  join `scrollKey` while the vertical clamp test (`scrollKeyUp`) stays
+  up-only, so horizontal arrows never bubble through an enclosing vertical
+  viewport — the focused region always receives them as Scroll actions. A
+  consequence: non-priority `ScopeApp` shortcuts bound to bare Left/Right
+  are now shadowed by any focused scrollable region (no shipped example
+  binds one).
 
 ### Performance
 

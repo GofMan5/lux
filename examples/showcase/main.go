@@ -43,6 +43,8 @@ type showcase struct {
 	spin          ui.CheckboxState
 	palette       ui.RadioState
 	motion        ui.SelectState
+	pages         ui.TabsState
+	sync          ui.SpinnerState
 	showHelp      bool
 	observe       chan showcaseState
 	clipboard     memoryClipboard
@@ -56,6 +58,7 @@ type showcaseState struct {
 	spin     bool
 	palette  int
 	motion   int
+	page     int
 	open     bool
 }
 
@@ -84,6 +87,7 @@ func newShowcase() *showcase {
 	app.name.SetValue("LUX explorer")
 	app.palette.Selected = 1
 	app.motion.PopupRows = 4
+	app.sync.Started = time.Now()
 	return app
 }
 
@@ -126,6 +130,8 @@ func (app *showcase) Update(next event.Event) lux.Command {
 			app.palette.Apply(action, len(paletteNames))
 		case "motion":
 			app.motion.Apply(action, len(motionModes))
+		case "pages":
+			app.pages.Apply(action, pageNames)
 		}
 		return nil
 	}
@@ -195,7 +201,7 @@ func (app *showcase) View(frame *lux.Frame) {
 	}
 	if app.observe != nil {
 		select {
-		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp, controls: app.controls.Offset, logs: app.logs.Offset, spin: app.spin.Checked, palette: app.palette.Selected, motion: app.motion.Selected, open: app.motion.Open}:
+		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp, controls: app.controls.Offset, logs: app.logs.Offset, spin: app.spin.Checked, palette: app.palette.Selected, motion: app.motion.Selected, page: app.pages.Selected, open: app.motion.Open}:
 		default:
 		}
 	}
@@ -211,13 +217,19 @@ var paletteNames = []string{"ink", "violet", "cyan"}
 // speed, and the popup is drawn last so it overlaps the panel below it.
 var motionModes = []string{"orbit", "pulse", "drift", "spin"}
 
+// pageNames is the live tabs demo: the strip selects on navigation like a
+// radio group, and the gauge on the next row reads the selection as page
+// progress.
+var pageNames = []string{"edit", "list", "table", "form"}
+
 const virtualLogCount = 1_000_000
 
 // controlsContent is the panel's natural row count: heading, editor, scene
 // list, nested log, the action row, widget table, the form controls (checkbox,
-// radio group, select with its popup gap), and frame telemetry. The panel
-// scrolls instead of dropping controls.
-const controlsContent = 45
+// radio group, select with its popup gap), the display widgets (tabs, gauge,
+// spinner), and frame telemetry. The panel scrolls instead of dropping
+// controls.
+const controlsContent = 48
 
 // taskColumns is package-level so the routed Apply and the draw call share
 // the exact same slice: header hit-testing derives from the drawn layout.
@@ -305,8 +317,22 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 	// The popup rows below the anchor stay blank when closed, so the open
 	// popup overpaints nothing that matters, and the select is drawn last so
 	// its grown region wins pointer hits over everything drawn before it.
-	view.Text(0, top+38, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
-	app.drawTelemetry(view, render.Rect{Y: top + 39, W: body.W, H: 6}, frame)
+	view.Text(0, top+38, "DISPLAY WIDGETS", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	app.ui.Tabs("pages", view, render.Rect{Y: top + 39, W: body.W, H: 1}, &app.pages, pageNames, tabsStyle())
+	// The gauge reads the tab selection as page progress and the spinner
+	// ticks on absolute time from the runtime's continuous frames; both are
+	// display-only, so they register no regions and steal no focus or hits.
+	gaugeW := max(body.W-13, 1)
+	app.ui.Gauge(view, render.Rect{Y: top + 40, W: gaugeW, H: 1},
+		&ui.GaugeState{Value: float64(app.pages.Selected + 1), Max: float64(len(pageNames))},
+		ui.GaugeStyle{Fill: render.Style{Foreground: violet, Background: panel}, Track: render.Style{Foreground: muted, Background: panel}})
+	app.ui.Spinner(view, render.Rect{X: gaugeW + 2, Y: top + 40, W: 1, H: 1}, &app.sync, time.Now(),
+		ui.SpinnerStyle{Frames: ui.SpinnerBraille, FrameDuration: 80 * time.Millisecond, Style: render.Style{Foreground: cyan, Background: panel}})
+	if body.W >= gaugeW+9 {
+		view.Text(gaugeW+4, top+40, "loading", label)
+	}
+	view.Text(0, top+41, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	app.drawTelemetry(view, render.Rect{Y: top + 42, W: body.W, H: 6}, frame)
 	app.ui.Select("motion", view, render.Rect{Y: top + 33, W: body.W, H: 1}, &app.motion, motionModes, selectStyle())
 }
 
@@ -378,6 +404,14 @@ func checkboxStyle() ui.CheckboxStyle {
 
 func radioStyle() ui.RadioStyle {
 	return ui.RadioStyle{Normal: render.Style{Foreground: muted, Background: panel}, Selected: render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold}, Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold}, Marker: "(*)", Empty: "( )"}
+}
+
+func tabsStyle() ui.TabsStyle {
+	return ui.TabsStyle{
+		Normal:   render.Style{Foreground: muted, Background: panel},
+		Selected: render.Style{Foreground: background, Background: violet, Attrs: render.AttrBold},
+		Focused:  render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
+	}
 }
 
 func selectStyle() ui.SelectStyle {

@@ -1,0 +1,130 @@
+Stage 8, slice 3 — ui.Tabs / ui.Gauge / ui.Spinner: display widgets — local verification, 2026-10-08
+=============================================================================================================
+
+Scope (ROADMAP.md, stage 8 item 3): display widget truth plus the
+horizontal-arrow routing fix it exposed. Code: ui/tabs.go (TabsState,
+TabsStyle, Tabs Apply/drawing/virtualization), ui/gauge.go (GaugeState,
+GaugeStyle, Gauge drawing), ui/spinner.go (SpinnerState, SpinnerStyle,
+Spinner presets, absolute-time phase), ui/context.go (scrollKey extended
+with KeyLeft/KeyRight). Tests: ui/tabs_test.go, ui/gauge_test.go,
+ui/spinner_test.go, ui/context_test.go
+(TestContextHorizontalArrowsServeFocusedRegion), ui/example_display_test.go
+(godoc), examples/widgets/main.go + main_test.go (catalog page tabs e2e),
+examples/showcase/main.go + main_test.go (live display-widgets section in
+the Interaction Lab, e2e + layout). Docs: README.md (display-widget
+paragraph after the form trio), CHANGELOG.md (Added x3 + Fixed routing
+entry), docs/PERFORMANCE.md (display-widget benchmarks paragraph).
+
+API (verified by test, not by inspection):
+  - TabsState zero value selects tab 0 with offset 0, ready. Tabs(id,
+    canvas, rect, state, labels, style) — labels are APP-OWNED, the widget
+    never stores them; the same slot math (label width + 1 padding cell per
+    side) drives drawing AND tabAt pointer hits, so a press on slot x
+    selects that tab directly on the closing release (changed=true,
+    activated=true) while a press on the SELECTED tab reports
+    changed=false, activated=true (an honest press still "activates" a
+    strip that has nothing to change).
+  - Navigation selects like a radio: Left/Right/Home/End (scroll keys)
+    and wheel steps move the choice; page keys and vertical keys are
+    inert; key releases are inert. applyOffset (keepTabVisible) advances
+    the strip offset minimally so the selected tab's whole slot stays
+    visible — ONLY for Kind==Scroll (a pointer pick that jumps to an
+    out-of-view tab does NOT scroll the strip, matching radio row picks),
+    and a tab wider than the whole strip clips from the strip's left edge
+    instead of vanishing (width<=0 guards in the slot walk).
+  - The strip region is Focusable|Scrollable|Activatable, one row tall,
+    so Tab reaches it, horizontal arrows scroll it (see the routing fix),
+    and completed clicks select. Mouse press on the strip routes as
+    Scroll with region-local coordinates (strip strip-local X), release
+    captures the same region and maps the point through tabAt.
+  - GaugeState{Value, Max} is display-only: Fraction() = Value/Max
+    clamped to [0,1], Max<=0 becomes 1, NaN never arises (guarded). The
+    bar is full cells "█", a half cell "▌" when the remainder is >= 0.5 of
+    a cell, then light-shade track "░" to the width; H>1 repeats the same
+    row. NO region, NO routing, NO focus: "seek" would need its own press
+    contract and is not claimed. Nil state draws nothing.
+  - SpinnerState{Started} is display-only: phase =
+    int(Age(now)/FrameDuration) % len(Frames), a PURE function of
+    absolute time, so 10 FPS and 240 FPS presenters draw the same glyph at
+    the same wall-clock instant; the app passes `now`, which makes drawing
+    deterministic for tests and replay. Presets: SpinnerASCII "|/-\"
+    (4-phase, 100ms default), SpinnerBraille (10-phase), SpinnerArc
+    "◐◓◑◒" (4-phase; frame 1 is "◓"). Zero Started or a nil state paints
+    the resting first frame. FrameDuration<=0 becomes 100ms. NO region,
+    NO routing, NO focus; frame SCHEDULING stays the runtime pacer's job
+    (the showcase's continuous RequestFrame drives its live demo).
+
+Routing fix (ui/context.go, pinned by
+TestContextHorizontalArrowsServeFocusedRegion):
+  - scrollKey now also answers KeyLeft/KeyRight: horizontal arrows are
+    navigation keys for horizontal widgets (tab strips), like up/down for
+    vertical lists. scrollKeyUp stays vertical-only, so horizontal arrows
+    NEVER bubble through an enclosing vertical viewport — the focused
+    region always receives them as Scroll actions. KeyLeft AND KeyRight on
+    a focused strip inside a 12x1 viewport viewport both route to the
+    strip (Kind==Scroll, region-local point), asserted by test.
+  - Behavior change: non-priority ScopeApp shortcuts bound to bare
+    Left/Right are now shadowed by any focused scrollable region. No
+    shipped example binds one; catalog and showcase unaffected (verified
+    by their full e2e passes).
+  - Found live: the widgets-catalog e2e timed out pressing KeyRight on
+    the page tabs — the router dropped the key, the app never advanced,
+    the test never saw the state. This is exactly the class of bug the
+    e2e catalog exists to catch.
+
+Examples (both e2e, both now covering the slice):
+  - examples/widgets: a second page of tabs over a status readout; the
+    catalog View calls frame.RequestFrame() (guarded by Interactive &&
+    !ReducedMotion) so the continuous spinner demo keeps frames flowing;
+    the e2e settles by draining the frame backlog then waitFrame x2
+    (settle() in main_test.go). go test ./examples/widgets/ -count=25
+    -> 25/25 ok in ~1.5s: the routing fix removed a 10s-timeout flake
+    (was 5/10 fail before the fix).
+  - examples/showcase: DISPLAY WIDGETS section below the form controls in
+    the Interaction Lab (controlsContent 45 -> 48): live tabs bound to
+    "pages" (pageNames edit/list/table/form), the gauge reads the tab
+    selection as page progress (1/4 -> 4/4 full bar), the braille spinner
+    ticks at 80ms with a "loading" label; vertical arrows still bubble to
+    the panel scroll, wheel on the strip navigates tabs. Driven end to
+    end by TestShowcaseDisplayWidgetsEndToEnd (wheel the section in,
+    press slot 3 by mouse, KeyRight to the last tab, full-bar assert);
+    TestShowcaseClipboardShortcutTargetsAndVirtualLayout now also pins
+    the DISPLAY WIDGETS heading, tab row labels, and gauge fill/track
+    cells; TestShowcaseWidgetStateAndShortcuts pins pages.Apply.
+    go test ./examples/showcase/ -count=10 -> 10/10 ok (~0.45s each).
+
+Benchmarks (Windows amd64, i5-10400F, Go 1.25.5, -benchtime=2s,
+-count=1, -benchmem): BenchmarkTabsDraw ~97.7 µs, 672 B/op, 3 allocs/op
+(120-column strip, twelve 8-char labels); BenchmarkGaugeDraw ~15.2 µs,
+96 B/op, 1 alloc/op (80-cell bar: 49 full, 1 half, 30 track);
+BenchmarkSpinnerDraw ~0.57 µs, 96 B/op, 1 alloc/op (one glyph cell).
+Benchmarks match BenchmarkTableDraw scope: no Begin, so region
+registration is outside the measured loop. (BenchmarkTabsDraw initially
+panicked on duplicate control ID: it had copied the paint-test
+begun=true pattern, so the loop re-registered "bench" every iteration
+into a building list Begin never resets — fixed by matching the table
+benchmark's no-Begin scope.)
+
+Gates (local, 2026-10-08):
+  - gofmt -l .                       -> empty.
+  - go vet ./...                     -> clean.
+  - go test ./... -count=1 -timeout 300s -> ok, 13/13 packages
+    (lux, capability, event, examples/showcase, examples/table,
+    examples/textedit, examples/widgets, internal/terminal, layout,
+    motion, render, scene3d, ui).
+  - docker run --rm golang:1.25-alpine go test ./... -count=1
+    -> ok, 13/13 packages, exit 0 (the stderr "go: downloading ..." noise
+    from module cache warmup is the known pwsh quirk; all lines ok).
+  - go mod verify                    -> all modules verified.
+  - golangci-lint                    -> NOT RUN (not installed locally;
+    recorded as skipped, as in every stage so far).
+  - fuzz                             -> N/A (no new fuzz targets; tabs
+    layout is pure math over app strings already covered by EGC clipping
+    tests; gauge/spinner are pure functions).
+
+Not claimed (kept honest): multi-row tab strips, an underline accent row,
+overflow markers ("->" glyphs beyond the visible slots), drag reordering,
+per-tab hover styles, vertical/page navigation on tabs, gauge seek with a
+press contract, a gauge inner label, multi-cell spinner frames, an
+indeterminate marquee, adaptive spinner pacing (a spinner that slows its
+phase under render lag — the phase is absolute by design).

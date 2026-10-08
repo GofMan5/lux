@@ -184,6 +184,21 @@ radio recolors the scene border, the select retunes the rotation. Not
 claimed: fuzzy filtering, popup auto-flip, multi-select, app-side
 click-outside and Escape close (plain Escape never routes to regions).
 
+Navigation strips and honest busy indicators follow the same rules.
+`ui.Tabs` (zero-value `TabsState`) lays each tab out as its label plus one
+padding cell per side with one layout math for both drawing and pointer
+hits; navigation selects like a radio — Left/Right, Home/End, wheel — and
+the closing press on a slot selects it directly. The strip virtualizes its
+offset so a wide label set keeps the selected tab's slot whole. Horizontal
+arrows are navigation keys in the router: a focused strip owns them even
+inside a vertical viewport (vertical arrows still bubble to the enclosing
+scroll, horizontal ones never do). `ui.Gauge` and `ui.Spinner` are
+display-only by design — no region, no routing, no focus: the gauge clamps
+Value/Max and paints full/half-block fill plus light-shade track, the
+spinner's phase is a pure function of absolute time so 10 FPS and 240 FPS
+presenters draw the same glyph at the same wall-clock instant. Not claimed:
+multi-row tab strips, gauge seek, multi-cell spinner frames, a marquee.
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`

@@ -379,6 +379,33 @@ func TestEndCommitsOnlyAfterSuccessfulPresent(t *testing.T) {
 	}
 }
 
+// TestContextHorizontalArrowsServeFocusedRegion pins the routing contract for
+// horizontal widgets: left and right arrive at the focused scrollable region
+// as Scroll actions and never bubble into an enclosing vertical viewport, the
+// way up and down may.
+func TestContextHorizontalArrowsServeFocusedRegion(t *testing.T) {
+	var ctx Context
+	presented(&ctx, []region{
+		// The viewport geometrically encloses the strip, so bubbling would
+		// hand the key to it if horizontal keys bubbled.
+		{id: "viewport", bounds: render.Rect{W: 40, H: 20}, flags: Focusable | Scrollable},
+		{id: "strip", bounds: render.Rect{X: 2, Y: 2, W: 12, H: 1}, flags: Focusable | Scrollable | Activatable},
+	}, modal{})
+	if !ctx.Focus("strip") {
+		t.Fatal("could not focus strip")
+	}
+	strip := render.Rect{X: 2, Y: 2, W: 12, H: 1}
+	for _, code := range []event.KeyCode{event.KeyLeft, event.KeyRight} {
+		action, handled := ctx.Handle(event.KeyPress(code, 0))
+		if !handled || action.Target != "strip" || action.Kind != Scroll {
+			t.Fatalf("%v = %#v handled=%v", code, action, handled)
+		}
+		if action.Bounds != strip {
+			t.Fatalf("%v bounds = %#v", code, action.Bounds)
+		}
+	}
+}
+
 func BenchmarkHitRouting(b *testing.B) {
 	for _, count := range []int{10, 100, 1000} {
 		b.Run(fmt.Sprint(count), func(b *testing.B) {
