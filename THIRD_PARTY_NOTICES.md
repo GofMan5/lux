@@ -17,7 +17,11 @@ files: `EastAsianWidth.txt`, `emoji/emoji-data.txt`, and
 `auxiliary/GraphemeBreakProperty.txt`. The derivation compared every
 codepoint's measured `uniseg` width against a model built from these files
 and recorded only the differences; the tables are a mechanical
-transformation of the Unicode data. The 18.0.0
+transformation of the Unicode data. `render/widthpolicy.go` embeds two more
+range tables derived from the same 18.0.0 files: the East Asian Ambiguous
+(class A) ranges from `EastAsianWidth.txt` (179 ranges, 138,739 codepoints)
+and the Emoji_Presentation ranges from `emoji/emoji-data.txt` (80 ranges,
+1,228 codepoints), extracted by direct property lookup. The 18.0.0
 `auxiliary/GraphemeBreakTest.txt` was used to record UAX #29 conformance
 results in COMPATIBILITY.md and `.verification/`, and is not embedded in
 code.

@@ -444,6 +444,38 @@ THIRD_PARTY_NOTICES.md):
 - https://www.unicode.org/Public/18.0.0/ucd/auxiliary/GraphemeBreakProperty.txt
 - https://www.unicode.org/Public/18.0.0/ucd/auxiliary/GraphemeBreakTest.txt
 
+### Width policy: terminal quirks on top of the truth
+
+The two-layer model above is what a modern terminal renders, and it is the
+default. Some terminals disagree, and a `render.WidthPolicy` passed via
+`lux.WithWidthPolicy` retells the measuring to match them:
+
+| Knob | Terminals it models | Effect |
+| --- | --- | --- |
+| `AmbiguousWidth: 2` | xterm under a CJK locale (`ja_JP.UTF-8`), mlterm, older konsole, legacy conhost fonts | East Asian Ambiguous codepoints (Greek, Cyrillic, box drawing, unit signs, enclosed alphanumerics, private-use planes) advance two cells. Only `2` activates the bump; any other value behaves as 1. |
+| `VS16Blind: true` | terminals that ignore emoji presentation selectors | one trailing `U+FE0F` is stripped before measuring, so `❤️` and `❤` occupy the same single cell. VS15 (`U+FE0E`) text presentation is always respected. |
+| `NarrowEmoji: true` | legacy console stacks that squeeze every emoji into one cell | emoji-presentation graphemes (`😀`, `⚽`, flag pairs, ZWJ families, clusters carrying VS16) advance one cell. CJK ideographs are never narrowed. |
+
+The tables behind the knobs (179 ambiguous ranges / 138,739 codepoints, 80
+Emoji_Presentation ranges / 1,228 codepoints) come from the same 18.0.0 UCD
+files as the overlay and live in `render/widthpolicy.go`. Policies are
+advisory only — they change what lux draws and measures, never the Unicode
+data underneath.
+
+Coherence is the contract: the policy flows from `Run` into every canvas the
+frame owns (`Canvas`, `Subview`, `Clip`), so `Canvas.Text` advance,
+`Canvas.TextWidth`, `Button`/`Modal` truncation and `TextInput` caret
+placement all use the same cells, and mouse clicks map onto the cells that
+are actually painted. The caveat: the policy is per-application, chosen by
+the caller for its target terminal, not auto-detected — drawing truthfully
+for a terminal you did not describe is not possible, and misdescribed
+terminals will still misalign (misalignment is then local and explainable,
+not a lux bug).
+
+The zero policy is byte-identical to the pre-policy behavior: ambiguous
+stays 1 cell, VS16 is respected, emoji take 2. `scene3d`'s ASCII luminance
+ramp ignores the policy on purpose — its glyphs are width-1 by construction.
+
 ## Styled underlines
 
 `render.Style` carries an underline shape (`UnderlineStyle`: single, double,

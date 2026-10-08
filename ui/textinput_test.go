@@ -215,6 +215,73 @@ func TestTextInputReplaceSelectionAndWordDelete(t *testing.T) {
 	}
 }
 
+func TestTextInputFollowsCanvasWidthPolicy(t *testing.T) {
+	// A CJK-locale canvas measures ± as two cells, so the field must scroll
+	// further and park the caret one column later than a legacy canvas.
+	buffer := render.NewBuffer(5, 1)
+	canvas := render.NewCanvasWithPolicy(buffer, render.WidthPolicy{AmbiguousWidth: 2})
+	ctx := Context{focused: "field"}
+	input := TextInput{}
+	input.SetValue("±±±")
+	ctx.Input("field", canvas, canvas.Bounds(), &input, InputStyle{})
+	if input.widthPolicy != (render.WidthPolicy{AmbiguousWidth: 2}) {
+		t.Fatalf("input widthPolicy = %#v; want the canvas policy", input.widthPolicy)
+	}
+	if input.Offset != 2 {
+		t.Fatalf("offset = %d; want 2 (one ± scrolled out)", input.Offset)
+	}
+	if got := buffer.Cell(0, 0); got.Grapheme != "±" || got.Width != 2 {
+		t.Fatalf("viewport cell = %#v; want wide ±", got)
+	}
+	if !buffer.Cell(4, 0).Style.Has(render.AttrReverse) {
+		t.Fatalf("caret cell = %#v; want reversed caret at column 4", buffer.Cell(4, 0))
+	}
+
+	legacyBuffer := render.NewBuffer(5, 1)
+	legacy := render.NewCanvas(legacyBuffer)
+	legacyInput := TextInput{}
+	legacyInput.SetValue("±±±")
+	ctx.Input("field", legacy, legacy.Bounds(), &legacyInput, InputStyle{})
+	if legacyInput.widthPolicy != (render.WidthPolicy{}) {
+		t.Fatalf("legacy input widthPolicy = %#v; want zero", legacyInput.widthPolicy)
+	}
+	if legacyInput.Offset != 0 {
+		t.Fatalf("legacy offset = %d; want 0", legacyInput.Offset)
+	}
+	if !legacyBuffer.Cell(3, 0).Style.Has(render.AttrReverse) {
+		t.Fatalf("legacy caret cell = %#v; want caret at column 3", legacyBuffer.Cell(3, 0))
+	}
+}
+
+func TestTextInputMouseMappingUsesWidthPolicy(t *testing.T) {
+	// Clicks map onto the cells the policy painted: under ambiguous-2 the
+	// second ± spans columns 2-3, so X=2 stays before it and X=3 lands after.
+	input := TextInput{}
+	input.SetValue("±±±")
+	input.widthPolicy = render.WidthPolicy{AmbiguousWidth: 2}
+	click := inputAction(event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}})
+	click.Bounds.W = 6
+	click.X = 2
+	input.Apply(click)
+	if input.Cursor != 2 {
+		t.Fatalf("click on left half cursor = %d; want 2", input.Cursor)
+	}
+	click.X = 3
+	input.Apply(click)
+	if input.Cursor != 4 {
+		t.Fatalf("click on right half cursor = %d; want 4", input.Cursor)
+	}
+
+	// Legacy mapping in the same geometry: three single cells.
+	legacy := TextInput{}
+	legacy.SetValue("±±±")
+	legacy.widthPolicy = render.WidthPolicy{}
+	legacy.Apply(click)
+	if legacy.Cursor != 6 {
+		t.Fatalf("legacy click past the value cursor = %d; want 6 (end)", legacy.Cursor)
+	}
+}
+
 func TestTextInputPasteLimitDoesNotSplitOrDeleteOnReject(t *testing.T) {
 	input := TextInput{MaxBytes: 4}
 	input.SetValue("ab")

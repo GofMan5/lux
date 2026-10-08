@@ -59,8 +59,8 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
 	if inner.Empty() {
 		inner = bounds
 	}
-	label = clipText(label, inner.W)
-	canvas.Text(inner.X+max((inner.W-render.TextWidth(label))/2, 0), inner.Y+max((inner.H-1)/2, 0), label, visual)
+	label = clipText(label, inner.W, canvas.WidthPolicy())
+	canvas.Text(inner.X+max((inner.W-canvas.TextWidth(label))/2, 0), inner.Y+max((inner.H-1)/2, 0), label, visual)
 }
 
 // ListState is the persistent selection and scroll position for a List.
@@ -206,7 +206,7 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		if index == state.Selected {
 			prefix = marker
 		}
-		text := clipText(prefix+items[index], bounds.W)
+		text := clipText(prefix+items[index], bounds.W, canvas.WidthPolicy())
 		canvas.Text(bounds.X, y, text, visual)
 	}
 }
@@ -234,7 +234,7 @@ func (c *Context) Modal(id ID, canvas *render.Canvas, bounds render.Rect, title 
 	}
 	canvas.Border(bounds, border, fallbackStyle(style.Border, style.Panel))
 	if bounds.W > 4 && title != "" {
-		canvas.Text(bounds.X+2, bounds.Y, " "+clipText(title, bounds.W-4)+" ", fallbackStyle(style.Title, style.Border))
+		canvas.Text(bounds.X+2, bounds.Y, " "+clipText(title, bounds.W-4, canvas.WidthPolicy())+" ", fallbackStyle(style.Title, style.Border))
 	}
 	return canvas.Subview(bounds.Inset(1, 1))
 }
@@ -246,11 +246,14 @@ func fallbackStyle(preferred, fallback render.Style) render.Style {
 	return preferred
 }
 
-func clipText(text string, width int) string {
+// clipText truncates text to width cells, never splitting a grapheme.
+// Measuring with the canvas's policy keeps the truncation consistent with
+// what the same canvas draws for those graphemes.
+func clipText(text string, width int, policy render.WidthPolicy) string {
 	if width <= 0 {
 		return ""
 	}
-	if render.TextWidth(text) <= width {
+	if render.TextWidthWith(text, policy) <= width {
 		return text
 	}
 	var result strings.Builder
@@ -258,7 +261,7 @@ func clipText(text string, width int) string {
 	graphemes := uniseg.NewGraphemes(text)
 	for graphemes.Next() {
 		cluster := graphemes.Str()
-		cells := render.GraphemeWidth(cluster)
+		cells := render.GraphemeWidthWith(cluster, policy)
 		if used+cells > width {
 			break
 		}

@@ -36,7 +36,7 @@ comparative claims require reproducible results.
 | Package | Implemented now |
 |---|---|
 | [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
-| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement, and Unicode 18.0.0 terminal-width truth over uniseg segmentation |
+| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement, Unicode 18.0.0 terminal-width truth over uniseg segmentation, and a width policy for terminals that disagree |
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
 | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
@@ -133,6 +133,13 @@ candidate windows and screen readers follow the caret instead of a painted cell.
 It includes byte-bounded undo/redo and an application-supplied clipboard port,
 but remains intentionally single-line; password hardening, multiline editing,
 RTL visual reordering, OS clipboard adapters, and IME preedit are not claimed.
+
+Some terminals measure differently from the model: a CJK-locale xterm doubles
+East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
+and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`
+describes such a terminal to lux — drawing, measuring, clipping, the caret,
+and mouse mapping then all follow the described cells coherently, while the
+default stays byte-identical to a width-agnostic program.
 
 Nested viewports need no widget tree: a scrollable region publishes whether it
 sits at a boundary, and the router bubbles the wheel or a scroll key to the

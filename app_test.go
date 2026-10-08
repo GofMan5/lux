@@ -269,8 +269,8 @@ func TestPacerSlowsImmediatelyAndRecoversWithHysteresis(t *testing.T) {
 
 func TestOfferLatestKeepsNewest(t *testing.T) {
 	queue := make(chan *surface, 1)
-	old := newSurface(1, 1)
-	latest := newSurface(2, 2)
+	old := newSurface(1, 1, render.WidthPolicy{})
+	latest := newSurface(2, 2, render.WidthPolicy{})
 	queue <- old
 	if recycled := offerLatest(queue, latest); recycled != old {
 		t.Fatal("old surface was not recycled")
@@ -282,10 +282,10 @@ func TestOfferLatestKeepsNewest(t *testing.T) {
 
 func TestDroppedSurfaceCallbacksAreReleased(t *testing.T) {
 	queue := make(chan *surface, 1)
-	stale := newSurface(1, 1)
+	stale := newSurface(1, 1, render.WidthPolicy{})
 	stale.presented = append(stale.presented, func() {})
 	queue <- stale
-	latest := newSurface(1, 1)
+	latest := newSurface(1, 1, render.WidthPolicy{})
 	recycled := offerLatest(queue, latest)
 	clear(recycled.presented)
 	recycled.presented = recycled.presented[:0]
@@ -298,7 +298,7 @@ func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
 	frame := &Frame{}
 	called := 0
 	frame.OnPresented(func() { called++ })
-	surface := newSurface(1, 1)
+	surface := newSurface(1, 1, render.WidthPolicy{})
 	surface.presented = append(surface.presented, frame.presented...)
 	for _, callback := range surface.presented {
 		callback()
@@ -306,7 +306,7 @@ func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
 	if called != 1 {
 		t.Fatalf("hook calls = %d", called)
 	}
-	dropped := newSurface(1, 1)
+	dropped := newSurface(1, 1, render.WidthPolicy{})
 	dropped.presented = append(dropped.presented, func() { called++ })
 	dropped.presented = dropped.presented[:0]
 	if called != 1 {
@@ -460,5 +460,104 @@ func TestRunReturnsFirstCloseError(t *testing.T) {
 	model := &testModel{quitOn: event.Resize}
 	if err := Run(context.Background(), model, WithBackend(backend)); !errors.Is(err, restoreErr) {
 		t.Fatalf("close error = %v", err)
+	}
+}
+
+func TestWithWidthPolicyValidation(t *testing.T) {
+	for _, invalid := range []int{0, 3, -5} {
+		backend := newFakeBackend(10, 3)
+		err := Run(context.Background(), &testModel{},
+			WithBackend(backend),
+			WithWidthPolicy(render.WidthPolicy{AmbiguousWidth: invalid}))
+		if err == nil || !strings.Contains(err.Error(), "ambiguous width") {
+			t.Fatalf("AmbiguousWidth=%d: error = %v; want ambiguous width rejection", invalid, err)
+		}
+		backend.mu.Lock()
+		opened := backend.opened
+		backend.mu.Unlock()
+		if opened {
+			t.Fatalf("AmbiguousWidth=%d: option error returned after backend Open", invalid)
+		}
+	}
+}
+
+// policyModel records the policy-visible measurements of the frame canvas and
+// quits on the first key press.
+type policyModel struct {
+	mu            sync.Mutex
+	textWidth     int
+	graphemeWidth int
+	quitOn        event.Kind
+}
+
+func (m *policyModel) Update(next event.Event) Command {
+	if next.Kind == m.quitOn {
+		return Quit()
+	}
+	return nil
+}
+
+func (m *policyModel) View(frame *Frame) {
+	frame.Canvas.Text(0, 0, "±±", render.Style{})
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.textWidth = frame.Canvas.TextWidth("±±")
+	m.graphemeWidth = frame.Canvas.GraphemeWidth("±")
+}
+
+func TestWidthPolicyReachesCanvas(t *testing.T) {
+	backend := newFakeBackend(10, 3)
+	model := &policyModel{quitOn: event.Key}
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), model, WithBackend(backend),
+			WithWidthPolicy(render.WidthPolicy{AmbiguousWidth: 2}))
+	}()
+	select {
+	case frame := <-backend.presented:
+		if got := frame.Cell(0, 0); got.Grapheme != "±" || got.Width != 2 {
+			t.Errorf("frame Cell(0,0) = %#v; want wide ±", got)
+		}
+		if got := frame.Cell(1, 0); got.Width != 0 {
+			t.Errorf("frame Cell(1,0) = %#v; want continuation cell", got)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("initial frame timeout")
+	}
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if model.textWidth != 4 || model.graphemeWidth != 2 {
+		t.Fatalf("canvas measurements = %d, %d; want 4, 2", model.textWidth, model.graphemeWidth)
+	}
+}
+
+func TestWidthPolicyDefaultIsLegacy(t *testing.T) {
+	// Without WithWidthPolicy the canvas measures the legacy widths.
+	backend := newFakeBackend(10, 3)
+	model := &policyModel{quitOn: event.Key}
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), model, WithBackend(backend))
+	}()
+	select {
+	case frame := <-backend.presented:
+		if got := frame.Cell(0, 0); got.Grapheme != "±" || got.Width != 1 {
+			t.Errorf("frame Cell(0,0) = %#v; want narrow ±", got)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("initial frame timeout")
+	}
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	model.mu.Lock()
+	defer model.mu.Unlock()
+	if model.textWidth != 2 || model.graphemeWidth != 1 {
+		t.Fatalf("canvas measurements = %d, %d; want 2, 1", model.textWidth, model.graphemeWidth)
 	}
 }

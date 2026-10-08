@@ -22,6 +22,12 @@ type TextInput struct {
 	Offset      int
 	Placeholder string
 
+	// widthPolicy mirrors the policy of the canvas the field was last drawn
+	// on, so event-time cell math (mouse click and drag mapping) measures the
+	// same widths the user saw painted. A field that was never drawn keeps
+	// the default policy.
+	widthPolicy render.WidthPolicy
+
 	undo      []textInputSnapshot
 	redo      []textInputSnapshot
 	undoBytes int
@@ -175,6 +181,7 @@ func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *T
 	if c == nil || canvas == nil || input == nil || id == "" {
 		return
 	}
+	input.widthPolicy = canvas.WidthPolicy()
 	input.normalize()
 	rect.H = min(max(rect.H, 0), 1)
 	line := rect.Intersect(canvas.Bounds())
@@ -199,11 +206,11 @@ func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *T
 	}
 	canvas.Fill(line, " ", base)
 	focused := c.Focused(id) && !style.ReadOnly && !style.Disabled
-	input.ensureOffset(line.W, focused)
+	input.ensureOffset(line.W, focused, input.widthPolicy)
 	if focused {
 		// The real terminal cursor follows the caret so IME and screen readers
 		// track it; a clipped or scrolled-out caret stays hidden.
-		if column := textCells(input.Value[input.Offset:input.Cursor]); column < line.W {
+		if column := textCells(input.Value[input.Offset:input.Cursor], input.widthPolicy); column < line.W {
 			canvas.SetCaret(line.X+column, line.Y)
 		}
 	}
@@ -446,7 +453,7 @@ func (t *TextInput) applyMouse(action Action) {
 	}
 	switch mouse.Action {
 	case event.MousePress:
-		target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W)
+		target := byteAtCell(t.Value, t.Offset, action.X, action.Bounds.W, t.widthPolicy)
 		if mouse.Mod&event.ModShift != 0 {
 			t.Cursor = target
 		} else {
@@ -465,12 +472,12 @@ func (t *TextInput) dragTarget(action Action) int {
 	case action.X < 0:
 		return previousBoundary(t.Value, min(t.Cursor, t.Offset))
 	case width > 0 && action.X >= width:
-		if inside := byteAtCell(t.Value, t.Offset, width-1, width); inside > t.Cursor {
+		if inside := byteAtCell(t.Value, t.Offset, width-1, width, t.widthPolicy); inside > t.Cursor {
 			return inside
 		}
 		return nextBoundary(t.Value, t.Cursor)
 	default:
-		return byteAtCell(t.Value, t.Offset, action.X, width)
+		return byteAtCell(t.Value, t.Offset, action.X, width, t.widthPolicy)
 	}
 }
 
@@ -517,14 +524,15 @@ func (t *TextInput) remove(start, end int) {
 // window is the shortest suffix of the text before the caret that still fits,
 // so one grapheme pass is enough; measuring the candidate window inside a loop
 // would be quadratic in the value length and stall a frame on a pasted field.
-func (t *TextInput) ensureOffset(width int, caret bool) {
+// All measurements use policy so the window matches what drawing advances.
+func (t *TextInput) ensureOffset(width int, caret bool, policy render.WidthPolicy) {
 	if width <= 0 {
 		t.Offset = t.Cursor
 		return
 	}
 	needed := 0
 	if t.Cursor < len(t.Value) {
-		needed = max(render.GraphemeWidth(t.Value[t.Cursor:]), 1)
+		needed = max(render.GraphemeWidthWith(t.Value[t.Cursor:], policy), 1)
 	} else if caret {
 		needed = 1
 	}
@@ -534,7 +542,7 @@ func (t *TextInput) ensureOffset(width int, caret bool) {
 		return
 	}
 	head := t.Value[:t.Cursor]
-	total := textCells(head)
+	total := textCells(head, policy)
 	if total <= budget {
 		t.Offset = 0
 		return
@@ -543,7 +551,7 @@ func (t *TextInput) ensureOffset(width int, caret bool) {
 	graphemes := uniseg.NewGraphemes(head)
 	for graphemes.Next() {
 		_, to := graphemes.Positions()
-		used += render.GraphemeWidth(graphemes.Str())
+		used += render.GraphemeWidthWith(graphemes.Str(), policy)
 		if total-used <= budget {
 			t.Offset = to
 			return
@@ -563,7 +571,7 @@ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal
 			caretPending = focused
 		}
 		cluster := graphemes.Str()
-		width := render.GraphemeWidth(cluster)
+		width := canvas.GraphemeWidth(cluster)
 		if width == 0 {
 			canvas.Put(line.X+x, line.Y, cluster, normal)
 			continue
@@ -584,7 +592,7 @@ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal
 	if !focused || !caretPending && input.Cursor != len(input.Value) {
 		return
 	}
-	cursorX := textCells(input.Value[input.Offset:input.Cursor])
+	cursorX := textCells(input.Value[input.Offset:input.Cursor], canvas.WidthPolicy())
 	if cursorX >= 0 && cursorX < line.W {
 		canvas.Put(line.X+cursorX, line.Y, " ", caret)
 	}
@@ -595,7 +603,7 @@ func drawPlaceholder(canvas *render.Canvas, line render.Rect, value string, plac
 	graphemes := uniseg.NewGraphemes(sanitizeInput(value))
 	for graphemes.Next() {
 		cluster := graphemes.Str()
-		width := render.GraphemeWidth(cluster)
+		width := canvas.GraphemeWidth(cluster)
 		if width == 0 {
 			continue
 		}
@@ -820,7 +828,11 @@ func nextWord(value string, position int) int {
 	return len(value)
 }
 
-func byteAtCell(value string, offset, cell, width int) int {
+// byteAtCell maps a clicked cell column to the byte offset of the grapheme
+// under it. Measuring with policy keeps the mapping aligned with what the
+// field actually painted: a two-cell grapheme under ambiguous-2 counts two
+// columns, so clicking its second half lands after it.
+func byteAtCell(value string, offset, cell, width int, policy render.WidthPolicy) int {
 	offset = floorBoundary(value, offset)
 	if cell <= 0 || width <= 0 {
 		return offset
@@ -830,7 +842,7 @@ func byteAtCell(value string, offset, cell, width int) int {
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		from, to = from+offset, to+offset
-		cells := render.GraphemeWidth(graphemes.Str())
+		cells := render.GraphemeWidthWith(graphemes.Str(), policy)
 		if cells == 0 {
 			continue
 		}
@@ -851,11 +863,11 @@ func byteAtCell(value string, offset, cell, width int) int {
 	return len(value)
 }
 
-func textCells(value string) int {
+func textCells(value string, policy render.WidthPolicy) int {
 	width := 0
 	graphemes := uniseg.NewGraphemes(value)
 	for graphemes.Next() {
-		width += render.GraphemeWidth(graphemes.Str())
+		width += render.GraphemeWidthWith(graphemes.Str(), policy)
 	}
 	return width
 }

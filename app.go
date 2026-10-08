@@ -182,6 +182,23 @@ func WithHyperlinks(enabled bool) Option {
 	return func(config *config) error { config.hyperlinks = enabled; return nil }
 }
 
+// WithWidthPolicy sets how the terminal measures ambiguous graphemes: East
+// Asian Ambiguous characters one or two cells wide, emoji presentation
+// selectors honored or ignored, emoji one or two cells wide. The default
+// policy (a modern, Western-locale terminal) changes nothing. The policy
+// rides the frame canvas, so every canvas operation — drawing and measuring
+// alike — applies it uniformly; free render.TextWidth and render.GraphemeWidth
+// stay on the default policy. AmbiguousWidth must be 1 or 2.
+func WithWidthPolicy(policy render.WidthPolicy) Option {
+	return func(config *config) error {
+		if policy.AmbiguousWidth != 1 && policy.AmbiguousWidth != 2 {
+			return fmt.Errorf("lux: ambiguous width must be 1 or 2, got %d", policy.AmbiguousWidth)
+		}
+		config.widthPolicy = policy
+		return nil
+	}
+}
+
 type config struct {
 	backend                       Backend
 	input, output                 *os.File
@@ -191,6 +208,7 @@ type config struct {
 	keyReleases                   bool
 	pixelMouse                    bool
 	hyperlinks                    bool
+	widthPolicy                   render.WidthPolicy
 }
 
 func defaultConfig() config {
@@ -244,14 +262,15 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 }
 
 type surface struct {
-	buffer    *render.Buffer
-	canvas    *render.Canvas
-	presented []func()
+	buffer      *render.Buffer
+	canvas      *render.Canvas
+	widthPolicy render.WidthPolicy
+	presented   []func()
 }
 
-func newSurface(width, height int) *surface {
+func newSurface(width, height int, policy render.WidthPolicy) *surface {
 	buffer := render.NewBuffer(width, height)
-	return &surface{buffer: buffer, canvas: render.NewCanvas(buffer)}
+	return &surface{buffer: buffer, canvas: render.NewCanvasWithPolicy(buffer, policy), widthPolicy: policy}
 }
 
 func (s *surface) resize(width, height int) {
@@ -259,7 +278,7 @@ func (s *surface) resize(width, height int) {
 		return
 	}
 	s.buffer.Resize(width, height)
-	s.canvas = render.NewCanvas(s.buffer)
+	s.canvas = render.NewCanvasWithPolicy(s.buffer, s.widthPolicy)
 }
 
 type presentResult struct {
@@ -333,7 +352,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 
 	// One surface is composed, one may wait in the latest-frame mailbox, and
 	// one may be in flight. No additional frame memory is created under lag.
-	surfaces := []*surface{newSurface(width, height), newSurface(width, height), newSurface(width, height)}
+	surfaces := []*surface{newSurface(width, height, settings.widthPolicy), newSurface(width, height, settings.widthPolicy), newSurface(width, height, settings.widthPolicy)}
 	current, free := surfaces[0], surfaces[1:]
 	pacer := newPacer(settings.maxFPS)
 	metrics := Metrics{TargetFPS: pacer.fps}

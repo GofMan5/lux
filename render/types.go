@@ -186,15 +186,29 @@ func (r Rect) SplitTop(height int) (top, rest Rect) {
 		Rect{X: r.X, Y: r.Y + height, W: max(r.W, 0), H: max(r.H, 0) - height}
 }
 
-// GraphemeWidth returns the terminal width of the first grapheme in text.
-// Terminal cells support at most two columns, so larger library results clamp.
+// GraphemeWidth returns the terminal width of the first grapheme in text
+// under the default width policy. Terminal cells support at most two
+// columns, so larger library results clamp.
 func GraphemeWidth(text string) int {
-	_, width := firstGrapheme(text)
+	return GraphemeWidthWith(text, WidthPolicy{})
+}
+
+// GraphemeWidthWith measures like GraphemeWidth but applies policy first, so
+// ambiguous-2, VS16-blind, and narrow-emoji terminals measure what they draw.
+func GraphemeWidthWith(text string, policy WidthPolicy) int {
+	_, width := firstGrapheme(text, policy)
 	return width
 }
 
-// TextWidth returns the widest line in text in terminal cells.
+// TextWidth returns the widest line in text in terminal cells under the
+// default width policy.
 func TextWidth(text string) int {
+	return TextWidthWith(text, WidthPolicy{})
+}
+
+// TextWidthWith measures like TextWidth but applies policy to every grapheme,
+// keeping clipping and wrapping decisions coherent with canvas drawing.
+func TextWidthWith(text string, policy WidthPolicy) int {
 	line, widest := 0, 0
 	graphemes := uniseg.NewGraphemes(text)
 	for graphemes.Next() {
@@ -209,19 +223,19 @@ func TextWidth(text string) int {
 		case "\t":
 			line += 4 - line%4
 		default:
-			line += terminalWidth(grapheme)
+			line += terminalWidthOf(grapheme, policy)
 		}
 	}
 	return max(widest, line)
 }
 
-func firstGrapheme(text string) (string, int) {
+func firstGrapheme(text string, policy WidthPolicy) (string, int) {
 	graphemes := uniseg.NewGraphemes(text)
 	if !graphemes.Next() {
 		return "", 0
 	}
 	grapheme := graphemes.Str()
-	return grapheme, terminalWidth(grapheme)
+	return grapheme, terminalWidthOf(grapheme, policy)
 }
 
 // WHY: overlayClusterWidth upgrades clusters containing post-15.0 Unicode

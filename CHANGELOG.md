@@ -156,6 +156,27 @@ work and the API may still change.
   GraphemeBreakTest, and the drift against 18.0.0 (26 failing lines, all new
   GB9c-style Indic conjunct rules uniseg lacks, plus ZWJ sequences built
   from post-15.0 codepoints) is documented in COMPATIBILITY.md.
+- Width policy for disagreeing terminals: `lux.WithWidthPolicy(render.
+  WidthPolicy{...})` retells the measuring for terminals whose cells differ
+  from the 18.0.0 model. `AmbiguousWidth: 2` doubles East Asian Ambiguous
+  codepoints (179 ranges / 138,739 codepoints from the 18.0.0
+  EastAsianWidth.txt class A — Greek, Cyrillic, box drawing, unit signs,
+  enclosed alphanumerics, the private-use planes), matching a CJK-locale
+  xterm, mlterm, or legacy conhost; only the exact value 2 activates the
+  bump, anything else (including the zero value) behaves as 1.
+  `VS16Blind: true` strips one trailing `U+FE0F` before measuring, so
+  `❤️`/`⚠️`/`ℹ️` collapse to their single-cell text forms on terminals that
+  ignore emoji presentation selectors, while `U+FE0E` text presentation is
+  always respected. `NarrowEmoji: true` squeezes emoji-presentation
+  graphemes into one cell (80 Emoji_Presentation ranges / 1,228 codepoints
+  from 18.0.0 emoji-data.txt: `😀`, `⚽`, flag pairs, ZWJ families, and any
+  cluster carrying VS16) for legacy console stacks, never narrowing CJK
+  ideographs. The policy is per-application and advisory — no
+  auto-detection — and flows coherently from `Run` through every canvas the
+  frame owns (`Canvas`/`Subview`/`Clip`), `Canvas.Text` advance, `TextWidth`,
+  `Button`/`Modal`/`ListBox` truncation, `TextInput` caret placement and
+  mouse mapping, so clicks land on the cells actually painted. The zero
+  policy is byte-identical to the previous behavior.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

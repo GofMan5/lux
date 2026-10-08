@@ -1,0 +1,185 @@
+Stage 7, slice 2 — WidthPolicy for disagreeing terminals — local verification, 2026-10-07
+=====================================================================================
+
+Scope (ROADMAP.md, stage 7 item 2): render.WidthPolicy (Ambiguous 1/2,
+VS16 presentation handling, narrow emoji) as an option on lux.Run, with the
+terminal behavior documented (CJK-locale terminals take ambiguous=2).
+Code: render/widthpolicy.go (policy + two UCD-derived tables),
+render/types.go (GraphemeWidthWith/TextWidthWith/firstGrapheme policy
+plumbing, free legacy delegates), render/canvas.go (NewCanvasWithPolicy,
+WidthPolicy()/GraphemeWidth()/TextWidth(), Subview/Clip propagation,
+Fill/put/Text policy-aware), app.go (lux.WithWidthPolicy — validated option,
+config field, policy canvas at all three creation sites), ui/textinput.go
+(policy from canvas in Context.Input; ensureOffset/byteAtCell/textCells/
+drawInput/applyMouse/dragTarget), ui/controls.go (clipText policy-aware
+across Button/Modal/ListBox), ui/caret_test.go (ensureOffset signature),
+examples/showcase/main.go (footer via canvas.TextWidth).
+Tests: render/widthpolicy_test.go (new), app_test.go (3 policy tests),
+ui/textinput_test.go (2 policy tests).
+Docs: docs/COMPATIBILITY.md (new "Width policy" subsection),
+README.md (Native interaction paragraph + render table row), CHANGELOG.md,
+THIRD_PARTY_NOTICES.md (widthpolicy.go derivation lines).
+
+Data derivation (offline generator, not committed; same %TEMP%\luxwidth
+tool as slice 1):
+  - sources (Unicode License v3, already credited in THIRD_PARTY_NOTICES):
+    https://www.unicode.org/Public/18.0.0/ucd/EastAsianWidth.txt
+    https://www.unicode.org/Public/18.0.0/ucd/emoji/emoji-data.txt
+  - ambiguousRanges = every EastAsianWidth class-A range (codepoint
+    property "A"), verbatim: 179 ranges / 138,739 codepoints — the count is
+    dominated by the three private-use planes (E000-F8FF 6,400,
+    F0000-FFFFD 65,534, 100000-10FFFD 65,534 = 137,468 of them). Counts
+    re-verified against the committed table source before writing any doc
+    claim (179/138,739; 80/1,228).
+  - emojiPresentationRanges = every Emoji_Presentation=Yes range, verbatim:
+    80 ranges / 1,228 codepoints.
+  - Both tables were re-counted mechanically from the committed
+    render/widthpolicy.go after writing the docs (script in the transcript:
+    179 ranges/138,739 and 80/1,228) — the numbers quoted in
+    COMPATIBILITY.md, CHANGELOG.md and THIRD_PARTY_NOTICES.md are the
+    measured ones, not the generator's claim.
+
+Policy semantics (pinned by tests, traced to code):
+  - zero policy = byte-identical legacy behavior: active() is false, so no
+    policy table is ever consulted; TestWidthPolicyZeroMatchesLegacy pins
+    the fast path including an inactive AmbiguousWidth=3
+  - AmbiguousWidth==2 (any other value, incl. 0/3/-5, behaves as 1): a
+    width==1 cluster whose BASE rune is EAW-A is bumped to 2 (adjust runs
+    after terminalWidthOf, before the VS16 handling and narrow logic).
+    e+combining is judged by the base (Latin e is not ambiguous -> stays 1)
+  - VS16Blind: exactly one trailing U+FE0F is stripped, then the remainder
+    is re-measured through the same pipeline (recursion, so "wide base +
+    FE0F + more" still works); U+FE0E is never stripped; a lone FE0F is
+    width 0; double FE0F strips one
+  - NarrowEmoji: a width==2 cluster with an Emoji_Presentation base rune,
+    OR any cluster containing FE0F, is narrowed to 1; undecodable base
+    falls through; CJK wide ideographs never narrow (they are not
+    Emoji_Presentation)
+  - policy order is fixed: VS16-blind strip BEFORE adjust, so
+    VS16Blind+NarrowEmoji compose (stripped "❤" -> narrow-blind terminal
+    sees text base -> 1 via either knob); TestWidthPolicyKnobsCombine
+    covers the 2x2 knob matrix
+  - lux.WithWidthPolicy validates AmbiguousWidth in {1,2} at option
+    evaluation time and returns an error before the backend opens
+  - coherence: the policy rides the canvas (Canvas/Subview/Clip), so Text
+    advance, TextWidth, Button/Modal/ListBox truncation, TextInput caret,
+    horizontal scrolling and mouse click/drag mapping all see the same
+    cells; the app-level test pins a presented frame's wide cell +
+    continuation, and the ui tests pin byteAtCell semantics (cell-x >=
+    (cells+1)/2 lands after the grapheme)
+
+Test evidence (windows/amd64, 2026-10-07, final tree):
+  go build ./...                       ok
+  go vet ./...                         ok, no findings
+  go test ./... -count=1               ok, all 10 packages
+  go test ./... -race                  ok, all 10 packages (run before the
+                                      doc-only edits; code unchanged since)
+  new tests (all green, first run after fixing two draft placeholders —
+  a nonexistent render_Rect constructor and a fillStyleForPolicyTest
+  helper — to Rect literals and the existing style var):
+      TestWidthPolicyZeroMatchesLegacy (11 cases: legacy ±=1, emoji=2,
+          flags=2, ZWJ family=2, VS15 text=1, VS16 emoji=2, combining=0;
+          inactive AmbiguousWidth=3 keeps ±=1)
+      TestAmbiguousWidthTwo (±/α/─/①/© — © is NOT EAW-A and stays 1;
+          e+combining stays 1; invalid 0/3/-5 fall back to 1)
+      TestVS16Blind (❤️/⚠️/ℹ️ -> 1, VS15 never stripped, double FE0F -> 1,
+          lone FE0F -> 0, 🇺🇸 stays 2, 🏳️ -> 1)
+      TestNarrowEmoji (😀/⚽/⌚/⚡/🩸/flags/ZWJ family/😀🏽/❤️-with-FE0F -> 1;
+          界/☰/U+18E00 CJK stays 2)
+      TestWidthPolicyKnobsCombine (VS16Blind x NarrowEmoji matrix)
+      TestWidthPolicyTableEdges (binary-search endpoints: 00A1 T, 00A9 F,
+          0300/036F T, 0370 F, 2460/24E9 T, 24EA F, 24EB/254B T, E000/F8FF
+          T, F900 F, 1F1AC T, 1F1AD F, F0000/FFFFD/100000/10FFFD T,
+          10FFFE F; emoji side: 231A T, 2318 F, 2648/2653 T, 1F1E6/1F1FF T,
+          1F200 F, 2764 F, 1FA70/1FAFA T, 1FB00 F)
+      TestTextWidthWithPolicy (±±=4, ±\nαα=4, ±\r\nα=2, a\tb=5,
+          ±\tα=6 — tabs measured per terminal column, not grapheme;
+          界±=4, e\u0301±=3)
+      TestCanvasPolicyDrawingAndMeasuring (Text lays wide cells +
+          continuations, Put advances 2, Fill leaves a blank trailing cell
+          on odd widths)
+      TestCanvasPolicyMeasureAccessors (WidthPolicy()/GraphemeWidth/
+          TextWidth on canvas and subview; nil canvas -> zero policy)
+      TestCanvasPolicyTravelsThroughSubviewAndClip
+      BenchmarkTextWidthAmbiguous2, BenchmarkCanvasTextAmbiguous2
+  app_test.go: TestWithWidthPolicyValidation (invalid 0/3/-5 -> Run error
+      naming "ambiguous width", backend never opened), TestWidthPolicy-
+      ReachesCanvas (presented frame: Cell(0,0) wide ±, Cell(1,0)
+      continuation; TextWidth(±±)=4, GraphemeWidth(±)=2 recorded from the
+      live canvas), TestWidthPolicyDefaultIsLegacy (no option: ±±=2, ±=1)
+  ui/textinput_test.go: TestTextInputFollowsCanvasWidthPolicy (5-wide
+      canvas, "±±±": offset scrolls, caret at column 4 via continuation
+      cells; legacy canvas keeps offset 0/caret 3),
+      TestTextInputMouseMappingUsesWidthPolicy (click cell 2 -> Cursor 2,
+      cell 3 -> Cursor 4; legacy cell 3 -> Cursor 6)
+  coverage: go test ./render/ ./ui/ -cover -> render 78.3% statements,
+      ui 91.2%; every widthpolicy.go function 100.0% (active,
+      terminalWidthOf, adjust, ambiguousRune, emojiPresentationRune), as
+      well as canvas.WidthPolicy accessor.
+
+Benchmarks (i5-10400F, -benchmem, 3 runs, fresh clean-load run; medians):
+  TextWidthLegacy 67-char line: 14.2 us, 0 allocs/op — same shape as the
+      slice-1 record (13.1 us) within machine noise; the inactive policy
+      costs one active() check per cluster, invisible at this line
+  TextWidthOverlay line: 3.4 us, 24 B/op, 3 allocs/op — unchanged from
+      slice 1 (overlay path is policy-free)
+  TextWidthAmbiguous2 (28-char line, every cluster ambiguous, policy on):
+      13.7 us, 0 allocs/op — the promotion lookup is one binary search per
+      cluster, ~ the legacy cost on a line half the length
+  CanvasTextOverlay 120x40: ~18.6 us, 21 B/op, 2 allocs/op — unchanged
+  CanvasTextAmbiguous2 120x40 (49-char ambiguous line, policy on):
+      27.5 us, 0 allocs/op (7-10 B/op amortized, sub-alloc per op rounding)
+  No default-path regression: the zero policy never reaches the tables
+  (TestWidthPolicyZeroMatchesLegacy pins behavior; benchmarks show the
+  legacy medians unchanged). The 64 KiB wrap budget stays item 4's
+  acceptance and is priced there.
+
+Doc-truth cross-check (every claim traced before writing):
+  - COMPATIBILITY.md table rows map 1:1 to the three knobs' documented
+    semantics; "advisory only, never the Unicode data underneath" = the
+    tables are read-only inputs to adjust(); segmentation (uniseg) is
+    untouched by the policy
+  - "flows from Run into every canvas (Canvas/Subview/Clip)" — verified
+    by TestCanvasPolicyTravelsThroughSubviewAndClip and the app-level
+    ReachesCanvas test
+  - "mouse clicks map onto the cells actually painted" — verified by
+    TestTextInputMouseMappingUsesWidthPolicy
+  - "zero policy is byte-identical" — TestWidthPolicyZeroMatchesLegacy
+    plus TestWidthPolicyDefaultIsLegacy at the app level
+  - "scene3d ignores the policy" — scene3d draws ASCII/half-block glyphs
+    of width 1 by construction (its luminance ramp never calls
+    terminalWidthOf); stated as an honest scope cut in COMPATIBILITY.md
+  - remaining direct terminalWidth call sites (none found in render/ or
+    ui/ outside the types.go helpers) use the default policy — grep of
+    terminalWidth/terminalWidthOf call sites re-run before this file
+  - table counts in all three docs = mechanically re-counted from the
+    committed source (see derivation above)
+  - THIRD_PARTY_NOTICES.md already carries the Unicode License v3 text;
+    slice 2 adds only the two new derivation sentences, no new licenses
+    (no new dependencies: go.mod/go.sum untouched)
+
+Honesty:
+  - golangci-lint NOT RUN (not installed on this machine)
+  - no new fuzz target: slice 2 adds no parser surface (FuzzParserNever-
+    Panics covers terminal input; the policy is pure width math exercised
+    by table-driven tests at range endpoints)
+  - Linux/docker lane NOT re-run for this slice: the policy path is pure
+    Go with no OS-specific branches (the pipe-based negotiate tests skip
+    on Windows and were re-run for CI in stage 6); CI's linux lane covers
+    it, and the slice-6 close verified the docker-shaped command
+  - the benchmark medians above are from a fresh low-load run; an earlier
+    same-session run under benchmark churn showed higher absolute numbers
+    (same shapes, same alloc counts) — the clean run is the one recorded
+  - known pre-existing quirks untouched by design: parser pixelMouse/
+    win32Input state not reset on Close->plain re-Open; the showcase
+    load flake (TestShowcaseEndToEndInputAndModal) documented at stage 4
+    — this slice's full-suite runs were green on the first try
+  - the policy is application-global (one policy per Run), not
+    per-canvas-call: NewCanvasWithPolicy exists for render-package users,
+    but lux.Run-level users get exactly one policy for the whole frame —
+    stated in COMPATIBILITY.md ("per-application, chosen by the caller")
+
+Stage 7 is not closed: items 3-5 (capability-gated Unicode core mode 2027,
+Canvas.TextWrap + render.TextMetrics + golden wrap tests, TextArea +
+examples/textedit + fuzz editing) are still open. Stage-close artifact
+lands after item 5.

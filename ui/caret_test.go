@@ -148,7 +148,7 @@ func TestDragPastEdgesWalksOneGraphemeAndScrolls(t *testing.T) {
 		t.Fatalf("drag left past the edge = %#v", input)
 	}
 	// The next frame's ensureOffset is what turns a caret move into a scroll.
-	input.ensureOffset(bounds.W, true)
+	input.ensureOffset(bounds.W, true, input.widthPolicy)
 	if input.Offset > input.Cursor {
 		t.Fatalf("offset %d must follow the caret %d", input.Offset, input.Cursor)
 	}
@@ -363,7 +363,7 @@ func TestEnsureOffsetKeepsCaretVisibleAndMinimal(t *testing.T) {
 			// A stale offset must not survive: the window is recomputed, not nudged.
 			for _, start := range []int{0, testCase.cursor, len(testCase.value)} {
 				input := TextInput{Value: testCase.value, Cursor: testCase.cursor, Anchor: testCase.cursor, Offset: start}
-				input.ensureOffset(testCase.width, testCase.caret)
+				input.ensureOffset(testCase.width, testCase.caret, input.widthPolicy)
 				if input.Offset != testCase.offset {
 					t.Fatalf("from offset %d got %d, want %d", start, input.Offset, testCase.offset)
 				}
@@ -388,7 +388,7 @@ func TestEnsureOffsetStaysLinear(t *testing.T) {
 	for range 3 {
 		input.Offset = 0
 		started := time.Now()
-		input.ensureOffset(20, true)
+		input.ensureOffset(20, true, input.widthPolicy)
 		elapsed := time.Since(started)
 		if input.Offset == 0 || input.Offset > input.Cursor {
 			t.Fatalf("offset = %d for cursor %d", input.Offset, input.Cursor)

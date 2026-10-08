@@ -34,12 +34,43 @@ type Canvas struct {
 	originY       int
 	width, height int
 	clip          Rect
+	widthPolicy   WidthPolicy
 }
 
-// NewCanvas returns a canvas covering buffer.
+// NewCanvas returns a canvas covering buffer under the default width policy.
 func NewCanvas(buffer *Buffer) *Canvas {
+	return NewCanvasWithPolicy(buffer, WidthPolicy{})
+}
+
+// NewCanvasWithPolicy returns a canvas covering buffer that measures and
+// draws graphemes under policy. Policy travels with the canvas through
+// Subview and Clip, so every control drawn through it stays coherent with
+// the target terminal without threading policy through each call.
+func NewCanvasWithPolicy(buffer *Buffer, policy WidthPolicy) *Canvas {
 	width, height := buffer.Size()
-	return &Canvas{buffer: buffer, width: width, height: height, clip: Bounds(width, height)}
+	return &Canvas{buffer: buffer, width: width, height: height, clip: Bounds(width, height), widthPolicy: policy}
+}
+
+// WidthPolicy returns the policy this canvas measures with. A nil canvas
+// reports the default policy.
+func (c *Canvas) WidthPolicy() WidthPolicy {
+	if c == nil {
+		return WidthPolicy{}
+	}
+	return c.widthPolicy
+}
+
+// GraphemeWidth returns the terminal width of the first grapheme in text
+// under this canvas's policy. It matches what the canvas's own drawing
+// (Text, Put, Fill) would advance for that grapheme.
+func (c *Canvas) GraphemeWidth(text string) int {
+	return GraphemeWidthWith(text, c.WidthPolicy())
+}
+
+// TextWidth returns the widest line in text in terminal cells under this
+// canvas's policy, so clipping and layout decisions match drawing.
+func (c *Canvas) TextWidth(text string) int {
+	return TextWidthWith(text, c.WidthPolicy())
 }
 
 // Buffer returns the canvas's underlying buffer.
@@ -118,12 +149,13 @@ func (c *Canvas) Subview(rect Rect) *Canvas {
 	local := rect.Intersect(c.Bounds())
 	absolute := Rect{X: c.originX + local.X, Y: c.originY + local.Y, W: local.W, H: local.H}
 	return &Canvas{
-		buffer:  c.buffer,
-		originX: absolute.X,
-		originY: absolute.Y,
-		width:   local.W,
-		height:  local.H,
-		clip:    absolute.Intersect(c.clip),
+		buffer:      c.buffer,
+		originX:     absolute.X,
+		originY:     absolute.Y,
+		width:       local.W,
+		height:      local.H,
+		clip:        absolute.Intersect(c.clip),
+		widthPolicy: c.widthPolicy,
 	}
 }
 
@@ -148,7 +180,7 @@ func (c *Canvas) Fill(rect Rect, grapheme string, style Style) {
 	if c == nil || c.buffer == nil {
 		return
 	}
-	grapheme, width := firstGrapheme(grapheme)
+	grapheme, width := firstGrapheme(grapheme, c.widthPolicy)
 	if width == 0 || !printable(grapheme) {
 		return
 	}
@@ -180,7 +212,7 @@ func (c *Canvas) PutCell(x, y int, cell Cell) int {
 }
 
 func (c *Canvas) put(x, y int, grapheme string, style Style, link Link) int {
-	grapheme, width := firstGrapheme(grapheme)
+	grapheme, width := firstGrapheme(grapheme, c.WidthPolicy())
 	if c == nil || c.buffer == nil || grapheme == "" || !printable(grapheme) {
 		return width
 	}
@@ -226,7 +258,7 @@ func (c *Canvas) Text(x, y int, text string, style Style) int {
 			if !printable(grapheme) {
 				continue
 			}
-			width := terminalWidth(grapheme)
+			width := terminalWidthOf(grapheme, c.WidthPolicy())
 			if width == 0 {
 				c.appendCombining(cursorX, cursorY, grapheme)
 			} else {
