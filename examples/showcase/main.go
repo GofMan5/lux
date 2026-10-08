@@ -39,6 +39,7 @@ type showcase struct {
 	scenes        ui.ListState
 	logs          ui.ScrollState
 	controls      ui.ScrollState
+	tasks         ui.TableState
 	showHelp      bool
 	observe       chan showcaseState
 	clipboard     memoryClipboard
@@ -108,6 +109,8 @@ func (app *showcase) Update(next event.Event) lux.Command {
 			app.logs.Apply(action, virtualLogCount, max(action.Bounds.H, 1))
 		case "controls":
 			app.controls.Apply(action, controlsContent, max(action.Bounds.H, 1))
+		case "tasks":
+			app.tasks.Apply(action, taskColumns, len(taskRows))
 		}
 		return nil
 	}
@@ -188,9 +191,23 @@ var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matr
 const virtualLogCount = 1_000_000
 
 // controlsContent is the panel's natural row count: heading, editor, scene list,
-// nested log, the action row and frame telemetry. The panel scrolls instead of
-// dropping controls.
-const controlsContent = 27
+// nested log, the action row, widget table and frame telemetry. The panel
+// scrolls instead of dropping controls.
+const controlsContent = 35
+
+// taskColumns is package-level so the routed Apply and the draw call share
+// the exact same slice: header hit-testing derives from the drawn layout.
+var taskColumns = []ui.TableColumn{{Title: "TASK", Weight: 2}, {Title: "DONE", Width: 4}}
+
+// taskRows is the live Table demo data: a small task board whose rows are
+// clickable and keyboard-navigable like every other stage-8 control.
+var taskRows = [][2]string{
+	{"render pipeline", "yes"},
+	{"input router", "yes"},
+	{"widget toolkit", "wip"},
+	{"theme system", "no"},
+	{"docs pass", "no"},
+}
 
 func (app *showcase) drawToolbar(canvas *render.Canvas, area render.Rect) {
 	buttonWidth := min(14, max(area.W/3, 6))
@@ -247,8 +264,18 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 		app.ui.Button("help", view, render.Rect{X: body.W - 8, Y: top + 16, W: 8, H: 3}, "Help", buttonStyle())
 	}
 
-	view.Text(0, top+20, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
-	app.drawTelemetry(view, render.Rect{Y: top + 21, W: body.W, H: 6}, frame)
+	view.Text(0, top+20, "WIDGET TABLE", render.Style{Foreground: muted, Background: panel})
+	app.ui.Table("tasks", view, render.Rect{Y: top + 21, W: body.W, H: 6}, &app.tasks, taskColumns, len(taskRows),
+		func(index int) []string { return taskRows[index][:] },
+		ui.TableStyle{
+			Normal:   render.Style{Foreground: ink, Background: panel},
+			Header:   render.Style{Foreground: muted, Background: panel, Attrs: render.AttrUnderline},
+			Selected: render.Style{Foreground: background, Background: violet},
+			Focused:  render.Style{Foreground: background, Background: cyan},
+		})
+
+	view.Text(0, top+28, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	app.drawTelemetry(view, render.Rect{Y: top + 29, W: body.W, H: 6}, frame)
 }
 
 // drawTelemetry lists the runtime's own presentation metrics, which is the only

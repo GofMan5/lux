@@ -105,3 +105,37 @@ in-repo List/TextArea precedents (registration, disabled flags, style
 fallbacks, routed action shapes). External widget-truth cross-checks
 (bubbletea/lipgloss table precedents) are deferred to the stage-8 close
 verification where doc-truth citations are finalized.
+
+Addendum 2026-10-08 — stage-8 acceptance items (same day, second commit):
+  ROADMAP stage-8 acceptance demands per control a godoc Example, an entry
+  in the examples/widgets catalog, and a showcase demo. Added:
+    - ui/example_table_test.go: ExampleContext_Table pins the drawn
+      layout (header row, selected-row fill, rubber NAME column) on a
+      28x5 buffer; output verified via renderRows, which skips
+      continuation cells and trims trailing blanks.
+    - examples/widgets/: the stage-8 catalog app. One Table over the
+      slice list (WIDGET/STATE/SLICE columns), routed through
+      Context.Handle + TableState.Apply, priority Escape quits. Tests:
+      TestCatalogPaintsTableAndStatus (static View paint),
+      TestCatalogTinyTerminalGuards (30x8 fallback),
+      TestCatalogEndToEndKeysClickAndQuit — a real Run loop sending ONE
+      event then waiting for its state before the next: KeyDown ->
+      selected 1, KeyDown -> selected 2, MousePress (12,3) -> selected 1
+      (absolute Y 3 = region-local body row 1 because local row 0 is the
+      header), KeyEscape -> quit.
+    - examples/showcase/: the Interaction Lab panel embeds a second live
+      Table ("WIDGET TABLE", TASK/DONE columns, 5 rows) registered through
+      the same ui.Context; controlsContent 27 -> 35 (the panel document
+      grows, the viewport reveals the tail by scrolling — the reveal test
+      still passes because Tab-follows-focus scrolls the panel).
+      TestShowcaseClipboardShortcutTargetsAndVirtualLayout now asserts
+      the table is painted at 120x36 and the telemetry tail renders after
+      scrolling the panel document to its end (Offset = controlsContent,
+      clamped by the viewport).
+    - CHANGELOG.md / README.md updated to point at the catalog and the
+      showcase demo.
+  Gates rerun after the changes (windows/amd64): gofmt -l . empty,
+  go vet ./... clean, go test ./... -count=1 -timeout 300s ok (13
+  packages), go mod verify ok, docker golang:1.25-alpine go test ./...
+  -count=1 ok (13 packages). golangci-lint still NOT RUN.
+  Fuzz: not applicable (no new parsing surface).

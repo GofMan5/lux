@@ -47,16 +47,30 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 
 	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(120, 36)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
 	app.View(frame)
-	// The standard medium/wide layout must expose the million-row viewport and the
-	// runtime's own telemetry, both of which live in the scrolling panel.
+	// The standard medium/wide layout must expose the million-row viewport and
+	// the live Table demo, both of which live in the scrolling panel.
 	painted := frame.Canvas.Buffer()
-	for _, want := range []string{"Virtual log (1M)", "FRAME TELEMETRY", "renderer"} {
+	for _, want := range []string{"Virtual log (1M)", "WIDGET TABLE", "TASK"} {
 		found := false
 		for y := 0; y < 36 && !found; y++ {
 			found = strings.Contains(rowText(painted, y), want)
 		}
 		if !found {
 			t.Fatalf("%q was not rendered at 120x36", want)
+		}
+	}
+	// The widget table pushed telemetry below the fold; scrolling the panel
+	// document to its end must reveal it without dropping any control.
+	app.controls.Offset = controlsContent
+	app.View(frame)
+	painted = frame.Canvas.Buffer()
+	for _, want := range []string{"FRAME TELEMETRY", "renderer"} {
+		found := false
+		for y := 0; y < 36 && !found; y++ {
+			found = strings.Contains(rowText(painted, y), want)
+		}
+		if !found {
+			t.Fatalf("%q was not rendered after scrolling the panel", want)
 		}
 	}
 }

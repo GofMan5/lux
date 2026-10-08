@@ -246,7 +246,11 @@ work and the API may still change.
   clipping with a policy-aware ellipsis, and a zero-value ready
   `TableState`. `rowAt` supplies only the visible window, so a million-row
   table paints 39 rows. `examples/table` demonstrates the full pattern with
-  200k rows, numeric and lexical sorts, and selection. Not claimed:
+  200k rows, numeric and lexical sorts, and selection. `examples/widgets` is
+  the stage-8 widget catalog whose Table slice is live end to end (arrow
+  keys, body-click selection, Escape quits), and the showcase's Interaction
+  Lab embeds a second live Table in its scrolling panel while a godoc
+  `ExampleContext_Table` pins the header/body/cell layout. Not claimed:
   horizontal scrolling, row height above one cell, per-cell content
   styling, empty-table header sorting (the router drops below-content
   clicks), IME preedit.

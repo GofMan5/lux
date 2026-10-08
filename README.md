@@ -120,6 +120,12 @@ undo, and the clipboard port:
 go run ./examples/textedit
 ```
 
+The widget catalog walks the stage-8 controls one by one:
+
+```sh
+go run ./examples/widgets
+```
+
 The module currently declares Go 1.23. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before extending the core.
 
@@ -159,7 +165,9 @@ paints only the visible window — the 120×40 million-row benchmark costs
 reports `SortRequested` and the app re-slices its own data, so the widget never
 mutates the source. Not claimed: horizontal scrolling, row height above one
 cell, per-cell content styling, and IME preedit. `examples/table` shows the
-full pattern with 200k rows.
+full pattern with 200k rows, `examples/widgets` is the stage-8 widget
+catalog (arrow keys, click selection, Escape quits), and the showcase's
+Interaction Lab embeds a second live Table in its scrolling panel.
 
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
