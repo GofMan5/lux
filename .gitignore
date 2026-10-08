@@ -16,3 +16,4 @@ Thumbs.db
 *.swp
 *.tmp
 *.log
+.verification/keystroke.prof

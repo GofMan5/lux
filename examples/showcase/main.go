@@ -40,6 +40,9 @@ type showcase struct {
 	logs          ui.ScrollState
 	controls      ui.ScrollState
 	tasks         ui.TableState
+	spin          ui.CheckboxState
+	palette       ui.RadioState
+	motion        ui.SelectState
 	showHelp      bool
 	observe       chan showcaseState
 	clipboard     memoryClipboard
@@ -50,6 +53,10 @@ type showcaseState struct {
 	showHelp bool
 	controls int
 	logs     int
+	spin     bool
+	palette  int
+	motion   int
+	open     bool
 }
 
 // memoryClipboard demonstrates the explicit port without touching the host
@@ -75,6 +82,8 @@ func (c *memoryClipboard) Write(ctx context.Context, text string) error {
 func newShowcase() *showcase {
 	app := &showcase{mesh: scene3d.Cube(1.45)}
 	app.name.SetValue("LUX explorer")
+	app.palette.Selected = 1
+	app.motion.PopupRows = 4
 	return app
 }
 
@@ -111,6 +120,12 @@ func (app *showcase) Update(next event.Event) lux.Command {
 			app.controls.Apply(action, controlsContent, max(action.Bounds.H, 1))
 		case "tasks":
 			app.tasks.Apply(action, taskColumns, len(taskRows))
+		case "spin":
+			app.spin.Apply(action)
+		case "palette":
+			app.palette.Apply(action, len(paletteNames))
+		case "motion":
+			app.motion.Apply(action, len(motionModes))
 		}
 		return nil
 	}
@@ -180,7 +195,7 @@ func (app *showcase) View(frame *lux.Frame) {
 	}
 	if app.observe != nil {
 		select {
-		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp, controls: app.controls.Offset, logs: app.logs.Offset}:
+		case app.observe <- showcaseState{name: app.name.Value, showHelp: app.showHelp, controls: app.controls.Offset, logs: app.logs.Offset, spin: app.spin.Checked, palette: app.palette.Selected, motion: app.motion.Selected, open: app.motion.Open}:
 		default:
 		}
 	}
@@ -188,12 +203,21 @@ func (app *showcase) View(frame *lux.Frame) {
 
 var sceneNames = []string{"Aurora cube", "Wire pulse", "Solar drift", "Mono matrix", "Calm orbit"}
 
+// paletteNames is the live radio-group demo: the pick recolors the scene
+// panel border and its status tag.
+var paletteNames = []string{"ink", "violet", "cyan"}
+
+// motionModes is the live select demo: the commit retunes the cube rotation
+// speed, and the popup is drawn last so it overlaps the panel below it.
+var motionModes = []string{"orbit", "pulse", "drift", "spin"}
+
 const virtualLogCount = 1_000_000
 
-// controlsContent is the panel's natural row count: heading, editor, scene list,
-// nested log, the action row, widget table and frame telemetry. The panel
+// controlsContent is the panel's natural row count: heading, editor, scene
+// list, nested log, the action row, widget table, the form controls (checkbox,
+// radio group, select with its popup gap), and frame telemetry. The panel
 // scrolls instead of dropping controls.
-const controlsContent = 35
+const controlsContent = 45
 
 // taskColumns is package-level so the routed Apply and the draw call share
 // the exact same slice: header hit-testing derives from the drawn layout.
@@ -274,8 +298,16 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 			Focused:  render.Style{Foreground: background, Background: cyan},
 		})
 
-	view.Text(0, top+28, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
-	app.drawTelemetry(view, render.Rect{Y: top + 29, W: body.W, H: 6}, frame)
+	view.Text(0, top+27, "FORM CONTROLS", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	app.ui.Checkbox("spin", view, render.Rect{Y: top + 28, W: body.W, H: 1}, &app.spin, "slow spin", checkboxStyle())
+	app.ui.RadioGroup("palette", view, render.Rect{Y: top + 29, W: body.W, H: len(paletteNames)}, &app.palette, paletteNames, radioStyle())
+	view.Text(0, top+32, "Motion", label)
+	// The popup rows below the anchor stay blank when closed, so the open
+	// popup overpaints nothing that matters, and the select is drawn last so
+	// its grown region wins pointer hits over everything drawn before it.
+	view.Text(0, top+38, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	app.drawTelemetry(view, render.Rect{Y: top + 39, W: body.W, H: 6}, frame)
+	app.ui.Select("motion", view, render.Rect{Y: top + 33, W: body.W, H: 1}, &app.motion, motionModes, selectStyle())
 }
 
 // drawTelemetry lists the runtime's own presentation metrics, which is the only
@@ -340,6 +372,26 @@ func listStyle() ui.ListStyle {
 	return ui.ListStyle{Normal: render.Style{Foreground: muted, Background: panel}, Selected: render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold}, Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold}, Hovered: render.Style{Foreground: cyan, Background: panel}, Marker: "> "}
 }
 
+func checkboxStyle() ui.CheckboxStyle {
+	return ui.CheckboxStyle{Normal: render.Style{Foreground: ink, Background: panel}, Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold}, Checked: "[x]", Unchecked: "[ ]"}
+}
+
+func radioStyle() ui.RadioStyle {
+	return ui.RadioStyle{Normal: render.Style{Foreground: muted, Background: panel}, Selected: render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold}, Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold}, Marker: "(*)", Empty: "( )"}
+}
+
+func selectStyle() ui.SelectStyle {
+	return ui.SelectStyle{
+		Normal:         render.Style{Foreground: ink, Background: background},
+		Focused:        render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
+		Hovered:        render.Style{Foreground: cyan, Background: background},
+		Marker:         "▾",
+		Popup:          render.Style{Foreground: ink, Background: background},
+		OptionNormal:   render.Style{Foreground: muted, Background: background},
+		OptionSelected: render.Style{Foreground: ink, Background: background, Attrs: render.AttrBold},
+	}
+}
+
 func (app *showcase) drawHeader(canvas *render.Canvas, area render.Rect, unicode bool) {
 	style := render.Style{Foreground: violet, Attrs: render.AttrBold}
 	name, tagline := "LUX", "terminal graphics, without the weight"
@@ -363,12 +415,24 @@ func (app *showcase) drawScene(frame *lux.Frame, area render.Rect) {
 	}
 	canvas := frame.Canvas
 	canvas.Fill(area, " ", render.Style{Background: panel})
-	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: cyan, Background: panel})
+	// The form controls own the scene's look: the radio recolors the frame,
+	// the checkbox halves the pace, and the select retunes the rotation.
+	accent := cyan
+	switch app.palette.Selected {
+	case 0:
+		accent = ink
+	case 1:
+		accent = violet
+	}
+	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: accent, Background: panel})
 	inner := area.Inset(1, 1)
 	if inner.Empty() {
 		return
 	}
-	speed := .65 + float64(app.scenes.Selected)*.14
+	speed := (.65 + float64(app.scenes.Selected)*.14) * (.75 + .18*float64(app.motion.Selected))
+	if app.spin.Checked {
+		speed *= .35
+	}
 	object := scene3d.Object{Mesh: app.mesh, Transform: scene3d.RotateY(float64(app.angle) * speed).Mul(scene3d.RotateX(float64(app.angle) * (.45 + float64(app.scenes.Selected)*.08)))}
 	scene := scene3d.Scene{
 		Objects: []scene3d.Object{object},

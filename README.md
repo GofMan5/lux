@@ -169,6 +169,21 @@ full pattern with 200k rows, `examples/widgets` is the stage-8 widget
 catalog (arrow keys, click selection, Escape quits), and the showcase's
 Interaction Lab embeds a second live Table in its scrolling panel.
 
+The form trio completes the same contract for picks and toggles:
+`ui.Checkbox` (zero-value `CheckboxState`, toggles on Enter/Space or a
+completed click, restyleable ASCII `[x]`/`[ ]` markers), `ui.RadioGroup`
+(zero-value `RadioState`, navigation selects — arrows, Home/End, pages,
+wheel, and row presses all move the choice), and `ui.Select` (zero-value
+`SelectState` dropdown: the closed box opens on activation or any navigation
+key, the borderless popup maps row `1..n` to `Offset + Y - 1` with row 0 the
+inert anchor, wheel scrolls the popup viewport without moving the choice,
+and the open region publishes `ContentHeight: 1+rows` so presses past the
+options are dropped). Both the catalog and the Interaction Lab run them end
+to end; the lab's form is live — the checkbox halves the cube's spin, the
+radio recolors the scene border, the select retunes the rotation. Not
+claimed: fuzzy filtering, popup auto-flip, multi-select, app-side
+click-outside and Escape close (plain Escape never routes to regions).
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`

@@ -1,0 +1,101 @@
+Stage 8, slice 2 — ui.Checkbox / ui.RadioGroup / ui.Select: form controls — local verification, 2026-10-08
+=============================================================================================================
+
+Scope (ROADMAP.md, stage 8 item 2): form-control widget truth. Code:
+ui/checkbox.go (CheckboxState, CheckboxStyle, Checkbox drawing,
+RadioState, RadioStyle, RadioGroup drawing), ui/select.go (SelectState,
+SelectStyle, Select Apply/drawing), shared clipText/clipTextEllipsis via
+ui/controls.go. Tests: ui/checkbox_test.go, ui/select_test.go,
+ui/example_controls_test.go (godoc), examples/widgets/main_test.go (e2e),
+examples/showcase/main_test.go (e2e + layout). Docs: README.md (form-trio
+paragraph after ui.Table), CHANGELOG.md (Added), docs/PERFORMANCE.md
+(form-control benchmarks). Examples: widgets catalog + showcase
+Interaction Lab.
+
+API (verified by test, not by inspection):
+  - CheckboxState zero value is unchecked and ready. Apply toggles ONLY
+    on activation: Enter, Space, or a completed click (the router
+    delivers a mouse click as Activate on the release). Key releases are
+    inert. changed is honest (an already-true checkbox reports false).
+    Markers are ASCII by default ([x]/[ ]) so a CJK-locale terminal
+    cannot widen the control; Checked/Unchecked restyle.
+  - RadioState zero value selects the first option, like a default.
+    Apply moves the choice: arrows, Home/End, PageUp/PageDown (half the
+    group), wheel steps, and ROW PRESSES all select — a radio selects on
+    navigation, it has nothing to commit; release reports activated while
+    keeping the choice. Row presses map press Y to the option index,
+    presses past the options change nothing. A count of 0 resets to the
+    first position. Markers ASCII "(*)"/"( )".
+  - SelectState zero value is closed with the first option current,
+    ready; PopupRows 0 means the 8-row default, clamped to the option
+    count. Apply: count of 0 closes and resets; the CLOSED box opens on
+    activation or any navigation key (press on a closed select is inert);
+    while OPEN, arrows/Home/End/pages move the choice, the wheel moves
+    Offset ONLY (viewport decoupled from the choice — viewportOnly),
+    popup row 0 is the inert value anchor, rows 1..n map to
+    Offset + Y - 1 guarded to rows and count; a pick reports changed,
+    the closing release reports activated (open reports changed=true,
+    activated=false — commit is a separate honest signal).
+  - Select geometry: the closed box draws the current value clipped with
+    "…" at X+1 and the "▾" marker at X+W-1; the open popup is
+    INTENTIONALLY BORDERLESS so its drawn cells and its press rows are
+    the same rectangle; the open region is Rect{X, Y, W, 1+rows} with
+    ContentHeight 1+min(rows, count-Offset), so presses past the options
+    are dropped by the router's below-content guard. Opening centers
+    Offset on the choice (end-clamp wins).
+  - Registration order is the popup's z-order: the select registers
+    after its neighbours so the grown region wins pointer hits; a panel
+    drawing the select last keeps the popup on top.
+  - Drawing is EGC-correct through clipText/clipTextEllipsis; selected
+    popup option uses the "> " marker, others "  ".
+  - Examples: examples/widgets catalog runs checkbox toggle, radio pick,
+    and select open/pick/commit with Escape quit in one e2e test;
+    examples/showcase Interaction Lab adds a live form below the fold of
+    its scrolling panel (controlsContent 35 -> 45) — checkbox halves the
+    cube spin, radio recolors the scene border, select retunes the
+    rotation speed — driven by wheel, press, and release in
+    TestShowcaseFormControlsEndToEnd.
+
+Routing/timing truth re-verified while wiring the e2e (context.go):
+  - press on a Focusable+Scrollable region routes as Scroll with
+    REGION-LOCAL coordinates (X=mouse.X-originX, Y=mouse.Y-originY);
+    press on Focusable+Activatable-only routes as Focus; release routes
+    as Activate only when the captured region is the same id and the
+    point is inside content.
+  - report()/observe fires inside View, BEFORE Present commits the
+    region snapshot. A test that reacts to a state which changes REGION
+    GEOMETRY (a select opening) must wait for a presented frame before
+    sending the next input, or the input routes against the stale
+    committed snapshot (found=false). Static-geometry widgets do not
+    need the extra frame wait. All select e2e steps use waitFrame/settle
+    after geometry-changing waits.
+
+Benchmarks (Windows amd64, i5-10400F, Go 1.25.5, -benchtime=2s,
+-count=1): BenchmarkCheckboxDraw ~13.6 µs, 132 B/op, 2 allocs/op;
+BenchmarkRadioGroupDraw (3 rows) ~30.2 µs, 154 B/op, 4 allocs/op;
+BenchmarkSelectDrawClosed ~5.4 µs, 112 B/op, 1 alloc/op;
+BenchmarkSelectDrawOpen ~7.0 µs, 262 B/op, 1 alloc/op. Draw cost grows
+with the visible rows only, never the option count.
+
+Gates (local, 2026-10-08):
+  - gofmt -l .                       -> empty.
+  - go vet ./...                     -> clean.
+  - go test ./... -count=1 -timeout 300s -> ok, 13/13 packages
+    (lux, capability, event, examples/showcase, examples/table,
+    examples/textedit, examples/widgets, internal/terminal, layout,
+    motion, render, scene3d, ui).
+  - docker run --rm golang:1.25-alpine go test ./... -count=1
+    -> ok, 13/13 packages (pwsh exit-1 from the stderr download
+    message; all lines ok — known quirk, pass).
+  - go mod verify                    -> all modules verified.
+  - golangci-lint                    -> NOT RUN (not installed locally;
+    recorded as skipped, as in every stage so far).
+  - fuzz                             -> N/A (no new fuzz targets; the
+    controls are pure state machines with no untrusted input surface
+    beyond the already-fuzzed EGC clipping).
+
+Not claimed (kept honest): fuzzy option filtering, popup auto-flip above
+the anchor when the popup would clip the screen bottom, multi-select,
+click-outside close and Escape close at the app level (plain Escape
+never routes to regions), radio vertical wraparound, two-column radio
+layout.

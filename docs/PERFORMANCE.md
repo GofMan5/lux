@@ -219,6 +219,15 @@ pinned by test, so a million-row and a hundred-row source paint identically.
 Wheel scrolling repaints at the same cost after the viewport-only decoupling:
 the offset moves without pulling the selection into view.
 
+The stage 8 form controls are single-`Apply` widgets with draw costs that do
+not grow with anything but the visible rows on the same machine
+(`-benchtime=2s`, `-count=1`): `BenchmarkCheckboxDraw` about 14 µs with
+2 alloc/op, `BenchmarkRadioGroupDraw` about 30 µs with 4 alloc/op for three
+rows, and `BenchmarkSelectDrawClosed`/`BenchmarkSelectDrawOpen` about
+5.4 µs and 7 µs with 1 alloc/op at 40 columns — the open popup pays only its
+own visible rows, never the option count, and one switch reuses the anchor
+row's region rectangle for the closed box.
+
 Wheel routing through nested viewports is 0 alloc/op and grows with nesting
 depth in its worst case, where every level is exhausted and the whole enclosure
 chain is walked: about 173 ns for 2 levels, 242 ns for 8, and 516 ns for 32 in

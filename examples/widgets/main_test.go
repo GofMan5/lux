@@ -106,7 +106,35 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 12, Y: 3}}
 	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.selected == 1 })
 
-	// The priority Escape shortcut quits even while the table holds focus.
+	// The checkbox toggles on the mouse release: press focuses, release
+	// activates.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 3}}
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 3}}
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.checked })
+
+	// A radio press picks the row under the pointer: local row 1 is violet.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 6}}
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.station == 1 })
+
+	// The closed select opens on its release, popup over the panel. The state
+	// is reported inside View, before Present commits the grown popup region,
+	// so the press that follows also waits for a presented frame.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 10}}
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 10}}
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.open })
+	waitFrame(t, backend.frames)
+
+	// Pressing a popup option picks it (row 11 is option index 0 under
+	// offset 0); the release commits and closes the dropdown. Each step
+	// waits for its frame so the next input lands on a committed region.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 11}}
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.choice == 0 })
+	waitFrame(t, backend.frames)
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 11}}
+	waitStateWhere(t, app.observe, func(state catalogState) bool { return !state.open && state.choice == 0 })
+	waitFrame(t, backend.frames)
+
+	// The priority Escape shortcut quits even while a widget holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	select {
 	case err := <-done:

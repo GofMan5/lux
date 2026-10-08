@@ -59,12 +59,13 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 			t.Fatalf("%q was not rendered at 120x36", want)
 		}
 	}
-	// The widget table pushed telemetry below the fold; scrolling the panel
-	// document to its end must reveal it without dropping any control.
+	// The form controls were pushed below the fold with the widget table;
+	// scrolling the panel document to its end must reveal the controls and
+	// telemetry without dropping anything.
 	app.controls.Offset = controlsContent
 	app.View(frame)
 	painted = frame.Canvas.Buffer()
-	for _, want := range []string{"FRAME TELEMETRY", "renderer"} {
+	for _, want := range []string{"FORM CONTROLS", "slow spin", "FRAME TELEMETRY", "renderer"} {
 		found := false
 		for y := 0; y < 36 && !found; y++ {
 			found = strings.Contains(rowText(painted, y), want)
@@ -73,6 +74,70 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 			t.Fatalf("%q was not rendered after scrolling the panel", want)
 		}
 	}
+}
+
+func TestShowcaseFormControlsEndToEnd(t *testing.T) {
+	// The form controls sit below the fold at this size, which also exercises
+	// the wheel: the panel scrolls them into view before any click.
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newShowcase()
+	app.observe = make(chan showcaseState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	defer func() {
+		backend.events <- event.RuneKey('q', event.ModCtrl)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(hangTimeout):
+			t.Error("showcase did not quit")
+		}
+	}()
+	waitFrame(t, backend.frames)
+	settle(t, backend.frames)
+
+	// Three wheel steps over the panel body bring the whole form into view.
+	for range 3 {
+		backend.events <- wheelAt(5, 8, false)
+	}
+	scrolled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls >= 18 })
+	settle(t, backend.frames)
+
+	// The checkbox toggles on its completed click: press focuses, release
+	// activates. Doc row 28 plus the panel offset lands on the screen.
+	clickAt := func(docRow int) (int, int) {
+		return 5, controlsBodyTop + docRow - scrolled.controls
+	}
+	x, y := clickAt(28)
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: x, Y: y}}
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: x, Y: y}}
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.spin })
+
+	// A radio press picks the row directly: the third option is doc row 31.
+	x, y = clickAt(31)
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: x, Y: y}}
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.palette == 2 })
+	settle(t, backend.frames)
+
+	// The closed select opens on its release; the grown popup region only
+	// becomes clickable after the next presented frame commits.
+	x, y = clickAt(33)
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: x, Y: y}}
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: x, Y: y}}
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.open })
+	settle(t, backend.frames)
+
+	// Popup row 3 (doc row 36) picks "drift"; the release commits and closes.
+	x, y = clickAt(36)
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: x, Y: y}}
+	committed := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.motion == 2 })
+	if !committed.open {
+		t.Fatalf("picking an option left the popup closed early: %#v", committed)
+	}
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: x, Y: y}}
+	waitStateWhere(t, app.observe, func(state showcaseState) bool { return !state.open && state.motion == 2 })
 }
 
 type interactiveBackend struct {

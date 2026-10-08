@@ -254,6 +254,33 @@ work and the API may still change.
   horizontal scrolling, row height above one cell, per-cell content
   styling, empty-table header sorting (the router drops below-content
   clicks), IME preedit.
+- `ui.Checkbox`: zero-value `CheckboxState`, toggles on Enter/Space or a
+  completed click (press focuses, release activates), ASCII `[x]`/`[ ]`
+  markers restyleable, honest `changed` reporting; key releases are inert.
+- `ui.RadioGroup`: zero-value `RadioState` over an app-owned label slice;
+  arrows, Home/End, PageUp/PageDown (half the group), wheel steps, and row
+  presses all move the choice — a radio selects on navigation, release
+  reports `activated` while keeping the choice. Not claimed: vertical key
+  wraparound, two-column layout.
+- `ui.Select`: zero-value `SelectState` dropdown over an app-owned option
+  slice. The closed box (value plus `▾` marker, clipped with `…`) opens on
+  activation or any navigation key; the open popup is intentionally
+  borderless so its drawn cells and press rows are the same rectangle, with
+  popup row 0 the inert value anchor, `1..n` guarded to `Offset + Y - 1`.
+  Opening reports `changed`, a committed pick reports `activated`, wheel
+  scrolls the popup viewport without moving the choice (viewportOnly
+  decoupling), and the open region is `ContentHeight: 1+rows` so presses past
+  the options are dropped by the router. Registration order is the popup's
+  z-order: register the select after its neighbours so the grown region wins
+  pointer hits. `examples/widgets` shows all three controls end to end
+  (checkbox toggle, radio pick, select open/pick/commit with Escape quit),
+  the showcase's Interaction Lab drives a live form (checkbox halves the spin,
+  radio recolors the scene border, select retunes rotation speed) below the
+  fold of its scrolling panel, and godoc `ExampleContext_Checkbox`,
+  `ExampleContext_RadioGroup`, `ExampleContext_Select` pin the painted
+  output. Not claimed: fuzzy filtering, auto-flip above the anchor when the
+  popup would clip the screen bottom, multi-select, app-side click-outside
+  close, app-side Escape close (plain Escape never routes to regions).
 - First-frame caret: the first focusable control now paints its caret on
   the very first frame it registers in, because a static app may never
   repaint afterwards. Focus is normally committed only when a frame is
