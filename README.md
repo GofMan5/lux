@@ -43,7 +43,7 @@ comparative claims require reproducible results.
 | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with three enable-only verdicts), streaming input parser with kitty CSI u and win32-input-mode record decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with four enable-only verdicts), streaming input parser with kitty CSI u and win32-input-mode record decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, Unicode core mode 2027, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -139,7 +139,12 @@ East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`
 describes such a terminal to lux — drawing, measuring, clipping, the caret,
 and mouse mapping then all follow the described cells coherently, while the
-default stays byte-identical to a width-agnostic program.
+defaults stays byte-identical to a width-agnostic program. Terminals that
+answer the probe's mode 2027 query positively (the contour-led Unicode
+core proposal, ALPHA) additionally get that mode entered, holding the
+terminal to the same grapheme-cluster contract lux measures by itself —
+and an explicit width policy suppresses it, since one stream follows one
+width authority.
 
 Nested viewports need no widget tree: a scrollable region publishes whether it
 sits at a boundary, and the router bubbles the wheel or a scroll key to the
@@ -155,8 +160,8 @@ the same handful of bytes whether the screen is 80×24 or 120×40.
 Defaults come from the environment (`TERM`, `COLORTERM`, `NO_COLOR`) and the
 platform. Then a single bounded probe at startup asks the terminal itself
 (primary and secondary device attributes, mode reports for scroll regions,
-synchronized output, pixel mouse, and win32 input, and the kitty keyboard
-query). The scroll-mode
+synchronized output, pixel mouse, win32 input, and Unicode core, and the
+kitty keyboard query). The scroll-mode
 probe can only veto, never
 invent; a silent or slow terminal keeps the conservative defaults, and
 redirected output skips the probe entirely for the plain-text profile. The
@@ -165,8 +170,8 @@ reveal when a multiplexer answered on behalf of the host, and inside a
 detected tmux or GNU screen the input-family verdicts (kitty keyboard,
 pixel mouse, win32 input) are downgraded — a pane never runs an input
 encoding the multiplexer does not re-emit, while output-family verdicts
-(scroll regions, synchronized output) stay, because tmux implements those
-for its panes itself. The
+(scroll regions, synchronized output, Unicode core) stay, because tmux
+implements those for its panes itself. The
 other queries are enable-only — a kitty flags reply turns on the
 enhanced keyboard, where Esc decodes immediately and Ctrl+letter splits from
 its C0 alias; on Windows, a mode 9001 answer that recognizes win32 input
@@ -175,7 +180,10 @@ console modifier truth, and AltGr as a plain character) with the same
 guaranteed reset on every exit path, and kitty wins when both answer;
 a mode 2026 answer that recognizes the mode turns on the
 frame-synchronization wrapper (silence never does), and
-`LUX_TUI_SYNC_OUTPUT` overrides that verdict in either direction. Mouse
+`LUX_TUI_SYNC_OUTPUT` overrides that verdict in either direction; a mode
+2027 answer that recognizes the mode enters Unicode core mode with the
+same guaranteed reset on every exit path — silence, rejection, and an
+explicit width policy all keep it off. Mouse
 tracking is all-motion (1003 with SGR 1006): hover states
 follow plain pointer motion, and SGR releases carry the real button.
 `WithPixelMouse` opts into kitty's pixel-position mode (1016) where the probe
@@ -222,7 +230,12 @@ modifier bookends as honest unknown-key releases. Multiplexer provenance has
 landed too: the probe latches DA1 and DA2 (first answerer wins) and reads
 `$TMUX`/`$STY`/`$TERM`, so a pane that answered through tmux or GNU screen
 keeps the legacy input path even when a mis-routed or forged reply claims
-kitty support — that closes the keyboard-truth stage. Next slices are
+kitty support — that closes the keyboard-truth stage. The text-truth stage
+is underway: the 18.0.0 width overlay and the width policy landed first,
+and Unicode core mode 2027 follows the probe verdicts with a guaranteed
+reset on every exit path (an explicit width policy suppresses it, since
+one stream follows one width authority), with word wrap and the multiline
+TextArea still to come; beyond them,
 variable-height virtualization and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.

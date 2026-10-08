@@ -69,18 +69,20 @@ func TestDetectMultiplexer(t *testing.T) {
 
 // TestGateMultiplexerInput pins the provenance rule itself: inside a
 // multiplexer the input-family verdicts are downgraded to unknown while the
-// output family keeps the multiplexer's own honest answers, and without a
-// multiplexer every verdict passes through untouched.
+// output family keeps the multiplexer's own honest answers — mode 2027
+// included, because the clustering contract rides the output path — and
+// without a multiplexer every verdict passes through untouched.
 func TestGateMultiplexerInput(t *testing.T) {
 	hostile := probeReply{
-		answered: true,
-		da1:      "1;2",
-		da2:      "84;0;0",
-		scroll:   probeSupported,
-		sync:     probeSupported,
-		keyboard: probeSupported,
-		pixel:    probeSupported,
-		win32:    probeSupported,
+		answered:    true,
+		da1:         "1;2",
+		da2:         "84;0;0",
+		scroll:      probeSupported,
+		sync:        probeSupported,
+		keyboard:    probeSupported,
+		pixel:       probeSupported,
+		win32:       probeSupported,
+		unicodeCore: probeSupported,
 	}
 	// Neutralize the environment so rows decide purely through the reports.
 	t.Setenv("TMUX", "")
@@ -89,14 +91,15 @@ func TestGateMultiplexerInput(t *testing.T) {
 
 	t.Run("tmux reports gate the input family", func(t *testing.T) {
 		want := probeReply{
-			answered: true,
-			da1:      "1;2",
-			da2:      "84;0;0",
-			scroll:   probeSupported,
-			sync:     probeSupported,
-			keyboard: probeUnknown,
-			pixel:    probeUnknown,
-			win32:    probeUnknown,
+			answered:    true,
+			da1:         "1;2",
+			da2:         "84;0;0",
+			scroll:      probeSupported,
+			sync:        probeSupported,
+			keyboard:    probeUnknown,
+			pixel:       probeUnknown,
+			win32:       probeUnknown,
+			unicodeCore: probeSupported,
 		}
 		if got := gateMultiplexerInput(hostile); got != want {
 			t.Errorf("gated reply = %+v, want %+v", got, want)
@@ -106,13 +109,14 @@ func TestGateMultiplexerInput(t *testing.T) {
 		t.Setenv("STY", "12345.pts-0.host")
 		hostile.da2 = "" // screen is detected purely through the environment
 		want := probeReply{
-			answered: true,
-			da1:      "1;2",
-			scroll:   probeSupported,
-			sync:     probeSupported,
-			keyboard: probeUnknown,
-			pixel:    probeUnknown,
-			win32:    probeUnknown,
+			answered:    true,
+			da1:         "1;2",
+			scroll:      probeSupported,
+			sync:        probeSupported,
+			keyboard:    probeUnknown,
+			pixel:       probeUnknown,
+			win32:       probeUnknown,
+			unicodeCore: probeSupported,
 		}
 		if got := gateMultiplexerInput(hostile); got != want {
 			t.Errorf("gated reply = %+v, want %+v", got, want)
@@ -120,14 +124,15 @@ func TestGateMultiplexerInput(t *testing.T) {
 	})
 	t.Run("host terminal passes through untouched", func(t *testing.T) {
 		honest := probeReply{
-			answered: true,
-			da1:      "62;1;2",
-			da2:      "1;0;0",
-			scroll:   probeSupported,
-			sync:     probeSupported,
-			keyboard: probeSupported,
-			pixel:    probeSupported,
-			win32:    probeSupported,
+			answered:    true,
+			da1:         "62;1;2",
+			da2:         "1;0;0",
+			scroll:      probeSupported,
+			sync:        probeSupported,
+			keyboard:    probeSupported,
+			pixel:       probeSupported,
+			win32:       probeSupported,
+			unicodeCore: probeSupported,
 		}
 		if got := gateMultiplexerInput(honest); got != honest {
 			t.Errorf("gated reply = %+v, want the input unchanged", got)
@@ -220,6 +225,42 @@ func TestTmuxKeepsLegacyInput(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("legacy stream = %#v, want %#v", got, want)
+	}
+}
+
+// TestTmuxKeepsUnicodeCoreClaim is the output-family counterpart of the
+// stage-6 negative test: a mode 2027 report inside a tmux pane is not an
+// input lie the gate must strip. The terminal-unicode-core contract rides
+// the output path, so the multiplexer's own answer stays authoritative —
+// today's tmux answers status 0 for unimplemented modes and the mode stays
+// off; if a pane ever answers supported, the claim belongs to the pane path
+// the same way DECSTBM and 2026 do. The chain parse → gate → apply must
+// preserve the verdict, and a forged supported answer must land in the
+// capability set the same way tmux's honest 2026 does.
+func TestTmuxKeepsUnicodeCoreClaim(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-0/default,123,0")
+	t.Setenv("TERM", "tmux-256color")
+	t.Setenv("COLORTERM", "")
+
+	// The forged lie: tmux does not implement 2027 today, so a supported
+	// status is exactly what a mis-routed passthrough reply would look
+	// like. The gate must not rewrite it either way.
+	tmuxAnswers := "\x1b[?1;2c\x1b[>84;0;0c\x1b[?2026;2$y\x1b[?2027;2$y"
+	reply, leftover := parseProbeReply([]byte(tmuxAnswers))
+	if string(leftover) != "" {
+		t.Fatalf("leftover = %q, want none", leftover)
+	}
+	if reply.unicodeCore != probeSupported {
+		t.Fatalf("raw 2027 verdict = %v, want probeSupported", reply.unicodeCore)
+	}
+
+	gated := gateMultiplexerInput(reply)
+	if gated.unicodeCore != probeSupported {
+		t.Fatalf("gated 2027 verdict = %v, want the mux answer untouched", gated.unicodeCore)
+	}
+	features := applyProbeFeatures(detectCapabilities(false), gated, syncOutputAuto)
+	if !features.UnicodeCoreMode {
+		t.Error("unicode core mode vetoed though the pane path answered for it")
 	}
 }
 

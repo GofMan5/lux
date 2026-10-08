@@ -51,7 +51,7 @@ and capabilities, never the shell name alone.
 
 The adapter records interactive mode, Unicode, color depth, alternate screen,
 cursor addressing, mouse, focus, bracketed paste, enhanced keyboard,
-synchronized output, hyperlinks, and graphics. Today:
+synchronized output, hyperlinks, Unicode core mode, and graphics. Today:
 
 - redirected output or `TERM=dumb` selects the portable monochrome profile;
 - the enhanced (kitty) keyboard stays off until the probe's kitty query is
@@ -79,7 +79,12 @@ synchronized output, hyperlinks, and graphics. Today:
   depth, the color follows the depth ladder;
 - hyperlinks (OSC 8) are opt-in with `WithHyperlinks(true)`: the protocol
   defines no detection mechanism, so it cannot be probed, and the default
-  emits frames byte-identical to a links-unaware program.
+  emits frames byte-identical to a links-unaware program;
+- Unicode core mode (DEC private mode 2027) turns itself on when the
+  terminal's mode 2027 report recognizes the mode — the proposal is an
+  ALPHA draft with one implementing terminal, so lux never assumes it —
+  and an explicit `lux.WithWidthPolicy` suppresses it, because the
+  application then owns the width contract for the stream.
 
 ## Startup negotiation
 
@@ -88,16 +93,16 @@ screen is entered, so the probe meets a quiet stream: the only reports in
 flight are the ones it asked for. One write — primary and secondary device
 attributes (`CSI c`, `CSI > c`) plus DECRQM for DEC private mode 6 (DECOM, the
 proxy for DECSTBM scroll regions), mode 2026 (synchronized output), mode 1016
-(pixel mouse), and mode 9001 (win32 input), plus the kitty keyboard query
-(`CSI ? u`) — followed by a bounded read:
+(pixel mouse), mode 9001 (win32 input), and mode 2027 (Unicode core), plus
+the kitty keyboard query (`CSI ? u`) — followed by a bounded read:
 
 - the default budget is 150 ms; terminals that answer usually do so in
   single-digit milliseconds, and a terminal that answers DA1 but not DECRQM
   keeps the probe alive until the deadline, which startup pays once;
 - once the classic trio (DA1 and the DECOM and 2026 reports) has answered, a
   25 ms grace replaces the rest of the budget for the kitty, pixel-mouse,
-  and win32-input replies: fragmented answers still land, while a
-  protocol-less terminal pays one extra 25 ms instead of the full window;
+  win32-input, and Unicode-core replies: fragmented answers still land, while
+  a protocol-less terminal pays one extra 25 ms instead of the full window;
 - `LUX_TUI_PROBE_TIMEOUT` sets the budget in milliseconds; `0`, a negative
   number, `off`, `false`, or `no` disables negotiation entirely (deterministic
   runs, terminals that answer nothing — including the kitty query, so it
@@ -126,6 +131,15 @@ proxy for DECSTBM scroll regions), mode 2026 (synchronized output), mode 1016
   no-op) rejects it; silence leaves the legacy key path. When kitty answered
   too, the win32 mode is not entered, so only one enhanced encoding is ever
   active on the wire;
+- the mode 2027 query is the newest enable-only verdict: a DECRPM answer
+  that recognizes the mode — set, reset, or permanently set — enters
+  Unicode core mode; a status of 0 (unrecognized) or 4 (permanently reset,
+  where the enable write would be a no-op) rejects it; silence leaves the
+  mode off, so this backend's own grapheme measurement stays the single
+  width authority. An explicit width policy suppresses the mode even on a
+  positive answer, and `terminal.UnicodeCore` (the backend-level option
+  behind it) forces the decision either way for a terminal whose report
+  lies;
 - redirected output and `TERM=dumb` skip the probe and use the portable
   plain-text profile.
 
@@ -168,9 +182,15 @@ probe therefore records who answered before trusting the answers:
 Any single witness is enough, and the verdict it drives is asymmetric by
 family:
 
-- output protocols — DECOM/DECSTBM and 2026 — keep the multiplexer's answers.
-  They describe the app-to-multiplexer path, and tmux implements DECSTBM and
-  2026 for its panes itself, so its supports and rejections are both honest;
+- output protocols — DECOM/DECSTBM, 2026, and the Unicode core mode 2027 —
+  keep the multiplexer's answers. They describe the app-to-multiplexer
+  path, and tmux implements DECSTBM and 2026 for its panes itself, so its
+  supports and rejections are both honest. Mode 2027 joins this family
+  even though today's tmux never answers it: a multiplexer that adopts
+  the proposal would answer for the pane path it renders, and a
+  multiplexer that lies merely receives a set-mode sequence it ignores —
+  output modes cannot corrupt decoding, so the input gate has nothing to
+  protect against here;
 - input protocols — kitty keyboard, pixel mouse, win32 input — have their
   verdicts downgraded to unknown. The bytes a pane receives are whatever the
   multiplexer re-encodes, so a "supported" answer attributes nothing about
@@ -475,6 +495,60 @@ not a lux bug).
 The zero policy is byte-identical to the pre-policy behavior: ambiguous
 stays 1 cell, VS16 is respected, emoji take 2. `scene3d`'s ASCII luminance
 ramp ignores the policy on purpose — its glyphs are width-1 by construction.
+
+### Unicode core mode (DEC private mode 2027)
+
+The contour-led terminal-unicode-core proposal defines one DEC private mode
+that moves grapheme-cluster truth into the terminal itself: an enabled
+terminal clusters printed text into extended grapheme clusters per UAX #29,
+measures emoji as two cells, may widen VS16-carrying clusters to two cells,
+and erases-then-overwrites when text is printed at a cluster cell. The
+proposal is an **ALPHA draft** with exactly one implementing terminal
+(contour) and one more consumer known to adopt it (Charm's Ultraviolet) —
+lux-tui treats it accordingly: the mode is entered only after the terminal
+positively answered the probe's `CSI ? 2027 $ p` query, and silence or a
+rejection keeps it off.
+
+For lux the mode is an alignment device, not a feature dependency. This
+library already measures every cluster itself — `uniseg` segmentation with
+the Unicode 18.0.0 width overlay (and optionally a width policy) — and a
+2027-enabled terminal is held to the same contract, so enabling the mode
+changes no measurement code: it converts the terminal from coincidentally
+agreeing with lux's cells into being specified to agree. That is also why
+an explicit `lux.WithWidthPolicy` suppresses the mode: a policy means the
+application owns the width contract for the stream, and one stream cannot
+follow two width authorities. The suppression is automatic — `Run` passes
+`terminal.UnicodeCore(false)` whenever a policy is set — while
+`terminal.UnicodeCore` on the backend overrides the probe verdict in both
+directions (`true` forces the mode on despite silence, `false` off despite
+a positive answer) as the escape hatch for a terminal whose report lies.
+
+Lifecycle follows the same discipline as every other mode lux enters. The
+probe's DECRPM verdicts map as usual — status 1/2/3 recognize the mode,
+status 0 (unrecognized) and 4 (permanently reset, where the set-mode write
+would be a no-op) reject it. A recognized answer enters the mode with
+`CSI ? 2027 h` after the alternate-screen setup, and every exit path resets
+it with `CSI ? 2027 l` first, before the win32, kitty, and base restores
+(LIFO with the enter order). The reset is unconditional on the latched
+path: the proposal leaves 2027's default undefined after DECSTR and RIS,
+and the one other consumer known to adopt the mode (Ultraviolet) does not
+restore it on exit — a gap lux refuses to inherit, because a leaked
+cluster-aware mode would misalign the next program on that terminal.
+Inside a detected multiplexer the 2027 verdict stands like the other
+output-family answers (see "Multiplexer provenance").
+
+Honesty about adoption: contour is the only terminal known to implement
+the mode today, so on every other terminal the probe answer is a
+rejection or silence and nothing changes. The capability snapshot exposes
+the verdict as `capability.Set.UnicodeCoreMode`; no live-terminal matrix
+has run against contour yet (the validation-matrix lanes stay the
+prerequisite for any README claim beyond "probe-driven, guaranteed
+restore").
+
+Spec sources (the proposal draft and its second consumer):
+
+- https://raw.githubusercontent.com/contour-terminal/terminal-unicode-core/master/spec/terminal-unicode-core.tex
+- https://github.com/charmbracelet/ultraviolet
 
 ## Styled underlines
 

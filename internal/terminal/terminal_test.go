@@ -798,6 +798,13 @@ func FuzzParserNeverPanics(f *testing.F) {
 		"\x1b]8;;http://e\x07x", "\x1b]0;title\x07", "\x1b]8;;u\x9c",
 		"\x1b[4:3m", "\x1b[4:0m", "\x1b[4;4:2;58;2;1;2;3m", "\x1b[58;5;213m",
 		"\x1b[59m", "\x1b[24m", "\x1b[?2026h", "\x1b[?2026l",
+		// Mode 2027 shapes: the set/reset writes the backend emits, the
+		// DECRPM reply shapes a late (post-deadline) report arrives in —
+		// every status value, truncated, and behind a doubled escape.
+		"\x1b[?2027h", "\x1b[?2027l", "\x1b[?2027;0$y", "\x1b[?2027;1$y",
+		"\x1b[?2027;2$y", "\x1b[?2027;3$y", "\x1b[?2027;4$y",
+		"\x1b[?2027;99999999999999999999$y", "\x1b[?2027;$y", "\x1b[?2027;1$",
+		"\x1b\x1b[?2027;1$y", "\x1b[?62;1;2;2027c",
 	}
 	for _, seed := range kittySeeds {
 		seeds = append(seeds, []byte(seed))

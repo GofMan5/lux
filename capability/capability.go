@@ -57,6 +57,18 @@ type Set struct {
 	// kitty's disambiguate flag. Terminals that did not answer keep legacy
 	// input decoding untouched.
 	Win32Input bool
+	// UnicodeCoreMode reports whether the terminal answered the DECRPM query
+	// for Unicode core mode (DEC private mode 2027, the contour-led
+	// terminal-unicode-core proposal). When set, the backend enables the
+	// mode, and the terminal itself clusters printed text into graphemes
+	// measured against current Unicode. The flag is informational for
+	// rendering: this library already measures every cell with a grapheme
+	// cluster aware model, so the default path and the mode 2027 path agree
+	// on widths by construction — the mode makes the agreement an explicit
+	// protocol instead of a lucky coincidence. Terminals that did not answer
+	// keep the mode off, and our own measurement remains the single width
+	// authority.
+	UnicodeCoreMode bool
 	// ScrollRegions reports whether the terminal implements scroll regions
 	// (DECSTBM with insert/delete lines). Without it, a backend must repaint
 	// scrolled rows instead of asking the terminal to move them.

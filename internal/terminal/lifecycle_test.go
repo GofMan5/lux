@@ -282,6 +282,83 @@ func TestCloseRestoresWin32Mode(t *testing.T) {
 	})
 }
 
+// TestCloseRestoresUnicodeCoreMode pins the reset half of the mode 2027
+// deal: a backend that turned Unicode core mode on must reset it in the
+// same Write as the legacy restore — before the win32 reset, because it
+// wraps that reset in the enter order — and a backend that never turned it
+// on must not emit a stray reset.
+func TestCloseRestoresUnicodeCoreMode(t *testing.T) {
+	t.Run("latched backend resets before the legacy restore", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}, unicodeCore: true}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasSuffix(written, []byte(unicodeCoreLeave+leaveTerminal)) {
+			t.Fatalf("Close did not reset mode 2027 before restoring: %q", written)
+		}
+		if bytes.Count(written, []byte(unicodeCoreLeave)) != 1 {
+			t.Fatalf("the mode 2027 reset appears more than once: %q", written)
+		}
+	})
+	t.Run("latched mode 2027 wraps the win32 reset", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}, unicodeCore: true, win32: true}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.HasSuffix(written, []byte(unicodeCoreLeave+win32Leave+leaveTerminal)) {
+			t.Fatalf("Close did not reset mode 2027 before the win32 reset: %q", written)
+		}
+	})
+	t.Run("unlatched backend never writes the reset", func(t *testing.T) {
+		output, err := os.CreateTemp(t.TempDir(), "terminal-output")
+		if err != nil {
+			t.Fatal(err)
+		}
+		backend := &Backend{opened: true, output: output, writer: output, features: capability.Set{Color: capability.TrueColor}}
+		frame := render.NewBuffer(2, 1)
+		render.NewCanvas(frame).Text(0, 0, "ok", render.Style{})
+		if err := backend.Present(context.Background(), frame); err != nil {
+			t.Fatal(err)
+		}
+		if err := backend.Close(); err != nil {
+			t.Fatal(err)
+		}
+		written, err := os.ReadFile(output.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(written, []byte(unicodeCoreLeave)) {
+			t.Fatalf("Close reset a mode 2027 it never enabled: %q", written)
+		}
+	})
+}
+
 func TestCloseGivesUpOnAWriterThatStopsDraining(t *testing.T) {
 	reader, writer, err := os.Pipe()
 	if err != nil {

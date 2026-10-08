@@ -189,6 +189,12 @@ func WithHyperlinks(enabled bool) Option {
 // rides the frame canvas, so every canvas operation — drawing and measuring
 // alike — applies it uniformly; free render.TextWidth and render.GraphemeWidth
 // stay on the default policy. AmbiguousWidth must be 1 or 2.
+//
+// An explicit policy suppresses Unicode core mode (DEC private mode 2027):
+// the application has claimed the width contract for this stream, so the
+// backend no longer asks the terminal to cluster on its behalf — an explicit
+// claim and mode 2027 would both steer the same measurement, and the explicit
+// claim wins.
 func WithWidthPolicy(policy render.WidthPolicy) Option {
 	return func(config *config) error {
 		if policy.AmbiguousWidth != 1 && policy.AmbiguousWidth != 2 {
@@ -215,6 +221,20 @@ func defaultConfig() config {
 	return config{input: os.Stdin, output: os.Stdout, maxFPS: 60, maxWidth: 500, maxHeight: 200, fallbackWidth: 80, fallbackHeight: 24}
 }
 
+// defaultBackendOptions turns app settings into backend options for the
+// backend Run constructs when the application did not provide its own. The
+// width policy is the one claim that forbids mode 2027: an explicit policy
+// means the application owns the width contract for this stream, so the
+// backend opts out of the terminal's Unicode core mode even on terminals
+// that answered the probe. Everything else follows the settings directly.
+func defaultBackendOptions(settings config) []terminal.Option {
+	options := []terminal.Option{terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks)}
+	if settings.widthPolicy != (render.WidthPolicy{}) {
+		options = append(options, terminal.UnicodeCore(false))
+	}
+	return options
+}
+
 // Run owns terminal lifecycle until the model quits, the context is canceled,
 // or an error occurs. Terminal restoration is attempted on every return path.
 func Run(ctx context.Context, model Model, options ...Option) (result error) {
@@ -234,7 +254,7 @@ func Run(ctx context.Context, model Model, options ...Option) (result error) {
 		}
 	}
 	if settings.backend == nil {
-		settings.backend = terminal.New(settings.input, settings.output, terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks))
+		settings.backend = terminal.New(settings.input, settings.output, defaultBackendOptions(settings)...)
 	}
 	runCtx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)

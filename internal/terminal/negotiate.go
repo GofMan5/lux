@@ -28,11 +28,12 @@ const defaultProbeTimeout = 150 * time.Millisecond
 // probeRequest is written once. The primary and secondary device attributes
 // reports prove the input path echoes device reports back; the DECRPM queries
 // ask whether DEC private mode 6 (DECOM), mode 2026 (synchronized output),
-// mode 1016 (pixel-precision mouse), and mode 9001 (win32-input-mode) are
-// recognized. Mode 6 is a proxy for DECSTBM scroll regions: DECSTBM is a
-// control sequence, not a mode, so DECRQM cannot ask about it directly, and
-// every terminal family pairs DECSTBM with DECOM — a terminal that rejects
-// DECOM lacks the private-mode machinery scroll regions rely on. The kitty
+// mode 1016 (pixel-precision mouse), mode 9001 (win32-input-mode), and mode
+// 2027 (Unicode core) are recognized. Mode 6 is a proxy for DECSTBM scroll
+// regions: DECSTBM is a control sequence, not a mode, so DECRQM cannot ask
+// about it directly, and every terminal family pairs DECSTBM with DECOM — a
+// terminal that rejects DECOM lacks the private-mode machinery scroll regions
+// rely on. The kitty
 // keyboard protocol query goes last: only protocol terminals answer it, and
 // those answers arrive right behind the classic quartet.
 //
@@ -42,11 +43,11 @@ const defaultProbeTimeout = 150 * time.Millisecond
 // Terminal 0, xterm 41, VTE 65, screen 83, WezTerm 123). A program running
 // inside a pane cannot see $TMUX across an ssh hop, but it can always see
 // who answered.
-const probeRequest = "\x1b[c\x1b[>c\x1b[?6$p\x1b[?2026$p\x1b[?1016$p\x1b[?9001$p\x1b[?u"
+const probeRequest = "\x1b[c\x1b[>c\x1b[?6$p\x1b[?2026$p\x1b[?1016$p\x1b[?9001$p\x1b[?2027$p\x1b[?u"
 
 // kittyGrace bounds how long the probe keeps listening for the kitty flags
-// reply and the pixel- and win32-input-mode reports once the classic trio
-// has answered. Terminals answer the queries in write order and
+// reply and the pixel-, win32-input-, and Unicode-core-mode reports once the
+// classic trio has answered. Terminals answer the queries in write order and
 // back-to-back, so a protocol terminal's reply lands within single-digit
 // milliseconds of the last DECRPM; a terminal without the protocol sends
 // nothing at all and would otherwise pin the probe at the full deadline.
@@ -103,6 +104,11 @@ type probeReply struct {
 	// silence never downgrades anything, because legacy decoding is already
 	// the default.
 	win32 probeFeature
+	// unicodeCore is set by the mode 2027 DECRPM answer; silence leaves it
+	// unknown, which keeps the mode off. It joins pixel and win32 in the
+	// probe-enable family: the backend writes the set-mode sequence only on
+	// a recognized answer, and a rejection or silence never emits it.
+	unicodeCore probeFeature
 }
 
 // negotiate probes a terminal and returns its report together with every byte
@@ -127,15 +133,15 @@ func negotiate(ctx context.Context, input *os.File, writer io.Writer, timeout ti
 	deadline := time.Now().Add(timeout)
 	// graceStart is zero until the classic trio (DA1 plus the DECRPM
 	// reports) has answered; from then on the late replies — kitty flags
-	// and the pixel- and win32-input-mode reports — have kittyGrace left
-	// to arrive before the probe returns what it knows.
+	// and the pixel-, win32-input-, and Unicode-core-mode reports — have
+	// kittyGrace left to arrive before the probe returns what it knows.
 	var graceStart time.Time
 	var stream []byte
 	buffer := make([]byte, 256)
 	for {
 		reply, leftover := parseProbeReply(stream)
 		classicDone := reply.answered && reply.scroll != probeUnknown && reply.sync != probeUnknown
-		if classicDone && reply.keyboard != probeUnknown && reply.pixel != probeUnknown && reply.win32 != probeUnknown {
+		if classicDone && reply.keyboard != probeUnknown && reply.pixel != probeUnknown && reply.win32 != probeUnknown && reply.unicodeCore != probeUnknown {
 			return reply, leftover
 		}
 		if classicDone && graceStart.IsZero() {
@@ -229,6 +235,8 @@ func parseProbeReply(stream []byte) (probeReply, []byte) {
 							reply.pixel = featureFromStatus(mode, status)
 						case 9001:
 							reply.win32 = featureFromStatus(mode, status)
+						case 2027:
+							reply.unicodeCore = featureFromStatus(mode, status)
 						}
 						i += end + 1
 						continue
@@ -346,13 +354,16 @@ func parseStatusReport(body []byte) (mode, status int, ok bool) {
 // believed otherwise. For win32-input-mode the same reasoning applies again:
 // mode 9001 permanently reset means the set-mode write is a no-op, so keys
 // would keep arriving in legacy encodings while the parser waited for
-// CSI underscore records. For the DECOM proxy status 4 changes nothing, because
-// DECSTBM sequences work with origin mode permanently reset and this backend
-// never sets DECOM itself. Status 1-3 mean the mode exists in some state; the
-// backend turns modes on explicitly when it uses them, so the current state is
-// irrelevant here.
+// CSI underscore records. Unicode core mode repeats the reasoning a fourth
+// time: mode 2027 permanently reset means the set-mode write is a no-op, while
+// the capability bit would claim the terminal clusters graphemes itself — a
+// claim with no terminal behind it. For the DECOM proxy status 4 changes
+// nothing, because DECSTBM sequences work with origin mode permanently reset
+// and this backend never sets DECOM itself. Status 1-3 mean the mode exists
+// in some state; the backend turns modes on explicitly when it uses them, so
+// the current state is irrelevant here.
 func featureFromStatus(mode, status int) probeFeature {
-	if status == 0 || (status == 4 && (mode == 2026 || mode == 1016 || mode == 9001)) {
+	if status == 0 || (status == 4 && (mode == 2026 || mode == 1016 || mode == 9001 || mode == 2027)) {
 		return probeRejected
 	}
 	return probeSupported
@@ -367,12 +378,14 @@ func featureFromStatus(mode, status int) probeFeature {
 // wrapper on (an unconfirmed terminal never receives it), a rejection turns
 // it off, and silence keeps the safe default. The LUX_TUI_SYNC_OUTPUT
 // override wins over the probe either way — it exists precisely for the
-// terminal whose report lies. The kitty keyboard, pixel mouse, and
-// win32-input verdicts are the other enable-only results: enhanced input
+// terminal whose report lies. The kitty keyboard, pixel mouse, win32-input,
+// and Unicode core verdicts are the other enable-only results: enhanced input
 // changes how keys are encoded, pixel mouse changes how coordinates are
-// encoded, and win32-input-mode changes key encoding on Windows terminals,
-// so each is enabled by a positive reply and by nothing else — a terminal
-// that stays silent keeps the legacy encodings the parser already handles.
+// encoded, win32-input-mode changes key encoding on Windows terminals, and
+// mode 2027 changes how the terminal itself clusters printed text, so each is
+// enabled by a positive reply and by nothing else — a terminal that stays
+// silent keeps the legacy encodings the parser already handles, and a silent
+// terminal keeps our own grapheme measurement as the single width authority.
 func applyProbeFeatures(features capability.Set, reply probeReply, sync syncOutputMode) capability.Set {
 	switch sync {
 	case syncOutputOn:
@@ -397,6 +410,9 @@ func applyProbeFeatures(features capability.Set, reply probeReply, sync syncOutp
 	}
 	if reply.win32 == probeSupported {
 		features.Win32Input = true
+	}
+	if reply.unicodeCore == probeSupported {
+		features.UnicodeCoreMode = true
 	}
 	return features
 }

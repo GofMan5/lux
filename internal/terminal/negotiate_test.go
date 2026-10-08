@@ -105,6 +105,15 @@ func TestParseProbeReply(t *testing.T) {
 		// records, so gating the decode on it would only mislabel the
 		// legacy stream it actually sends.
 		{"win32 input permanently reset", "\x1b[?6c\x1b[?9001;4$y", probeReply{answered: true, da1: "6", win32: probeRejected}, ""},
+		{"unicode core rejected", "\x1b[?6c\x1b[?2027;0$y", probeReply{answered: true, da1: "6", unicodeCore: probeRejected}, ""},
+		{"unicode core set", "\x1b[?6c\x1b[?2027;1$y", probeReply{answered: true, da1: "6", unicodeCore: probeSupported}, ""},
+		{"unicode core reset but settable", "\x1b[?6c\x1b[?2027;2$y", probeReply{answered: true, da1: "6", unicodeCore: probeSupported}, ""},
+		{"unicode core permanently set", "\x1b[?6c\x1b[?2027;3$y", probeReply{answered: true, da1: "6", unicodeCore: probeSupported}, ""},
+		// Status 4 for mode 2027 matches the other enable-only modes: a
+		// permanently reset mode ignores the set-mode escape, so the
+		// terminal can never be held to the clustering contract while the
+		// capability bit would claim it is.
+		{"unicode core permanently reset", "\x1b[?6c\x1b[?2027;4$y", probeReply{answered: true, da1: "6", unicodeCore: probeRejected}, ""},
 		// Windows Terminal answers DA1 with a 39-byte report; the reportEnd
 		// window must accept it or every WT launch stalls for the full probe
 		// timeout and replays the reply as a phantom keystroke.
@@ -156,6 +165,11 @@ func TestParseProbeReply(t *testing.T) {
 			name:   "full negotiation answer with win32 input",
 			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?9001;2$y\x1b[?1u",
 			want:   probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, pixel: probeSupported, win32: probeSupported, keyboard: probeSupported},
+		},
+		{
+			name:   "full negotiation answer with unicode core",
+			stream: "\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y\x1b[?1016;2$y\x1b[?9001;2$y\x1b[?2027;2$y\x1b[?1u",
+			want:   probeReply{answered: true, da1: "62;1;2", scroll: probeSupported, sync: probeSupported, pixel: probeSupported, win32: probeSupported, unicodeCore: probeSupported, keyboard: probeSupported},
 		},
 		{"kitty query shape without digits is replayed", "\x1b[?u", probeReply{}, "\x1b[?u"},
 		{"kitty reply with junk flags is replayed", "\x1b[?6c\x1b[?,u", probeReply{answered: true, da1: "6"}, "\x1b[?,u"},
@@ -211,6 +225,7 @@ func TestParseStatusReport(t *testing.T) {
 	}{
 		{"mode 6 reset", "6;0$", 6, 0, true},
 		{"mode 2026 set", "2026;2$", 2026, 2, true},
+		{"mode 2027 set", "2027;1$", 2027, 1, true},
 		{"mode 6 permanently set", "6;3$", 6, 3, true},
 		{"mode 6 permanently reset", "6;4$", 6, 4, true},
 		{"leading zeros are tolerated", "06;01$", 6, 1, true},
@@ -344,8 +359,11 @@ func TestNegotiateKittyGrace(t *testing.T) {
 			_, err := writer.Write([]byte("\x1b[?62;1;2c\x1b[?6;1$y\x1b[?2026;2$y"))
 			// The late replies arrive as their own read, the way a protocol
 			// terminal sends them behind the classic trio: kitty flags and
-			// the pixel-mode report are the answers that end the probe
-			// early.
+			// the pixel-mode report answer two of the probe-enable
+			// questions. The early exit also wants the win32 and
+			// Unicode-core reports, which never come here, so the stream
+			// settles through the grace window instead — still far under
+			// the deadline.
 			time.Sleep(5 * time.Millisecond)
 			if err == nil {
 				_, err = writer.Write([]byte("\x1b[?1u\x1b[?1016;2$y"))
@@ -485,7 +503,10 @@ func TestNegotiateCapsRunawayStream(t *testing.T) {
 // kitty keyboard, pixel mouse, and win32-input verdicts are enable-only:
 // enhanced input and win32-input change how keys are encoded, and pixel
 // mouse changes how coordinates are encoded, so each is enabled by a
-// positive reply and by nothing else.
+// positive reply and by nothing else. Unicode core mode joins the
+// enable-only family: a positive reply moves the clustering contract to the
+// terminal, and a rejection or silence keeps our own grapheme measurement as
+// the single width authority — nothing is ever downgraded by a report.
 func TestApplyProbeFeatures(t *testing.T) {
 	before := capability.Set{
 		Terminal:           "vt500",
@@ -516,6 +537,8 @@ func TestApplyProbeFeatures(t *testing.T) {
 	pixelOn.PixelMouse = true
 	win32On := before
 	win32On.Win32Input = true
+	unicodeCoreOn := before
+	unicodeCoreOn.UnicodeCoreMode = true
 	tests := []struct {
 		name     string
 		features capability.Set
@@ -554,6 +577,10 @@ func TestApplyProbeFeatures(t *testing.T) {
 		{"win32 support upgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", win32: probeSupported}, syncOutputAuto, capability.Set{Win32Input: true}},
 		{"rejected win32 changes nothing", before, probeReply{answered: true, da1: "6", win32: probeRejected}, syncOutputAuto, before},
 		{"unknown win32 keeps the current state", win32On, probeReply{answered: true}, syncOutputAuto, win32On},
+		{"supported unicode core turns the mode on", before, probeReply{answered: true, da1: "6", unicodeCore: probeSupported}, syncOutputAuto, unicodeCoreOn},
+		{"unicode core support upgrades even an empty set", capability.Set{}, probeReply{answered: true, da1: "6", unicodeCore: probeSupported}, syncOutputAuto, capability.Set{UnicodeCoreMode: true}},
+		{"rejected unicode core changes nothing", before, probeReply{answered: true, da1: "6", unicodeCore: probeRejected}, syncOutputAuto, before},
+		{"unknown unicode core keeps the current state", unicodeCoreOn, probeReply{answered: true}, syncOutputAuto, unicodeCoreOn},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

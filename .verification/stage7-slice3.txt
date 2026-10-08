@@ -1,0 +1,192 @@
+Stage 7, slice 3 — Unicode core mode 2027 (capability-gated) — local verification, 2026-10-07
+==========================================================================================
+
+Scope (ROADMAP.md, stage 7 item 3): DEC private mode 2027 from the
+contour-led terminal-unicode-core proposal, entered only where the
+terminal's own DECRPM answer recognizes the mode, with the spec watched
+as an ALPHA draft and uniseg-plus-overlay remaining the fallback (and,
+in fact, unchanged) measurement.
+Code: internal/terminal/negotiate.go (probe request gains the
+CSI ? 2027 $ p query, probeReply gains the unicodeCore field, the DECRPM
+arm gains case 2027, the early-exit condition requires a 2027 verdict,
+featureFromStatus gains the status-4 rejection comment chain,
+applyProbeFeatures sets the new capability), capability/capability.go
+(Set.UnicodeCoreMode with the alignment-device comment),
+internal/terminal/backend.go (unicodeCoreEnter/Leave constants,
+unicodeCoreOpted *bool tri-state field + unicodeCore latch, the
+terminal.UnicodeCore(enabled bool) Option, the Open latch switch, enter
+write LAST / leave write FIRST, Close snapshot + re-derived leave from
+locals), app.go (defaultBackendOptions appends
+terminal.UnicodeCore(false) when a width policy is set).
+Tests: internal/terminal/negotiate_test.go (2027 probe-request row,
+five DECRPM status rows, early-exit and full-negotiation stream rows),
+internal/terminal/multiplexer_test.go (gate fixtures + the new
+TestTmuxKeepsUnicodeCoreClaim), internal/terminal/lifecycle_test.go
+(TestCloseRestoresUnicodeCoreMode: latched, latched-with-win32, and
+unlatched never-writes), app_test.go (TestDefaultBackendOptions: policy
+suppression injects UnicodeCore(false)), terminal_test.go (fuzz corpus
+gains the 2027 set/reset/DECRPM shapes).
+Docs: docs/COMPATIBILITY.md (new "### Unicode core mode (DEC private
+mode 2027)" subsection under Terminal width truth, the capability
+enumeration, the probe-write list, the grace note, the mode-2027 verdict
+bullet, and the multiplexer output-family sentence), README.md
+(capabilities probe list, the 2027 enable-only sentence, the
+output-family multiplexer sentence, the width-policy paragraph tail, the
+internal/terminal table row: three -> four enable-only verdicts, and the
+Direction paragraph's text-truth sentence), CHANGELOG.md (Unreleased
+Added entry).
+THIRD_PARTY_NOTICES.md: unchanged — mode 2027 adds no dependency; the
+spec is an interface, not vendored data, and the UCD-derived tables it
+aligns with were already credited in slices 1-2.
+
+Spec and sources consulted (doc-truth, fetched this stage):
+  - https://raw.githubusercontent.com/contour-terminal/terminal-unicode-core/master/spec/terminal-unicode-core.tex
+    (the ALPHA draft: mode number 2027, DECRQM query "CSI ? 2027 $ p",
+    enable "CSI ? 2027 h", disable "CSI ? 2027 l", enabled terminal MUST
+    cluster by UAX #29, DECSTR/RIS restore behavior left undefined)
+  - https://github.com/charmbracelet/ultraviolet
+    (Charm's MIT-licensed adopter, the proposal's second consumer; it
+    does NOT restore 2027 on reset, which lux's guaranteed-restore
+    discipline refuses to inherit)
+  - Unicode 18.0.0 UCD files from slices 1-2 (already credited): the
+    overlay already measures what 2027 promises, which is why this slice
+    changes zero measurement code.
+
+Mechanism (pinned by tests, traced to code):
+  - probe: the startup write appends the 2027 query after the 9001
+    query; parseProbeReply's DECRPM arm answers it; the early-exit
+    condition now also waits for a 2027 verdict (status 0 counts as
+    "answered" — rejected, not awaited)
+  - verdicts: status 1 (set), 2 (reset), 3 (permanently set) recognize;
+    status 0 (not recognized) and 4 (permanently reset — the set-mode
+    write would be a no-op, same reasoning as 2026/1016/9001) reject;
+    silence leaves the mode off (probeUnknown -> applyProbeFeatures
+    keeps false)
+  - tri-state override: unicodeCoreOpted is nil by default (probe
+    decides), terminal.UnicodeCore(true) forces on despite silence,
+    terminal.UnicodeCore(false) forces off despite a positive answer —
+    the escape hatch for a lying report; LUX_TUI_PROBE_TIMEOUT=off kills
+    the whole negotiation including this verdict
+  - latch-before-enter: Open resolves the latch (features verdict,
+    then the option override) BEFORE the enter write is composed, so an
+    option override never races the probe
+  - enter order: base enter (alt screen et al.) -> kitty -> win32 ->
+    2027 LAST, one write; leave order is LIFO: 2027 FIRST on every exit
+    path (Close's re-derivation uses the snapshot latched at enter, not
+    the mutable fields, so the reset cannot be lost after mutation)
+  - suppression: defaultBackendOptions appends terminal.UnicodeCore
+    (false) exactly when settings.widthPolicy != render.WidthPolicy{}
+    — one stream follows one width authority; WithWidthPolicy doc says so
+  - multiplexer gate: 2027 is output-family, so the tmux/screen gate
+    does NOT downgrade it (a multiplexer that ignores the set-sequence
+    cannot corrupt input decoding — ignored writes are harmless, unlike
+    a forged input-family claim); TestTmuxKeepsUnicodeCoreClaim pins
+    this against the same tmux fixture that downgrades kitty/pixel/win32
+  - measurement: unchanged by design — uniseg segmentation + 18.0.0
+    overlay (+ optional policy) remains the single width authority; 2027
+    converts coincidental agreement into a specified contract
+
+Test evidence (windows/amd64, 2026-10-07, final tree after all doc
+edits):
+  gofmt -l .                          clean (no output)
+  go build ./...                      ok
+  go vet ./...                        ok, no findings
+  go mod verify                       all modules verified
+  go test ./... -count=1              ok, all 10 packages
+                                     (internal/terminal 2.595s; total wall
+                                     ~22s across packages)
+  docker run --rm -v E:\Projects\lux-tui:/src -w /src
+        golang:1.25-alpine go test ./... -count=1
+                                     ok, all 10 packages on Linux — the
+                                     negotiate() pipe/probe path (69%
+                                     uncovered on Windows) actually RUNS
+                                     here; the run's [exit code: 1]
+                                     marker is pwsh misclassifying go's
+                                     stderr
+                                     module-download progress lines
+                                     (known precedent), all 10 packages
+                                     printed ok
+  filtered verbose (-run '2027|UnicodeCore|TmuxKeeps|Gate|DefaultBackend
+  Options|ParseProbeReply|ApplyProbeFeatures'):
+                                     all PASS — TestCloseRestoresUnicode
+                                     CoreMode (latched resets before the
+                                     legacy restore; latched 2027 wraps
+                                     the win32 reset — enter/leave LIFO
+                                     order; unlatched never writes the
+                                     reset), TestTmuxKeepsUnicodeCore
+                                     Claim, TestTmuxKeepsLegacyInput
+                                     (regression: input family still
+                                     gated), TestGateMultiplexerInput
+                                     (4 subtests), TestParseProbeReply
+                                     (unicode_core rejected / set /
+                                     reset-but-settable / permanently
+                                     set / permanently reset + the
+                                     full-negotiation stream rows +
+                                     Windows Terminal / tmux full
+                                     answers), TestApplyProbeFeatures
+                                     (3 unicode_core subtests: on,
+                                     upgrade-empty, rejected, unknown),
+                                     TestDefaultBackendOptions
+  coverage (go test ./internal/terminal/ -coverprofile):
+                                     80.5% of statements; negotiate.go
+                                     100% on every function except
+                                     negotiate() 69.0% (the uncovered
+                                     lines are the pipe/tty handshake
+                                     unreachable on Windows — the Linux
+                                     docker lane executes them);
+                                     backend.go Close 88.9%,
+                                     backend.go UnicodeCore (the option
+                                     constructor) 0.0% in-package — it is
+                                     exercised by the lux package's
+                                     TestDefaultBackendOptions and the
+                                     app-level option path instead
+                                     (per-package coverage boundary)
+  fuzz: go test ./internal/terminal/ -run '^$'
+        -fuzz FuzzParserNeverPanics -fuzztime 20s
+                                     PASS, 1,635,641 execs (avg ~78k/s),
+                                     0 failures, 0 hangs, 3 new
+                                     interesting corpus entries (kept in
+                                     the local build cache, not the
+                                     repo); the seed corpus gained the
+                                     2027 shapes this slice: ?2027h/l
+                                     writes, ?2027;0..4$y replies,
+                                     overflowing-status, missing-status,
+                                     truncated, doubled-escape, and the
+                                     DA1 attribute shape carrying 2027
+
+Doc-truth cross-check (every claim traced before writing):
+  - README "four enable-only verdicts" table row: counted in
+    negotiate.go applyProbeFeatures — keyboard, pixel, win32, unicode
+    core (scroll/sync are veto-or-force both directions, so the count is
+    the enable-only set: 4)
+  - README probe list and the 2027 enable-only sentence: probeRequest
+    literal read back; suppression = defaultBackendOptions branch read
+    back
+  - COMPATIBILITY.md new subsection: every sentence sourced from the
+    spec draft, the Ultraviolet repo, or the code reads above (verdict
+    mapping, LIFO order, suppression, capability.Set.UnicodeCoreMode,
+    DECSTR/RIS undefined-default honesty, contour-only adoption honesty)
+  - CHANGELOG.md entry: same trace; statuses "1, 2, or 3" match
+    featureFromStatus
+  - capability.Set.UnicodeCoreMode comment matches the actual latch
+    behavior read in backend.go Open
+  - no raw URLs in COMPATIBILITY.md body prose; the spec URL list lives
+    only in the new subsection's source list, matching the width-truth
+    precedent
+
+Known limits (honest, not fixed this slice):
+  - Open's interactive latch/enter path is unreachable on Windows (the
+    plain path returns before the latch — the stage-6 documented
+    precedent); latch effects are pinned through Close-restore tests on
+    directly-constructed Backends and through the app-level option test
+  - no live contour run: the proposal has exactly one implementing
+    terminal and none was driven this slice; the claim is strictly
+    "probe-driven, guaranteed restore", which the README/COMPATIBILITY
+    wording preserves
+  - golangci-lint: NOT RUN (not installed on this machine; go vet + gofmt
+    ran instead)
+  - the fuzz corpus growth is recorded in the local build cache only;
+    the committed corpus is the seed list in terminal_test.go
+
+Stage 7 is not closed: items 4 (word wrap + TextMetrics + goldens) and
+5 (TextArea multiline EGC editing + examples/textedit + fuzz) are open.

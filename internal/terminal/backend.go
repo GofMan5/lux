@@ -67,9 +67,28 @@ const (
 	// disambiguation plus releases on keys 9001 leaves shell-safe and
 	// alternate-key detail 9001 cannot express, so kitty wins when both
 	// are available and 9001 fills the gap on terminals without it.
-	win32Enter  = "\x1b[?9001h"
-	win32Leave  = "\x1b[?9001l"
-	escapeDelay = 35 * time.Millisecond
+	win32Enter = "\x1b[?9001h"
+	win32Leave = "\x1b[?9001l"
+	// unicodeCoreEnter turns on Unicode core mode, DEC private mode 2027
+	// from the contour-led terminal-unicode-core proposal. An enabled
+	// terminal clusters printed text into extended grapheme clusters per
+	// UAX #29 itself, measures emoji as two cells, may widen
+	// VS16-prefixed clusters to two cells, and erases-plus-overwrites
+	// when text is printed at a cluster cell. This backend's own
+	// measurement is already cluster-aware and overlay-updated to
+	// Unicode 18.0.0, so enabling the mode changes no measurement code:
+	// it moves the terminal from coincidentally agreeing with our cells
+	// to being held to the same clustering contract. The proposal is an
+	// ALPHA draft with one implementing terminal (contour) and one more
+	// consumer (Charm's Ultraviolet), so the mode is entered only after
+	// the terminal positively answered the 2027 probe — silence or
+	// rejection keeps it off. Ultraviolet does not reset the mode on
+	// restore; the spec leaves 2027's default undefined after DECSTR
+	// and RIS, so this backend resets it on every exit path, like every
+	// other mode it enters.
+	unicodeCoreEnter = "\x1b[?2027h"
+	unicodeCoreLeave = "\x1b[?2027l"
+	escapeDelay      = 35 * time.Millisecond
 )
 
 // Backend is a VT-first terminal adapter. Its methods serialize lifecycle and
@@ -101,19 +120,27 @@ type Backend struct {
 	// separated from support.
 	hyperlinkOpted bool
 	hyperlink      bool
-	features       capability.Set
-	state          *term.State
-	restoreVT      func() error
-	previous       *render.Buffer
-	parser         *parser
-	events         chan event.Event
-	resizes        chan event.Event
-	cancel         context.CancelFunc
-	readDone       chan struct{}
-	resize         resizeWatcher
-	lastResizeW    int
-	lastResizeH    int
-	lastResizeOK   bool
+	// unicodeCoreOpted records the application's UnicodeCore choice: nil
+	// means automatic (the probe's mode 2027 verdict decides), and an
+	// explicit true or false overrides the probe both ways — the escape
+	// hatch for a terminal whose report lies. unicodeCore latches the
+	// mode actually in use; like kitty and win32, every exit path uses
+	// it to decide whether the reset belongs in the restore.
+	unicodeCoreOpted *bool
+	unicodeCore      bool
+	features         capability.Set
+	state            *term.State
+	restoreVT        func() error
+	previous         *render.Buffer
+	parser           *parser
+	events           chan event.Event
+	resizes          chan event.Event
+	cancel           context.CancelFunc
+	readDone         chan struct{}
+	resize           resizeWatcher
+	lastResizeW      int
+	lastResizeH      int
+	lastResizeOK     bool
 }
 
 // Option configures a Backend at construction time, before any Open.
@@ -138,6 +165,25 @@ func PixelMouse(enabled bool) Option {
 // support. The choice is honored per Open, like every other Option.
 func Hyperlinks(enabled bool) Option {
 	return func(b *Backend) { b.hyperlinkOpted = enabled }
+}
+
+// UnicodeCore overrides the automatic Unicode core mode decision (DEC private
+// mode 2027, the contour-led terminal-unicode-core proposal). By default the
+// backend enables the mode exactly when the terminal positively answered the
+// probe's 2027 query; UnicodeCore(true) forces it on despite silence, and
+// UnicodeCore(false) keeps it off despite a positive answer. The app package
+// passes false whenever the application claimed an explicit text width policy,
+// because an explicit claim and mode 2027 would both steer the same stream and
+// the explicit claim wins. The override cannot conjure behavior out of nothing:
+// the backend still writes only the set-mode sequence, and a terminal without
+// the mode ignores it — the option exists for terminals whose reports lie,
+// not for ones that stay silent. The choice is honored per Open, like every
+// other Option.
+func UnicodeCore(enabled bool) Option {
+	return func(b *Backend) {
+		set := enabled
+		b.unicodeCoreOpted = &set
+	}
 }
 
 // New constructs a closed backend. Nil files are allowed for tests and plain
@@ -243,6 +289,17 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// encoder closes every region it opens, so a terminal without support
 	// just renders the text.
 	b.hyperlink = b.hyperlinkOpted
+	// Unicode core mode follows the probe by default; an explicit
+	// UnicodeCore choice overrides the verdict both ways, the same way
+	// an explicit width policy overrides it from the app package.
+	switch {
+	case b.unicodeCoreOpted == nil:
+		b.unicodeCore = b.features.UnicodeCoreMode
+	case *b.unicodeCoreOpted:
+		b.unicodeCore = true
+	default:
+		b.unicodeCore = false
+	}
 	// The parser decodes in the mode that is actually entered, from the
 	// very first byte the read loop sees — including the cell-size reply
 	// that enterPixel just put in flight.
@@ -259,6 +316,10 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	if b.win32 {
 		enter += win32Enter
 		leave = win32Leave + leave
+	}
+	if b.unicodeCore {
+		enter += unicodeCoreEnter
+		leave = unicodeCoreLeave + leave
 	}
 	b.opened = true
 	if err := writeAll(b.writer, []byte(enter)); err != nil {
@@ -559,13 +620,14 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT, kitty, win32, pixel := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel
+	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
 	b.kitty = false
 	b.win32 = false
 	b.pixel = false
+	b.unicodeCore = false
 	b.previous = nil
 	b.lastResizeOK = false
 	b.mu.Unlock()
@@ -585,9 +647,11 @@ func (b *Backend) Close() error {
 			// The kitty pop leads the legacy restore so the stack is unwound
 			// before the modes it was layered on, mirroring the enter order.
 			// The win32 reset rides in front of it — the mode has no stack,
-			// so this is a plain reset — and sharing one Write with
-			// leaveTerminal is what guarantees each restore happens wherever
-			// the others do.
+			// so this is a plain reset — and the Unicode core reset leads
+			// them all: it was the last mode entered, so it leaves first,
+			// restoring the terminal's own clustering before the modes that
+			// rode underneath it. Sharing one Write with leaveTerminal is
+			// what guarantees each restore happens wherever the others do.
 			leave := leaveTerminal
 			if pixel {
 				leave = leavePixel
@@ -597,6 +661,9 @@ func (b *Backend) Close() error {
 			}
 			if win32 {
 				leave = win32Leave + leave
+			}
+			if unicodeCore {
+				leave = unicodeCoreLeave + leave
 			}
 			result = errors.Join(result, writeAll(writer, []byte(leave)))
 			<-b.writeSlotChan()

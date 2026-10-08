@@ -177,6 +177,28 @@ work and the API may still change.
   `Button`/`Modal`/`ListBox` truncation, `TextInput` caret placement and
   mouse mapping, so clicks land on the cells actually painted. The zero
   policy is byte-identical to the previous behavior.
+- Unicode core mode (DEC private mode 2027, the contour-led
+  terminal-unicode-core proposal, ALPHA): the startup probe now also asks
+  `CSI ? 2027 $ p`, and a recognizing DECRPM answer (status 1, 2, or 3 —
+  a permanently-reset 4 or an unrecognized 0 rejects, silence leaves it
+  off) enters the mode with `CSI ? 2027 h` and resets it with
+  `CSI ? 2027 l` first on every exit path, the LIFO opposite of the enter
+  order. An enabled terminal clusters printed text into extended grapheme
+  clusters per UAX #29 itself; lux's own uniseg-plus-18.0.0-overlay
+  measurement already agrees, so no measuring code changes — the mode
+  converts the terminal from coincidentally agreeing into being specified
+  to agree, and a leaked cluster-aware mode cannot misalign the next
+  program on that terminal (the spec leaves the default after DECSTR and
+  RIS undefined, and Ultraviolet, the proposal's other consumer, does not
+  restore the mode on exit — lux does, unconditionally). The capability
+  snapshot exposes the verdict as `capability.Set.UnicodeCoreMode`, and
+  `terminal.UnicodeCore(true/false)` overrides the probe verdict both ways
+  for a terminal whose report lies. An explicit width policy suppresses
+  the mode even on a positive answer (Run passes
+  `terminal.UnicodeCore(false)` automatically): one stream follows one
+  width authority, and the policy owns it. Inside a detected multiplexer
+  the 2027 verdict stands with the other output-family answers, unlike
+  the input-family verdicts the gate downgrades.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
