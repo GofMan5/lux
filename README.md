@@ -351,10 +351,19 @@ one stream follows one width authority), word wrap (`WrapLines` and
 `Canvas.TextWrap` measure every grapheme through the width policy, never
 split a cluster, and charge control graphemes zero cells exactly as the
 canvas draws them), and the multiline `TextArea` on the same boundary
-authority — that closes the text-truth stage. Next: the widget-truth
-stage, variable-height virtualization and semantic
-accessibility bridges. Graphics protocols follow only after these paths are
-measurable.
+authority — that closes the text-truth stage. The widget-truth stage has
+landed whole: the virtualized `Table` with fixed and rubber columns and
+hook-driven sorting, `Select` with a rofi-like type-to-filter, checkbox
+and radio, `Tabs`, `Gauge`, `Spinner`, `Sparkline`, and the
+app-virtualized `Tree`; the widget recipe (CUSTOM-CONTROL.md) whose
+worked stepper compiles as a `ui` test, so the recipe cannot rot; the
+immutable `Theme` (four roles, per-Context, no global mutable style
+table) resolving across all nine styled widgets; and the window title
+(`WithTitle`) riding the enter and leave writes with the XTWINOPS stack
+restore — that closes the widget-truth stage. Next: the real-terminal
+stage — suspend/resume, the validation matrix, an SSH adapter — and
+semantic accessibility bridges. Graphics protocols follow only after
+these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

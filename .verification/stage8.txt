@@ -1,0 +1,44 @@
+Stage 8 close: «Widget truth»
+Date: 2026-10-08
+Machine: Windows amd64, i5-10400F, Go 1.25.5 (host), golang:1.25-alpine (docker)
+
+ALL SEVEN SLICES COMMITTED
+1. 4320573 (slice 1) Table: virtualized rows, fixed/rubber columns,
+   hook sorting, EGC-aware clipping.
+2. slice 2 Select/Dropdown + Checkbox/Radio: keyboard completeness,
+   type-to-filter, form wiring.
+3. slice 3 Tabs + Gauge + Spinner: motion-layer consumer, absolute time.
+4. slice 4 Sparkline + Tree: newest-right window, app-virtualized rows.
+5. 4320573+ (slice 5) docs/CUSTOM-CONTROL.md «your own control in an
+   evening» — worked stepper compiles as ui/stepper_recipe_test.go
+   (doc-code coupling: both must keep passing).
+6. 4366521 (slice 6) Theme: immutable 4-role palette (DefaultTheme
+   attributes-only), Context.UseTheme override, all nine widgets resolve
+   through it; explicit style > theme role > widget default.
+7. 849a32d (slice 7) Window title: lux.WithTitle, OSC 0 + XTWINOPS stack
+   (CSI 22;0/23;0), sanitizeTitle, sequences() table shared by Open/Close.
+
+GATES AT CLOSE (re-run on the final tree)
+- gofmt -l . → empty.
+- go vet ./... → clean (host + docker).
+- go test ./... -count=1 -timeout 300s → ok, 13/13 packages.
+- docker golang:1.25-alpine (GOFLAGS=-buildvcs=false): vet + tests +
+  go mod verify → DOCKER_EXIT=0, "all modules verified".
+- golangci-lint: NOT RUN (unavailable in this environment — recorded
+  skipped for every slice of this stage, consistent).
+- Fuzz: N/A for every slice (no new parser surface anywhere in stage 8).
+- Benchmarks ./ui: within noise of the pre-stage baselines; per-slice
+  numbers in .verification/stage8-slice*.txt.
+
+ACCEPTANCE (ROADMAP stage 8) — MET
+- Each control: godoc examples + examples/widgets catalog + showcase live
+  demos (table, form, motion, tree pages).
+- Runtime extra claimed by the stage (window title) landed in slice 7;
+  OSC 9;4 / 9;777 / 52 moved to stage 9 (ROADMAP updated).
+- Not claimed anywhere: per-instance theming inside one Context, theme
+  hot-swap, runtime retitling, variable-height virtualization
+  (remains the next natural widget slice).
+
+VERIFICATION ARTIFACTS
+.verification/stage8-slice1..7.txt (per-slice), this file (close).
+Tree clean at 849a32d; stage-8 close commit follows this record.
