@@ -36,7 +36,7 @@ comparative claims require reproducible results.
 | Package | Implemented now |
 |---|---|
 | [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
-| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement, Unicode 18.0.0 terminal-width truth over uniseg segmentation, and a width policy for terminals that disagree |
+| [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement, Unicode 18.0.0 terminal-width truth over uniseg segmentation, a width policy for terminals that disagree, and single-pass word wrap that never splits a grapheme |
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
 | [`scene3d`](./scene3d) | dependency-free transforms, camera/light, meshes, clipping, z-buffered triangle rasterization, and half-block/ANSI/monochrome output |
@@ -234,8 +234,11 @@ kitty support — that closes the keyboard-truth stage. The text-truth stage
 is underway: the 18.0.0 width overlay and the width policy landed first,
 and Unicode core mode 2027 follows the probe verdicts with a guaranteed
 reset on every exit path (an explicit width policy suppresses it, since
-one stream follows one width authority), with word wrap and the multiline
-TextArea still to come; beyond them,
+one stream follows one width authority). Word wrap has landed on that
+same authority: `WrapLines` and `Canvas.TextWrap` measure every grapheme
+through the width policy, never split a cluster, and charge control
+graphemes zero cells exactly as the canvas draws them, with the
+multiline TextArea still to come; beyond it,
 variable-height virtualization and semantic
 accessibility bridges. Graphics protocols follow only after these paths are
 measurable.

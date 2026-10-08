@@ -1,0 +1,152 @@
+Stage 7, slice 4 — word wrap + TextMetrics + boundary goldens — local verification, 2026-10-08
+=============================================================================================
+
+Scope (ROADMAP.md, stage 7 item 4): Canvas.TextWrap(rect, text, opts,
+style) with word/char modes, hyphenation off by design, grapheme
+clusters never split, and render.TextMetrics as the measurement;
+golden tests on boundary clusters, ZWJ emoji at the break point
+included.
+Code: render/wrap.go (WrapMode/WrapWord/WrapChar, WrapOptions,
+TextMetrics, WrapLines/WrapLinesWith, MeasureWrap/MeasureWrapWith,
+Canvas.TextWrap, the internal wrapLines/wrapWriter/closeLine/write/
+writeCell/cellWidthOf/splitRun/wsAdvance/wrapChar/wrapWord
+machinery), render/testdata/fuzz/FuzzWrapLinesNeverPanicsOrInvents/
+8207cdfcf98b0d06 (the fuzz-found corpus seed, committed as a
+regression).
+Tests: render/wrap_test.go (TestWrapLinesWordGoldens: 26 word-mode
+goldens; TestWrapLinesCharModeGoldens: 11; TestWrapEmptyInput;
+TestWrapPolicyChangesBreaks; TestWrapZeroPolicyMatchesDefault;
+TestMeasureWrapMatchesWrappedLines: 3 policies x 2 modes x 4 limits x
+5 texts; TestCanvasTextWrapGolden; TestCanvasTextWrapClipsRowsButCounts
+Overflow; TestCanvasTextWrapDrawsWideGapAndNeverSplits;
+TestCanvasTextWrapTabStopsRelativeToLineStart;
+TestCanvasTextWrapFollowsCanvasPolicy; TestCanvasTextWrapNilCanvas;
+TestCanvasTextWrapMatchesStandaloneWrap;
+FuzzWrapLinesNeverPanicsOrInvents with the wrapInvariantsHold helper;
+BenchmarkWrapWords64KiB, BenchmarkWrapUnbroken64KiB,
+BenchmarkWrapCharMode64KiB, BenchmarkCanvasTextWrapParagraph).
+Docs: README.md (render table row gains "single-pass word wrap that
+never splits a grapheme"; Direction: word wrap landed, TextArea next),
+docs/PERFORMANCE.md (one linear-pass mechanism paragraph + the
+tens-of-milliseconds 64 KiB budget class the ROADMAP acceptance points
+at), CHANGELOG.md (Unreleased Added entry).
+THIRD_PARTY_NOTICES.md: unchanged — no new dependency; wrap is built
+on the already-credited rivo/uniseg segmentation plus the slices 1-2
+width overlay.
+
+Sources: no new external fetch this slice. Width authority is the
+slices 1-2 uniseg-plus-18.0.0-overlay stack (already credited in
+THIRD_PARTY_NOTICES.md); every grapheme measurement in the wrap goes
+through terminalWidthOf, never uniseg directly. The ZWJ boundary
+behavior this slice leans on (GB9a/GB11 join only across an
+ExtPict-side rune, so an invalid byte between ZWJ and an emoji breaks
+the cluster) was verified empirically against the vendored uniseg,
+not assumed.
+
+Mechanism (pinned by tests, traced to code):
+  - authority: every cell decision measures one grapheme via
+    cellWidthOf -> terminalWidthOf(grapheme, policy); the canvas
+    variant uses the canvas's own policy, so wrap decisions and drawn
+    cells cannot disagree (TestWrapPolicyChangesBreakes,
+    TestCanvasTextWrapFollowsCanvasPolicy)
+  - EGC safety: graphemes are appended whole to builders; splitRun
+    re-iterates a run only when it is wider than the limit; a wide
+    grapheme that would straddle the limit wraps early and leaves the
+    last cell empty (TestCanvasTextWrapDrawsWideGapAndNeverSplits:
+    spacer cell "" at x+1 per buffer convention)
+  - unprintable truth (the fuzz fix): control graphemes and invalid
+    bytes are kept in the output at zero cells, mirroring
+    Canvas.Text's draw skip. Dropping them (the first
+    implementation) let neighbors merge across the deletion: input
+    "man ZWJ 0xA9 girl 0" wrapped into a line "manZWJgirl0" whose
+    re-segmentation joined man+ZWJ+girl into ONE cluster, so the line
+    measured as drawn by nobody. Keeping the byte preserves the
+    input's cluster boundaries exactly; the corpus seed
+    8207cdfcf98b0d06 fails without the fix and passes with it
+  - wrap semantics: hard breaks (\n, \r\n, lone \r) always split;
+    trailing hard newline yields a final empty line; soft-break
+    whitespace is consumed; leading indentation is content that
+    overflows as its own line when wider than the limit; NBSP is word
+    content; only " " and "\t" break words; char mode keeps
+    whitespace as cells; tabs keep four-column stops relative to the
+    wrapped line's start (both modes; a tab wider than the limit
+    overflows alone, pinned)
+  - limit <= 0: hard lines only, no soft wrapping
+  - TextWrap: wraps to rect.W, draws rows i < rect.H, returns FULL
+    metrics, so Height > rect.H reports clipped overflow
+    (TestCanvasTextWrapClipsRowsButCountsOverflow)
+  - hyphenation: OFF by design and documented in the WrapOptions
+    comment — a soft hyphen is a zero-width codepoint terminals
+    render or drop differently, and breaking on it would measure one
+    line with two width authorities
+
+Test evidence (Windows amd64, i5-10400F, Go 1.25.5, 2026-10-08):
+  - gofmt -l render/: empty; go vet ./render/: clean
+  - go test ./render/ -run 'Wrap|TextWrap|Measure' -count=1: ok
+  - corpus regression:
+    go test ./render/ -run 'FuzzWrapLinesNeverPanicsOrInvents/
+    8207cdfcf98b0d06' -count=1 -v: PASS
+  - go test ./render/ -run FuzzWrapLines -fuzz
+    FuzzWrapLinesNeverPanicsOrInvents -fuzztime 60s: PASS,
+    326,589 execs, 0 failures, 461 new interesting inputs (kept in
+    the local build cache; the committed corpus is the seed list plus
+    the failing input). The same target at 20 s had found the
+    invalid-byte ZWJ merge above
+  - fuzz invariants held: no panic; metrics.Height == len(lines);
+    metrics.Width == max drawCells(line) where drawCells counts
+    exactly what Canvas.Text draws (tabs to stops, printable
+    terminal width, skip unprintable); output graphemes are an
+    in-order subsequence of input graphemes dropping only
+    whitespace-at-soft-breaks (word mode) and hard breaks
+  - coverage: go test ./render/ -count=1 -coverprofile: 84.0% of
+    statements package-wide; every wrap.go function at 100.0%
+    (go tool cover -func)
+  - benchmarks (same machine, -benchmem, count=1):
+      BenchmarkWrapWords64KiB              40 runs  31.6 ms/op  402,302 B/op  30,596 allocs/op
+      BenchmarkWrapUnbroken64KiB           24 runs  75.8 ms/op  479,198 B/op   4,404 allocs/op
+      BenchmarkWrapCharMode64KiB           36 runs  54.8 ms/op  192,644 B/op   4,382 allocs/op
+      BenchmarkCanvasTextWrapParagraph    210 runs   6.2 ms/op   32,150 B/op   2,186 allocs/op
+    (64 KiB inputs at limit 60; the paragraph is a 120x40 canvas with
+    Rect{1,1,118,38}). All inside the PERFORMANCE.md
+    tens-of-milliseconds 64 KiB class; allocations are the wrapped
+    line strings themselves, linear in input
+  - full suite: go test ./... -count=1: 10/10 ok
+  - docker lane: docker run --rm -v E:\Projects\lux-tui:/src -w /src
+    golang:1.25-alpine go test ./... -count=1: 10/10 ok (pwsh exit
+    code 1 is the known stderr module-download misclassification;
+    every package printed ok)
+  - go mod verify: all modules verified
+
+Doc-truth cross-check:
+  - README render row "single-pass word wrap that never splits a
+    grapheme" -> the EGC-safety mechanism above
+  - README Direction "charge control graphemes zero cells exactly as
+    the canvas draws them" -> cellWidthOf + printable, pinned by the
+    corpus seed and the drawCells invariant
+  - PERFORMANCE.md "one linear grapheme pass ... single re-scan
+    reserved for an unbreakable run" -> wrapWord/wrapChar append each
+    grapheme once; splitRun is the only re-scan, and only for runs
+    wider than the limit
+  - PERFORMANCE.md "tens-of-milliseconds per-field class" -> the
+    benchmark medians above; exact machine numbers deliberately live
+    here, not in the doc
+  - CHANGELOG "Height > rect.H is visible clipped overflow" ->
+    TestCanvasTextWrapClipsRowsButCountsOverflow
+
+Known limits (honest, not fixed this slice):
+  - a one-cell limit under wide content overflows by the wide width:
+    a fresh line accepts any single grapheme rather than dropping it
+    (pinned, documented in the WrapLines comment)
+  - render.TextWidthWith counts a lone invalid byte as one cell
+    (uniseg's replacement-char width) while Canvas.Text skips it in
+    drawing; wrap deliberately follows the DRAW side (cellWidthOf
+    returns 0), so MeasureWrap and the drawn cells agree even where
+    TextWidthWith would overcount. The TextWidthWith quirk is
+    pre-existing in types.go and untouched here
+  - the wrap is stateless: TextArea-level caching of a document's
+    layout is deferred to slice 5 by design
+  - golangci-lint: NOT RUN (not installed on this machine; go vet +
+    gofmt ran instead)
+
+Stage 7 is not closed: item 5 (TextArea multiline EGC editing +
+ScrollViewport scroll + examples/textedit + fuzz) is open.

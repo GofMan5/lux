@@ -199,6 +199,34 @@ work and the API may still change.
   width authority, and the policy owns it. Inside a detected multiplexer
   the 2027 verdict stands with the other output-family answers, unlike
   the input-family verdicts the gate downgrades.
+- Word wrap: `render.WrapLines`/`WrapLinesWith` wrap text to a cell limit
+  in word mode (the zero value) or char mode, `MeasureWrap`/
+  `MeasureWrapWith` return the resulting `TextMetrics` without drawing,
+  and `Canvas.TextWrap(rect, text, opts, style)` wraps to the rect's
+  width under the canvas's own width policy, draws the rows that fit,
+  and reports the full height, so `Height > rect.H` is visible clipped
+  overflow. Every grapheme is measured through the same policy-aware
+  terminal-width authority as `Canvas.Text` and is never split: a wide
+  grapheme that would straddle the limit moves down and leaves the last
+  cell of its line empty, and a one-cell limit under wide content
+  overflows by exactly that wide width, pinned in tests. Hard breaks
+  (`\n`, `\r\n`, a lone `\r`) always split; whitespace at a soft break is
+  consumed, while leading indentation is content that overflows as its
+  own line when wider than the limit; tabs keep their four-column stops
+  relative to the wrapped line's start; a trailing hard newline yields a
+  final empty line the way an editor counts the caret's line. Control
+  graphemes occupy no cells and stay in the output — exactly what
+  `Canvas.Text` draws — so a wrap can never delete a grapheme and let
+  neighboring ZWJ clusters merge into a different measurement (found by
+  fuzzing, pinned by a corpus seed that fails without the fix).
+  Hyphenation stays off by design: a soft hyphen is a zero-width
+  codepoint terminals treat differently, and breaking on it would measure
+  one line with two width authorities. The wrap is a single linear pass
+  with one re-scan only for unbreakable runs, and the fuzz target holds
+  the invariants: no panic, metrics agree with the cells the canvas
+  actually draws, and the output graphemes are an in-order subsequence of
+  the input that drops only whitespace consumed at soft breaks and hard
+  breaks.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

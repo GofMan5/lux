@@ -178,6 +178,16 @@ It was previously measured inside a loop, which is quadratic and made a pasted
 The window is now linear in the value length, so a 64 KiB field costs about
 16 ms per recomputation — still a form-field budget, not a document one.
 
+Word wrap (`WrapLines`, `MeasureWrap`, and `Canvas.TextWrap`) is one linear
+grapheme pass: a line builder, a word builder, and a whitespace builder,
+each grapheme appended once, with a single re-scan reserved for an
+unbreakable run wider than the limit. A 64 KiB paragraph therefore stays
+in the same tens-of-milliseconds per-field class as the editor window
+above in every wrap mode — the budget the text-truth stage is held to —
+and the per-mode medians are recorded in the stage 7 verification
+artifacts. The wrap is stateless and recomputes per call; caching a
+document's layout is the TextArea slice's business, not this function's.
+
 The fixed-row virtual range for a declared one-million-row viewport remains
 O(1) memory and measured about 5 ns (8 visible rows), 13 ns (24 rows), and
 48 ns (80 rows), all 0 alloc/op. Applications draw only that returned range;
