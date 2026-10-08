@@ -67,3 +67,55 @@ func ExampleContext_Spinner() {
 	// -
 	// |
 }
+
+// ExampleContext_Sparkline paints three sparklines from the same state
+// family: an auto-scaled series, a flat series (half height, so it stays
+// visible), and a longer series clipped to the newest values on the right.
+func ExampleContext_Sparkline() {
+	buffer := render.NewBuffer(10, 3)
+	canvas := render.NewCanvas(buffer)
+	var ctx ui.Context
+	rising := ui.SparklineState{Values: []float64{1, 2, 3, 4, 5, 6, 7, 8}}
+	ctx.Sparkline(canvas, render.Rect{Y: 0, W: 10, H: 1}, &rising, ui.SparklineStyle{})
+	flat := ui.SparklineState{Values: []float64{4, 4, 4, 4}}
+	ctx.Sparkline(canvas, render.Rect{Y: 1, W: 10, H: 1}, &flat, ui.SparklineStyle{})
+	wide := ui.SparklineState{Values: []float64{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12}}
+	ctx.Sparkline(canvas, render.Rect{Y: 2, W: 10, H: 1}, &wide, ui.SparklineStyle{})
+	for _, line := range renderRows(buffer) {
+		fmt.Println(line)
+	}
+	// Output:
+	//  ▂▃▄▅▆▇█
+	// ▄▄▄▄
+	// ▂▃▃▄▅▆▆▇██
+}
+
+// ExampleContext_Tree draws a small file tree, then expands the selected
+// root with Enter exactly as routed input would — the activation is what
+// tells the application to flatten one more level — and prints the
+// repainted tree. The zero value is ready: everything collapsed, viewport
+// at the top, row 0 selected.
+func ExampleContext_Tree() {
+	buffer := render.NewBuffer(16, 4)
+	canvas := render.NewCanvas(buffer)
+	var ctx ui.Context
+	state := ui.TreeState{}
+	rows := func(state *ui.TreeState) []ui.TreeRow {
+		rows := []ui.TreeRow{{ID: "ui", Label: "ui", HasChildren: true}}
+		if state.IsExpanded("ui") {
+			rows = append(rows, ui.TreeRow{ID: "ui/tree.go", Label: "tree.go", Depth: 1})
+		}
+		return append(rows, ui.TreeRow{ID: "examples", Label: "examples", HasChildren: true})
+	}
+	rowAt := func(index int) ui.TreeRow { return rows(&state)[index] }
+	ctx.Tree("files", canvas, render.Rect{W: 16, H: 4}, &state, len(rows(&state)), rowAt, ui.TreeStyle{})
+	state.Apply(ui.Action{Kind: ui.Activate, Event: event.KeyPress(event.KeyEnter, 0)}, len(rows(&state)), rowAt)
+	ctx.Tree("files", canvas, render.Rect{W: 16, H: 4}, &state, len(rows(&state)), rowAt, ui.TreeStyle{})
+	for _, line := range renderRows(buffer) {
+		fmt.Println(line)
+	}
+	// Output:
+	// - ui
+	//    tree.go
+	// + examples
+}

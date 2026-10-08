@@ -57,12 +57,14 @@ func tabAt(labels []string, offset, width, x int) int {
 	return -1
 }
 
-// keepTabVisible minimally advances Offset until the selected tab's slot ends
-// inside width, or the offset reaches the tab (a tab wider than the strip
-// then starts at the left edge and clips). Without geometry (width 0) there
-// is nothing to keep visible, so it is a no-op.
+// keepTabVisible minimally advances Offset until the selected tab's label
+// fits fully inside width, or the offset reaches the tab (a tab wider than
+// the strip then starts at the left edge and clips). Visibility is measured
+// against the unclipped label width, because a clipped trailing slot always
+// "fits" numerically while showing no label at all. Without geometry
+// (width 0) there is nothing to keep visible, so it is a no-op.
 func (s *TabsState) keepTabVisible(labels []string, width int) {
-	if width <= 0 {
+	if width <= 0 || s.Selected >= len(labels) || s.Selected < 0 {
 		return
 	}
 	if s.Selected < s.Offset {
@@ -70,14 +72,11 @@ func (s *TabsState) keepTabVisible(labels []string, width int) {
 		return
 	}
 	for s.Offset < s.Selected {
-		visible := false
-		for _, slot := range tabLayout(labels, s.Offset, width) {
-			if slot.index == s.Selected {
-				visible = slot.x+slot.w <= width
-				break
-			}
+		x := 0
+		for i := s.Offset; i < s.Selected; i++ {
+			x += render.TextWidth(labels[i]) + 2
 		}
-		if visible {
+		if x == 0 || x+render.TextWidth(labels[s.Selected])+2 <= width {
 			break
 		}
 		s.Offset++

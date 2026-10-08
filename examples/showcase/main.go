@@ -48,6 +48,9 @@ type showcase struct {
 	showHelp      bool
 	observe       chan showcaseState
 	clipboard     memoryClipboard
+	// frameTimes is the telemetry sparkline's series: the present time of
+	// the last frames in seconds, capped so it slides instead of growing.
+	frameTimes []float64
 }
 
 type showcaseState struct {
@@ -227,9 +230,9 @@ const virtualLogCount = 1_000_000
 // controlsContent is the panel's natural row count: heading, editor, scene
 // list, nested log, the action row, widget table, the form controls (checkbox,
 // radio group, select with its popup gap), the display widgets (tabs, gauge,
-// spinner), and frame telemetry. The panel scrolls instead of dropping
-// controls.
-const controlsContent = 48
+// spinner), frame telemetry, and the frame-time sparkline. The panel scrolls
+// instead of dropping controls.
+const controlsContent = 49
 
 // taskColumns is package-level so the routed Apply and the draw call share
 // the exact same slice: header hit-testing derives from the drawn layout.
@@ -333,6 +336,15 @@ func (app *showcase) drawControls(canvas *render.Canvas, area render.Rect, frame
 	}
 	view.Text(0, top+41, "FRAME TELEMETRY", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
 	app.drawTelemetry(view, render.Rect{Y: top + 42, W: body.W, H: 6}, frame)
+	// The sparkline graphs the present-time history: one sample per frame,
+	// capped at 64, auto-ranged so a stall visibly spikes. It is
+	// display-only like the gauge and spinner beside the telemetry.
+	app.frameTimes = append(app.frameTimes, frame.Metrics.PresentTime.Seconds())
+	if len(app.frameTimes) > 64 {
+		app.frameTimes = append(app.frameTimes[:0], app.frameTimes[1:]...)
+	}
+	history := ui.SparklineState{Values: app.frameTimes}
+	app.ui.Sparkline(view, render.Rect{Y: top + 48, W: body.W, H: 1}, &history, ui.SparklineStyle{Fill: render.Style{Foreground: cyan, Background: panel}})
 	app.ui.Select("motion", view, render.Rect{Y: top + 33, W: body.W, H: 1}, &app.motion, motionModes, selectStyle())
 }
 

@@ -288,10 +288,12 @@ work and the API may still change.
   Home/End, and wheel steps move the choice, and the closing release
   reports `activated` while keeping it — a strip has nothing to commit. The
   strip virtualizes: `Offset` is the first drawn tab, and `keepTabVisible`
-  advances it minimally so the selected tab's slot stays whole (a tab wider
-  than the strip clips from the left edge instead of vanishing). Vertical
+  advances it minimally so the selected tab's whole label stays readable (a
+  tab wider than the strip clips from the left edge instead of vanishing).
+  Vertical
   and page keys are inert, key releases are inert. `examples/widgets` (page
-  tabs over a status readout) and the showcase's Interaction Lab embed
+  tabs over a four-page control panel: inventory, form, motion, tree) and
+  the showcase's Interaction Lab embed
   live strips end to end — the showcase one nested inside the panel's
   vertical scroll viewport, which is the case the horizontal-arrow routing
   fix below exists for. Not claimed: multi-row strips, underline accent
@@ -311,6 +313,30 @@ work and the API may still change.
   `Started` paints the resting first frame. No region, no routing, no
   focus, and frame scheduling stays the runtime pacer's job. Not claimed:
   multi-cell frames, an indeterminate marquee.
+- `ui.Sparkline`: display-only trend line over an app-owned float series.
+  `SparklineState{Values, Min, Max}` paints the newest values right-aligned
+  (a window, so the series can be unbounded) as eight-level block glyphs
+  filling each column bottom-up; pin `Min`/`Max` for a stable axis across
+  frames, or leave both zero for per-frame auto-range. A degenerate range
+  (flat series or `Min >= Max`) collapses to the mid glyph, NaN clamps to
+  the floor, and empty or blank bounds draw nothing. No region, no
+  routing, no focus. Not claimed: thresholds, labels, axis drawing,
+  down-sampling beyond the window, negative bounds painting below a
+  baseline.
+- `ui.Tree`: list-style hierarchy widget over an app-flattened row source.
+  The app owns the expansion set (`TreeState.Expanded` by row ID) and
+  yields one `TreeRow{ID, Label, Depth}` per visible node through `rowAt`,
+  so a million-node tree virtualizes exactly like a table. Navigation is
+  the list contract — arrows, Home/End, pages, wheel move the selection —
+  and activation (Enter, Space, or a completed click on the row) toggles
+  the row's `Expanded` entry: `activated` is reported always, `changed`
+  only when the entry actually flips, and a leaf row reports activation
+  without claiming a change. A collapsed entry stays in the map as false,
+  and a zero `Expanded` map allocates on first toggle. Drawing pools
+  two-space indents, draws `style.Collapsed`/`Expanded` markers (`+`/`-`
+  defaults) for rows with children, and clips the label to the bounds. Not
+  claimed: inline node filtering, per-node styling, drag-and-drop
+  reordering, lazy async children, horizontal tree scrolling.
 - First-frame caret: the first focusable control now paints its caret on
   the very first frame it registers in, because a static app may never
   repaint afterwards. Focus is normally committed only when a frame is
@@ -351,6 +377,15 @@ work and the API may still change.
   consequence: non-priority `ScopeApp` shortcuts bound to bare Left/Right
   are now shadowed by any focused scrollable region (no shipped example
   binds one).
+- `ui.Tabs`' `keepTabVisible` measured visibility against the clipped slot,
+  and a slot truncated to one cell by the strip's right edge always
+  "fit": selecting a tab whose label did not fully fit never advanced the
+  offset, so the selected label could sit clipped to nothing while the
+  strip scrolled to it. Visibility is now measured against the whole label
+  width — an advance happens whenever the selected label would not fit
+  fully — and the scan sums label widths directly instead of building a
+  layout per step, which also drops one allocation and about 16% of
+  `BenchmarkTabsDraw`.
 
 ### Performance
 
@@ -362,3 +397,12 @@ work and the API may still change.
 - `ui.TextArea` holds its wrap layout as a dirty-range cache, so a keystroke
   in a 400-line document re-wraps one line (~78 us, 7 allocs) instead of the
   whole document.
+- `ui.Sparkline` computes the value range once per frame, not per column:
+  a 60×3 sparkline over 256 samples draws in ~15 µs with 1 alloc (the
+  glyph table is an eight-string pool, so each cell is a slice, not a
+  rune conversion).
+- `ui.Tree` pools its indents (one two-space string per depth) and clips
+  labels in place: 40 visible rows draw in ~197 µs with 11 allocs, with
+  the row source consulted exactly once per visible row.
+- `ui.Tabs`' `keepTabVisible` rewrite (see Fixed) also drops
+  `BenchmarkTabsDraw` from ~98 µs / 3 allocs to ~82 µs / 2 allocs.

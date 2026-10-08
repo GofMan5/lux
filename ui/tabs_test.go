@@ -132,14 +132,15 @@ func tabsKey(code event.KeyCode, width int) Action {
 func TestTabsKeepTabVisibleFollowsSelection(t *testing.T) {
 	labels := []string{"one", "two", "three", "four", "five"}
 	state := TabsState{}
-	// Strip width 13 fits one(5) and two(5) plus three's clipped tail
-	// (x10..13); selecting four finds no slot for it, so the offset pulls to
-	// 1 and four ends the strip.
+	// Strip width 13 fits one(5) and two(5); three's tail and four have no
+	// fully-visible slot from offset 0, and visibility now requires the
+	// whole label: two(5)+three(6)=11 leaves four(6) past 13, so the
+	// offset pulls to 2 and four fits at x6.
 	for range 3 {
 		state.Apply(rightKey(), labels)
 	}
-	if state.Selected != 3 || state.Offset != 1 {
-		t.Fatalf("Selected=%d Offset=%d; want 3 1", state.Selected, state.Offset)
+	if state.Selected != 3 || state.Offset != 2 {
+		t.Fatalf("Selected=%d Offset=%d; want 3 2", state.Selected, state.Offset)
 	}
 	// Selecting an earlier tab rewinds the offset to it.
 	state.Apply(tabsKey(event.KeyHome, 13), labels)

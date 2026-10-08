@@ -78,6 +78,16 @@ func TestShowcaseClipboardShortcutTargetsAndVirtualLayout(t *testing.T) {
 			t.Fatalf("%q was not rendered after scrolling the panel", want)
 		}
 	}
+	// The frame-time sparkline closes the panel: one capped glyph row under
+	// the telemetry numbers. A single sample draws flat, so the row's glyph
+	// is the mid-height cap.
+	foundSpark := false
+	for y := 0; y < 36 && !foundSpark; y++ {
+		foundSpark = strings.Contains(rowText(painted, y), "▄")
+	}
+	if !foundSpark {
+		t.Fatal("frame-time sparkline missing after scrolling the panel")
+	}
 	// The tab strip renders every label as its own slot on one row.
 	tabsRow := ""
 	for y := 0; y < 36; y++ {

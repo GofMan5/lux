@@ -199,6 +199,22 @@ spinner's phase is a pure function of absolute time so 10 FPS and 240 FPS
 presenters draw the same glyph at the same wall-clock instant. Not claimed:
 multi-row tab strips, gauge seek, multi-cell spinner frames, a marquee.
 
+Trend and hierarchy data close the set. `ui.Sparkline` (zero-value
+`SparklineState{Values, Min, Max}`) paints the newest-right window as
+eight-level block glyphs: pin Min/Max for a stable axis across frames or
+leave both zero for per-frame auto-range; a degenerate range collapses to
+the mid glyph and NaN draws as the floor. `ui.Tree` renders an
+app-flattened row list — the application owns the expansion set and
+contributes one `TreeRow{ID, Label, Depth}` per visible node, so
+virtualizing a tree is just a windowed `rowAt`. The list contract holds:
+arrows, Home/End, pages, and wheel move the selection, a press selects the
+row under the pointer, and Enter, Space, or a completed click toggles the
+row's expansion entry (`activated` always, `changed` only when the entry
+actually flips). Both the widget catalog — the live sparkline rides the
+motion page, the file tree its own — and the showcase's frame-time history
+run them end to end. Not claimed: inline node filtering, per-node styling,
+drag-and-drop reordering, lazy async children.
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`

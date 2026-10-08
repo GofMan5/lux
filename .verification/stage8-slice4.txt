@@ -1,0 +1,121 @@
+Stage 8, slice 4 — ui.Sparkline / ui.Tree: trend and hierarchy widgets — local verification, 2026-10-08
+====================================================================================================
+
+Scope (ROADMAP.md, stage 8 item 4): display truth for a trend series and a
+hierarchy list. Code: ui/sparkline.go (SparklineState, SparklineStyle,
+sparkFraction, newest-right windowed drawing), ui/tree.go (TreeRow,
+TreeState, TreeStyle, Tree Apply/draw with pooled indents), ui/tabs.go
+(keepTabVisible fix, found live). Tests: ui/sparkline_test.go,
+ui/tree_test.go, ui/example_display_test.go (godoc examples x2),
+examples/widgets/main.go + main_test.go (catalog rebuilt as four tab pages:
+inventory, form, motion, tree), examples/showcase/main.go + main_test.go
+(frame-time sparkline row in the telemetry section). Docs: README.md
+(trend/hierarchy paragraph after the display widgets), CHANGELOG.md
+(Added x2, Fixed keepTabVisible, Performance x3), docs/PERFORMANCE.md
+(display-widget paragraph extended with Sparkline/Tree and retuned Tabs).
+
+API (verified by test, not by inspection):
+  - SparklineState{Values, Min, Max} is display-only: no region, no
+    routing, no focus. Columns = min(bounds.W, len(Values)) painting the
+    NEWEST values right-aligned (first = len(Values)-columns), so the
+    series can be unbounded — the window is the cost. Min/Max pinned
+    (Min < Max) set the axis; both zero (or inverted) auto-range per
+    frame. Degenerate range (flat series or Min >= Max) -> every column
+    the mid glyph "▄"; NaN -> floor ("▁"/empty column base); blank bounds
+    or empty Values draw nothing. Each column fills bottom-up: full "█"
+    cells, and the top cell is the 1..8-level cap glyph
+    sparkGlyphs[ceil(remainder*8)-1]. H rows total; the level scale is
+    shared across the whole bounds.
+  - TreeRow{ID, Label, Depth} is the app's contribution per VISIBLE node:
+    the app owns the expansion set (TreeState.Expanded map[string]bool,
+    zero value nil and safe) and flattens lazily, so a million-node tree
+    virtualizes exactly like a table — rowAt is called once per visible
+    row. Apply(action, count, rowAt): release inert; count<=0 resets
+    (Offset 0, Selected 0 — Expanded is NOT touched); Up/Down/Home/End/
+    PageUp/PageDown/wheel ± max(rows/3,1) move the selection with clamp
+    BEFORE the switch (Bounds.H defines the page size; H<=1 page keys
+    still move by 1); MousePress selects Offset+Y (region-local); and
+    Activate (Enter, Space, completed click) toggles Expanded[row.ID]:
+    activated=true ALWAYS, changed=true ONLY when the entry flips (leaf
+    rows activate without claiming change; a collapsed entry stays in the
+    map as false). IsExpanded nil-receiver-safe. Drawing pools indents
+    (treeIndents, two spaces per depth), draws Collapsed "+"/Expanded "-"
+    markers for rows whose children exist — the marker decision is the
+    APP's: the draw only sees the flattened rows, and tree_test's helper
+    demonstrates the convention (a row is a branch when it has children
+    in the source). Labels clip to the bounds with the app's width
+    policy. The region is Focusable|Scrollable|Activatable, and drawing
+    clamps the offset and calls ensureVisible (so keyboard selection
+    never strays off-screen).
+  - Tree contract note: KeyLeft/KeyRight are routed but INERT (collapse/
+    expand-on-arrow is not claimed), and the widget deliberately follows
+    the LIST semantics — wheel moves the selection, not the viewport.
+
+keepTabVisible fix (ui/tabs.go, found live in the catalog):
+  - The old visibility check compared the selected tab's CLIPPED slot end
+    against the strip width, and a slot truncated to one cell by the right
+    edge always fit: selecting the 4th tab of a 22-cell strip (labels
+    table/form/motion/tree) left "tree" clipped to an invisible 1-cell
+    slot while the strip reported it visible. The catalog paint test at
+    Selected=3 failed exactly there — the e2e/paint pair caught a real
+    widget bug, which is the point of stage 8.
+  - Now visibility is measured against the WHOLE label width (sum of
+    label widths + padding from Offset), the scan advances until the
+    selected label fits fully or reaches the left edge, and it sums
+    widths directly instead of building a tabLayout per step: one
+    allocation and ~16% of BenchmarkTabsDraw gone. ui/tabs_test.go's
+    keepTabVisible expectation was updated — it had pinned the buggy
+    semantics (clipped tail "visible").
+
+Examples (both e2e, both covering the slice):
+  - examples/widgets: the right panel is now four tab pages — 0 inventory
+    (static explanation + the widget table), 1 form (checkbox/radio/
+    select at the same coordinates as before the restructure), 2 motion
+    (gauge tracking the table selection, braille spinner, LIVE sparkline:
+    seeded 16-point sine so the first paint already shows a wave, then a
+    >=100ms-guarded append of .5+.5*sin(loadStep*.35), capped at 64 via
+    the in-place slide), 3 tree (file tree over ui/ + examples/ with
+    sparkline.go/table.go/tree.go under ui). The e2e was REORDERED around
+    the pages: body click -> tabs press (48,2) -> settle (page switch
+    changes panel region geometry) -> form interactions -> re-press the
+    strip to return focus from the select -> KeyRight x2 -> settle ->
+    tree press (42,4 = local row 1 "examples") -> Enter expands it
+    (treeSel=1, treeOpen=1) -> Escape. go test
+    ./examples/widgets/ -count=1 -> ok.
+  - examples/showcase: the telemetry section closes with a frame-time
+    sparkline — one sample per View (frame.Metrics.PresentTime seconds),
+    capped at 64 with the in-place slide, auto-ranged; controlsContent
+    48 -> 49; the scroll test pins the flat mid glyph. go test
+    ./examples/showcase/ -count=1 -> ok.
+
+Benchmarks (Windows amd64, i5-10400F, Go 1.25.5, -benchtime=2s,
+-count=1, -benchmem): BenchmarkSparklineDraw ~15.4 µs, 96 B/op, 1
+alloc/op (60x3 window over 256 samples; the range pass is hoisted once
+per frame — per-column Fraction was 38.6 µs); BenchmarkTreeDraw ~197 µs,
+394 B/op, 11 allocs/op (40 visible rows, pooled indents — the naive
+strings.Repeat per row was 24 allocs); BenchmarkTabsDraw improved to
+~81.6 µs, 384 B/op, 2 allocs/op (keepTabVisible no longer builds a
+layout per advance); GaugeDraw ~13 µs, SpinnerDraw ~0.52 µs unchanged
+within noise. Scope matches BenchmarkTableDraw: no Begin in the loop.
+
+Gates (local, 2026-10-08):
+  - gofmt -l .                       -> empty.
+  - go vet ./...                     -> clean.
+  - go test ./... -count=1 -timeout 300s -> ok, 13/13 packages.
+  - docker run --rm golang:1.25-alpine go test ./... -count=1
+    -> ok, 13/13 packages, DOCKER_EXIT=0 (verified with a clean exit-code
+    capture; the first run's pwsh [exit code: 1] was the stderr
+    "go: downloading" module-cache warmup quirk, all lines ok).
+  - go mod verify                    -> all modules verified.
+  - golangci-lint                    -> NOT RUN (not installed locally;
+    recorded as skipped, as in every stage so far).
+  - fuzz                             -> N/A (no new fuzz targets;
+    sparkline is pure math over floats covered by the fraction table and
+    paint cases; tree Apply is list math over app rows).
+
+Not claimed (kept honest): sparkline thresholds/labels/axis drawing,
+down-sampling beyond the window, negative values below a baseline; tree
+inline node filtering, per-node styling, drag-and-drop reordering, lazy
+async children, horizontal tree scrolling, arrow-key collapse/expand
+(Left/Right are routed but inert by design — the list contract owns the
+arrows).
