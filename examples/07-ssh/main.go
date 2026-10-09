@@ -10,11 +10,11 @@
 // With no positional arguments the server serves its own demo TUI (re-exec
 // with -child). Pass a command to serve that instead, e.g. the showcase:
 //
-//	go build .                            # inside examples/ssh
+//	go build .                            # inside examples/07-ssh
 //	./tui-ssh-server -addr 127.0.0.1:2222
 //	ssh -t -p 2222 localhost              # password: letmein
 //
-//	./tui-ssh-server -- ../showcase/showcase
+//	./tui-ssh-server -- ../06-showcase/showcase
 //	./tui-ssh-server -- /bin/sh           # a plain shell works too
 //
 // Unix only: creack/pty has no Windows port.

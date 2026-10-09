@@ -215,7 +215,7 @@ func (app *app) View(frame *lux.Frame) {
 ```
 
 The full two-page version of this loop, with a table, tree, tabs, and
-popups sharing it, lives in [examples/widgets/main.go](../examples/widgets/main.go).
+popups sharing it, lives in [examples/05-widgets/main.go](../examples/05-widgets/main.go).
 
 ## The testing ladder
 
@@ -236,7 +236,7 @@ in [ui/stepper_recipe_test.go](../ui/stepper_recipe_test.go):
    mistakes.
 
 Interactive end-to-end tests (real backend, mouse, repaint loop) come
-fourth for app-level flows; see [examples/widgets/main_test.go](../examples/widgets/main_test.go).
+fourth for app-level flows; see [examples/05-widgets/main_test.go](../examples/05-widgets/main_test.go).
 
 ## Pitfalls
 

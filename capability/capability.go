@@ -11,6 +11,20 @@ const (
 	TrueColor
 )
 
+// String names the depth for logs and diagnostics.
+func (d ColorDepth) String() string {
+	switch d {
+	case ANSI16:
+		return "ANSI16"
+	case ANSI256:
+		return "ANSI256"
+	case TrueColor:
+		return "TrueColor"
+	default:
+		return "Monochrome"
+	}
+}
+
 // Graphics identifies an optional terminal image protocol. Cell rendering is
 // always available and remains the portable fallback.
 type Graphics uint8

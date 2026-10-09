@@ -13,6 +13,20 @@ const (
 	Wide
 )
 
+// String names the class for logs and diagnostics.
+func (c Class) String() string {
+	switch c {
+	case Compact:
+		return "Compact"
+	case Medium:
+		return "Medium"
+	case Wide:
+		return "Wide"
+	default:
+		return "Tiny"
+	}
+}
+
 // Classify uses both dimensions: wide but one-line terminals remain compact.
 func Classify(area render.Rect) Class {
 	if area.W < 12 || area.H < 3 {
