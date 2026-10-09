@@ -2,7 +2,7 @@
 
 Snapshot: **2026-10-09**.
 
-Real-terminal evidence for LUX TUI stage 9 (slices 3–4). Every lane below ran
+Real-terminal evidence for LUX TUI stage 9 (slices 3–5). Every lane below ran
 against an actual terminal or terminal-shaped transport and left its
 artifacts in this directory. Nothing here is a simulated or mocked
 terminal: multiplexers allocate a pty, the ssh lane crosses a real
@@ -36,6 +36,7 @@ needle; the evidence files are the raw captures those asserts ran on.
 | Windows Terminal 1.24 | interactive real window, scripted F1/TAB/edit/quit | PASS | `windows-terminal-main.png`, `windows-terminal-help.png` |
 | conhost (headless) | classic conhost lifecycle, transcript capture | PASS | `conhost-transcript.bin` |
 | Windows pipe | stdout redirected on the host | PASS | `windows-pipe-out.txt` |
+| annex | pty via tmux, OSC 9;4/9;777/52 sideband demo, raw pipe capture + decoded clipboard buffer | PASS | `annex-output.raw`, `annex-buffer.txt`, `annex-pane-text.txt`, `annex-pane-after-keys.txt` |
 
 ## Lane scripts and how to re-run
 
@@ -105,6 +106,14 @@ plain profile. Both kill their launchers before and after (best effort).
 - **WT/conhost/Windows pipe**: the Windows trio. A real interactive WT
   window (screenshots included), a classic conhost lifecycle transcript
   (headless), and the redirected plain profile.
+- **annex**: the sideband channels on a real pty. OSC 52 is proven
+  behaviorally — tmux with `set-clipboard on` decodes the clipboard
+  annex into its paste buffer, and `show-buffer` returns the exact
+  payload. OSC 9;4 and 9;777 are proven as byte truth: `pipe-pane`
+  records the process's own pty output before tmux's screen model sees
+  it, so the raw capture holds the exact frame annexes (all five
+  progress payloads, the sanitized toast, the base64 clipboard write)
+  and ends in the leave sequence closing with the `9;4;0` reset.
 
 ## Findings worth keeping
 
@@ -128,12 +137,26 @@ plain profile. Both kill their launchers before and after (best effort).
   interactive shell through a pty must answer device-status queries the
   way a terminal does — the examples/ssh unit-test fake does, and so
   does tmux in the lanes.
+- **tmux drops OSC 9;4 and 9;777; `pipe-pane` sees them anyway.** tmux
+  does not implement the taskbar-progress or notify sequences, so no bar
+  is drawn in the pane — but the pane's own process output (what
+  `pipe-pane` records) still holds the exact bytes. Sideband lanes
+  capture that raw stream and assert byte needles with `grep -qF`.
+- **`pipe-pane` stop fails on a dead pane.** `tmux pipe-pane -t pane`
+  (no argument, stop the pipe) errors "target pane has exited" once the
+  pane process is gone, even with `remain-on-exit on`. Lanes that pipe
+  until the app quits must copy the capture file after exit and let the
+  pipe die with the session.
+- **busybox ash has no `$'...'`.** ANSI-C quoting is a bashism; lane
+  scripts build escape needles as `ESC=$(printf '\033')` and
+  `BEL=$(printf '\007')` and match with `grep -qF` (fixed strings).
 
 ## Not validated, on purpose
 
 | Environment | Why | How to close |
 | --- | --- | --- |
 | macOS Terminal.app, iTerm2, kitty, alacritty, wezterm, foot, GNOME Terminal | No macOS host and none of these emulators on the Windows host | Run the same lane scripts on a machine with each emulator; the Docker-side lanes already cover the pty/wire layer these share |
+| A drawing OSC 9;4/9;777 terminal (Windows Terminal, iTerm2, kitty) | Docker lanes run tmux, which implements neither sequence; Windows Terminal on the host has no scriptable clipboard/taskbar assertion path | Run the examples/annex demo by hand in a drawing terminal; the raw wire protocol is already byte-proven by the annex lane |
 | Interactive conhost window | Classic conhost cannot be launched as a targetable interactive window without registry console-delegation GUIDs, which are host policy | Record a manual session over the headless-verified protocol, or run on a host where console delegation is preconfigured |
 | Real network latency (not loopback netem) | Requires a remote machine | Repeat the ssh lane against one with the same asserts |
 

@@ -18,3 +18,16 @@ type Backend interface {
 	Size() (width, height int, err error)
 	Close() error
 }
+
+// AnnexWriter is an optional Backend capability for control sidebands that
+// are not screen content: taskbar progress, desktop notifications, and
+// clipboard writes. The runtime queues annex bytes during Model.View and
+// hands them over through this interface immediately after the same
+// frame's successful Present, on the presentation goroutine — so the
+// bytes serialize with frame content instead of racing it, and a dropped
+// frame drops its annex with it. A backend that does not implement
+// AnnexWriter silently ignores annex requests, exactly as a terminal
+// without the corresponding protocol silently ignores the sequences.
+type AnnexWriter interface {
+	WriteAnnex(ctx context.Context, data []byte) error
+}

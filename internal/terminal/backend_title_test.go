@@ -61,6 +61,7 @@ func TestSequencesTitle(t *testing.T) {
 		name                             string
 		pixel, kitty, win32, unicodeCore bool
 		title                            string
+		progress                         bool
 		wantEnter, wantLeave             string
 	}{
 		{
@@ -97,10 +98,23 @@ func TestSequencesTitle(t *testing.T) {
 			wantEnter:   titlePush + setWindowTitle("App") + enterTerminal + kittyEnter + win32Enter + unicodeCoreEnter,
 			wantLeave:   unicodeCoreLeave + win32Leave + kittyLeave + leaveTerminal + titlePop,
 		},
+		{
+			name:      "progress reset closes behind the title pop",
+			title:     "App",
+			progress:  true,
+			wantEnter: titlePush + setWindowTitle("App") + enterTerminal,
+			wantLeave: leaveTerminal + titlePop + progressClear,
+		},
+		{
+			name:      "progress without a title writes the reset alone",
+			progress:  true,
+			wantEnter: enterTerminal,
+			wantLeave: leaveTerminal + progressClear,
+		},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			enter, leave := sequences(test.pixel, test.kitty, test.win32, test.unicodeCore, test.title)
+			enter, leave := sequences(test.pixel, test.kitty, test.win32, test.unicodeCore, test.title, test.progress)
 			if enter != test.wantEnter {
 				t.Fatalf("enter = %q, want %q", enter, test.wantEnter)
 			}

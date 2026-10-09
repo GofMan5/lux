@@ -1,0 +1,24 @@
+  LUX sideband annex
+
+  frame 80x24
+
+  taskbar progress  paused
+  percent           10
+
+  last action       progress state: paused
+
+  [space] progress state   [a] percent +10
+  [n] toast                [c] clipboard
+  [q] quit
+
+
+
+
+
+
+
+
+
+
+
+

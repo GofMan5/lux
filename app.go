@@ -51,6 +51,17 @@ type Frame struct {
 
 	nextFrame time.Time
 	presented []func()
+
+	// annex carries the control sideband bytes View queued through
+	// SetProgress, Notify, and CopyToClipboard, and the three flags gate
+	// those methods against the WithProgress, WithNotifications, and
+	// WithClipboard choices. The zero Frame every test constructs has
+	// them false, so the methods queue nothing — a build that never opts
+	// in is byte-identical to a build without the features.
+	annex         []byte
+	progress      bool
+	notifications bool
+	clipboard     bool
 }
 
 // Size returns the drawable viewport in cells.
@@ -246,6 +257,9 @@ type config struct {
 	suspend                       bool
 	title                         string
 	widthPolicy                   render.WidthPolicy
+	progress                      bool
+	notifications                 bool
+	clipboard                     bool
 }
 
 func defaultConfig() config {
@@ -261,7 +275,7 @@ func defaultConfig() config {
 // is the backend's no-op, so plain streams and default builds stay
 // byte-identical. Everything else follows the settings directly.
 func defaultBackendOptions(settings config) []terminal.Option {
-	options := []terminal.Option{terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks), terminal.Title(settings.title)}
+	options := []terminal.Option{terminal.PixelMouse(settings.pixelMouse), terminal.Hyperlinks(settings.hyperlinks), terminal.Title(settings.title), terminal.Progress(settings.progress)}
 	if settings.widthPolicy != (render.WidthPolicy{}) {
 		options = append(options, terminal.UnicodeCore(false))
 	}
@@ -319,6 +333,11 @@ type surface struct {
 	canvas      *render.Canvas
 	widthPolicy render.WidthPolicy
 	presented   []func()
+	// annex holds the control sideband bytes queued by the View that drew
+	// this surface. It rides the surface so an annex belongs to exactly
+	// one frame — a dropped frame drops its annex, and a replaced frame
+	// in the latest-frame mailbox is the one whose annex survives.
+	annex []byte
 }
 
 func newSurface(width, height int, policy render.WidthPolicy) *surface {
@@ -376,6 +395,19 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			}
 			started := time.Now()
 			err := settings.backend.Present(ctx, next.buffer)
+			if err == nil && len(next.annex) > 0 {
+				// The annex writes only after its frame is on the wire:
+				// the sideband belongs to the frame that queued it, so a
+				// failed or cancelled presentation drops it, and the
+				// write shares the presentation goroutine — serializing
+				// with frames on the output instead of racing them. A
+				// backend without the AnnexWriter capability ignores the
+				// request, the same way a terminal without the protocol
+				// ignores the bytes.
+				if writer, ok := settings.backend.(AnnexWriter); ok {
+					err = writer.WriteAnnex(ctx, next.annex)
+				}
+			}
 			if err == nil {
 				for _, callback := range next.presented {
 					callback()
@@ -509,9 +541,10 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			if !lastFrame.IsZero() {
 				delta = now.Sub(lastFrame)
 			}
-			frame := Frame{Canvas: current.canvas, Now: now, Delta: delta, Capabilities: features, Metrics: metrics, ReducedMotion: settings.reducedMotion}
+			frame := Frame{Canvas: current.canvas, Now: now, Delta: delta, Capabilities: features, Metrics: metrics, ReducedMotion: settings.reducedMotion, progress: settings.progress, notifications: settings.notifications, clipboard: settings.clipboard}
 			model.View(&frame)
 			current.presented = append(current.presented[:0], frame.presented...)
+			current.annex = append(current.annex[:0], frame.annex...)
 			requested, lastFrame, dirty = frame.nextFrame, now, false
 			if !features.Interactive {
 				requested = time.Time{}
@@ -534,6 +567,12 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 				dropped++
 				clear(recycled.presented)
 				recycled.presented = recycled.presented[:0]
+				// The displaced surface never reached the terminal, so its
+				// sideband never happened either; the surviving queued
+				// surface carries the newer annex. One-shot requests
+				// therefore belong in View every time — the annex is the
+				// state, and the newest state is what lands.
+				recycled.annex = recycled.annex[:0]
 				current = recycled
 				continue
 			}

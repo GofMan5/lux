@@ -35,7 +35,7 @@ comparative claims require reproducible results.
 
 | Package | Implemented now |
 |---|---|
-| [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options |
+| [`lux`](./app.go) | public `Model`/`Command` runtime, frames and metrics, backend port, idle event loop, adaptive pacing, latest-frame backpressure, lifecycle cleanup, runtime options, and opt-in sideband channels (taskbar progress, notifications, clipboard) |
 | [`render`](./render) | cell buffers, grapheme-aware canvas, clipping/subviews, borders, styles, color values, resizing, diffing, double buffering, scrolling regions, caret placement, Unicode 18.0.0 terminal-width truth over uniseg segmentation, a width policy for terminals that disagree, and single-pass word wrap that never splits a grapheme |
 | [`layout`](./layout) | responsive size classes and deterministic horizontal/vertical flex constraints |
 | [`motion`](./motion) | absolute-time tweens, easing functions, and a critically damped spring |
@@ -131,6 +131,13 @@ engine runs in a child on a real pty, so nothing in the library changes:
 
 ```sh
 cd examples/ssh && go run .   # then: ssh -t -p 2222 localhost
+```
+
+And a sideband demo — taskbar progress, a toast, and a clipboard write,
+queued from the frame:
+
+```sh
+go run ./examples/annex
 ```
 
 The module currently declares Go 1.23. See
@@ -253,6 +260,28 @@ and redirected output never writes title bytes, and the option only steers
 the terminal backend Run constructs for itself — a custom adapter owns its
 title policy. Not claimed: runtime retitling, a per-frame title, the
 terminal's icon-only OSC 1 form.
+
+The frame can also carry sideband channels, all opt-in. With
+`WithProgress`, `WithNotifications`, and `WithClipboard` armed, a `View`
+may call `frame.SetProgress(state, percent)` (taskbar progress through
+OSC 9;4, five states plus a clamped percent), `frame.Notify(title, body)`
+(desktop notification through OSC 9;777), and `frame.CopyToClipboard(text)`
+(write-only OSC 52 — the read direction is never built, and payloads over
+32 KiB are dropped rather than clipped). Each rides the same write as the
+frame that queued it, after the diff and before the `OnPresented`
+callbacks, and a dropped or failed frame drops its annexes with it — a
+notification never outlives the frame that asked for it. Progress is a
+reported state, not an event: the View re-states it every frame while the
+bar is meant to exist, so suspend/resume restores it for free, and the
+leave sequence always closes with the `9;4;0` reset so no taskbar bar
+outlives the program. Consent is layered: all three channels default off,
+OSC 52 is write-only, and the terminal's own prompt or `set-clipboard`
+gate stays the terminal's decision — the library never reads the
+clipboard and never pushes a notification unasked. The byte truth of all
+three sequences is pinned by a real-terminal lane
+(`.verification/matrix/annex-lane.sh`, raw pipe capture). Not claimed: an
+OSC 52 read path, kitty's `OSC 52` clipboard-name extensions, and a
+"notify with actions" protocol. `examples/annex` is the live demo.
 
 Ctrl+Z works the way a shell user expects it to. `SIGTSTP` makes the
 backend write the same leave sequences Close would write — modes, kitty

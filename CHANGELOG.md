@@ -432,7 +432,7 @@ work and the API may still change.
   ctrl+alt+u, alt+shift+u, and hyper/meta chords are not the alias and
   pass through to the application.
 - Verification artifacts under `.verification/` at every stage close.
-- A terminal validation matrix (`.verification/matrix/`, eleven lanes
+- A terminal validation matrix (`.verification/matrix/`, twelve lanes
   with self-asserting scripts and captured evidence): real `tmux 3.7c`
   and GNU `Screen 5.0.2` multiplexer ptys, `TERM=dumb` and
   redirected-output plain profiles on Linux and Windows,
@@ -467,6 +467,31 @@ work and the API may still change.
   Unix-only (`//go:build !windows`, creack/pty has no Windows port).
   README documents the design and its caveats (demo password auth,
   no signal forwarding — disconnect already kills the child).
+- Sideband channels riding the frame, all opt-in: `WithProgress`
+  (taskbar progress, OSC 9;4), `WithNotifications` (desktop
+  notifications, OSC 9;777), and `WithClipboard` (write-only clipboard,
+  OSC 52), armed per frame by `frame.SetProgress`, `frame.Notify`, and
+  `frame.CopyToClipboard`. The queued bytes ride the same terminal
+  write as the frame that queued them — after the diff, before the
+  `OnPresented` callbacks — so a dropped or failed frame drops its
+  annexes with it and the newest frame always wins. Progress is a
+  reported state (the View re-states it every frame the bar should
+  exist), so suspend/resume restores it for free, and every leave path
+  ends with the `9;4;0` reset after the title pop — no taskbar bar
+  outlives the program. OSC 52 is write-only (the read direction is
+  never built; payloads over 32 KiB are dropped rather than clipped);
+  notify fields are sanitized of control bytes. Consent is layered:
+  every channel defaults off, a zero `&Frame{}` queues nothing,
+  backends without the one-method `AnnexWriter` extension ignore
+  annexes entirely, and a default build is byte-identical to a
+  sideband-unaware program. Not claimed: an OSC 52 read path, kitty
+  clipboard-name extensions, notify actions, or a capability probe
+  (the sequences are undetectable by reply — the terminal matrix is
+  the honest cost, pinned by the raw-wire annex validation lane with a
+  behaviorally decoded OSC 52 proof through tmux `set-clipboard`).
+- `examples/annex`: the live sideband demo — keys walk the five
+  progress states, bump the percent, queue a toast, and queue a
+  clipboard write, all from the frame.
 
 ### Changed
 

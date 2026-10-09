@@ -154,7 +154,12 @@ type Backend struct {
 	// An empty string means no title program: nothing is pushed, set, or
 	// popped on any path. It survives Close — it is an application choice,
 	// not a probe latch, so a second Open restores the same title.
+	// progress records the application's Progress choice: the annex
+	// writes themselves arrive per frame through WriteAnnex, but the
+	// leave-time OSC 9;4 reset needs no frame, so the latch lives here.
+	// Like title it survives Close — a second Open keeps resetting.
 	title        string
+	progress     bool
 	features     capability.Set
 	state        *term.State
 	restoreVT    func() error
@@ -228,6 +233,21 @@ func Title(title string) Option {
 	return func(b *Backend) { b.title = sanitizeTitle(title) }
 }
 
+// Progress opts into OSC 9;4 taskbar progress reporting. The per-frame
+// writes arrive through WriteAnnex — the application queues them during
+// View — but the option also arms the leave-time reset: every leave
+// sequence Close, suspend, and the Open failure path write gains the
+// OSC 9;4 "no progress" state, because a taskbar progress bar belongs to
+// the running program and must not outlive it on terminals that showed
+// one (Windows Terminal, ConEmu, iTerm2). Terminals without OSC 9;4
+// ignore the reset exactly as they ignored the writes. Plain and
+// redirected streams never write either — they never write the leave
+// that carries the reset. The choice is honored per Open, like every
+// other Option.
+func Progress(enabled bool) Option {
+	return func(b *Backend) { b.progress = enabled }
+}
+
 // sanitizeTitle returns title without the bytes an OSC string cannot
 // carry: C0 controls (a BEL would end the title early, an ESC would start
 // a new sequence), DEL, and the one-byte C1 controls. Graphic bytes —
@@ -269,8 +289,12 @@ func setWindowTitle(title string) string {
 // push and set lead the enter (the title changes before any mode the
 // modes could interact with), and the title pop closes the leave (the
 // stack unwinds after every mode is reset, mirroring the enter order in
-// reverse — the same discipline the kitty pop follows).
-func sequences(pixel, kitty, win32, unicodeCore bool, title string) (enter, leave string) {
+// reverse — the same discipline the kitty pop follows). The progress
+// reset rides at the very end of the leave: it is not a mode with a
+// stack, and clearing the taskbar after everything else has been
+// restored keeps the terminal's own state fully back before the
+// program's desktop-integration state is dismissed.
+func sequences(pixel, kitty, win32, unicodeCore bool, title string, progress bool) (enter, leave string) {
 	enter, leave = enterTerminal, leaveTerminal
 	if pixel {
 		enter, leave = enterPixel, leavePixel
@@ -290,6 +314,9 @@ func sequences(pixel, kitty, win32, unicodeCore bool, title string) (enter, leav
 	if title != "" {
 		enter = titlePush + setWindowTitle(title) + enter
 		leave = leave + titlePop
+	}
+	if progress {
+		leave += progressClear
 	}
 	return enter, leave
 }
@@ -413,7 +440,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// that enterPixel just put in flight.
 	b.parser.pixelMouse = b.pixel
 	b.parser.win32Input = b.win32
-	enter, leave := sequences(b.pixel, b.kitty, b.win32, b.unicodeCore, b.title)
+	enter, leave := sequences(b.pixel, b.kitty, b.win32, b.unicodeCore, b.title, b.progress)
 	b.opened = true
 	if err := writeAll(b.writer, []byte(enter)); err != nil {
 		// The pop rides the same write as the legacy restore: a pop without
@@ -730,7 +757,7 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore, title := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore, b.title
+	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore, title, progress := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore, b.title, b.progress
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
@@ -761,10 +788,12 @@ func (b *Backend) Close() error {
 			// so this is a plain reset — and the Unicode core reset leads
 			// them all: it was the last mode entered, so it leaves first,
 			// restoring the terminal's own clustering before the modes that
-			// rode underneath it. The title pop closes the leave. sequences
-			// builds this from the same table Open used, which is what
-			// guarantees each restore happens wherever the others do.
-			_, leave := sequences(pixel, kitty, win32, unicodeCore, title)
+			// rode underneath it. The title pop closes the leave, and the
+			// progress reset follows it — the desktop-integration state is
+			// dismissed last. sequences builds this from the same table
+			// Open used, which is what guarantees each restore happens
+			// wherever the others do.
+			_, leave := sequences(pixel, kitty, win32, unicodeCore, title, progress)
 			result = errors.Join(result, writeAll(writer, []byte(leave)))
 			<-b.writeSlotChan()
 		}
@@ -815,7 +844,7 @@ func (b *Backend) suspendTerminal() bool {
 	}
 	b.suspended = true
 	writer, input, state := b.writer, b.input, b.state
-	pixel, kitty, win32, unicodeCore, title := b.pixel, b.kitty, b.win32, b.unicodeCore, b.title
+	pixel, kitty, win32, unicodeCore, title, progress := b.pixel, b.kitty, b.win32, b.unicodeCore, b.title, b.progress
 	b.mu.Unlock()
 	if writer != nil && b.acquireWriteSlot(restoreGrace) {
 		// The re-check under the mutex closes the Close race down to the
@@ -826,7 +855,7 @@ func (b *Backend) suspendTerminal() bool {
 		stillOpen := b.opened
 		b.mu.Unlock()
 		if stillOpen {
-			_, leave := sequences(pixel, kitty, win32, unicodeCore, title)
+			_, leave := sequences(pixel, kitty, win32, unicodeCore, title, progress)
 			_ = writeAll(writer, []byte(leave))
 		}
 		<-b.writeSlotChan()
@@ -862,7 +891,7 @@ func (b *Backend) resumeTerminal() error {
 		return nil
 	}
 	input, writer := b.input, b.writer
-	pixel, kitty, win32, unicodeCore, title := b.pixel, b.kitty, b.win32, b.unicodeCore, b.title
+	pixel, kitty, win32, unicodeCore, title, progress := b.pixel, b.kitty, b.win32, b.unicodeCore, b.title, b.progress
 	b.mu.Unlock()
 	if input == nil {
 		b.mu.Lock()
@@ -895,7 +924,7 @@ func (b *Backend) resumeTerminal() error {
 		stillOpen := b.opened
 		b.mu.Unlock()
 		if stillOpen {
-			enter, _ := sequences(pixel, kitty, win32, unicodeCore, title)
+			enter, _ := sequences(pixel, kitty, win32, unicodeCore, title, progress)
 			enterErr = writeAll(writer, []byte(enter))
 		}
 		<-b.writeSlotChan()

@@ -1,0 +1,105 @@
+# Stage 9 — Slice 5: sideband channels (OSC 9;4, OSC 9;777, OSC 52)
+
+Snapshot: 2026-10-09. Module: `github.com/lux-tui/lux`.
+
+## What was built
+
+Three opt-in sideband channels that ride the frame: taskbar progress
+(OSC 9;4), desktop notifications (OSC 9;777), and clipboard writes
+(OSC 52). All three default to off; a default `lux.Run` build is
+byte-identical to before.
+
+- `internal/terminal/annex.go` — the byte encoders: `ProgressAnnex`
+  (state 0–4, percent clamped 0–100, state 0 carries no percent field,
+  BEL terminator), `NotifyAnnex` (control bytes stripped from both
+  fields, `;` stripped from the title only — the body may carry them —
+  both-empty encodes nothing, ST terminator), `ClipboardAnnex`
+  (write-only: >32 KiB encodes nothing, `ESC]52;c;` + std base64 + ST;
+  the `?` read direction is never built), and `WriteAnnex` on
+  `*terminal.Backend`: empty data is a no-op, plain/suspended/closed
+  backends drop silently, otherwise it takes the write slot and honors
+  the context.
+- `internal/terminal/backend.go` — `Progress()` option (latches like
+  `Title`, survives `Close`); the leave sequence ends with
+  `ESC]9;4;0 BEL` AFTER the title pop in all three leaves (Close,
+  suspend, open-failure), so a taskbar bar never outlives the program.
+- `backend.go` — `AnnexWriter` interface (one method, so any backend can
+  adopt the seam).
+- `app_annex.go` — public API: `ProgressState` (`ProgressNone` …
+  `ProgressPaused`), `WithProgress`, `WithNotifications`,
+  `WithClipboard`, and `Frame.SetProgress`, `Frame.Notify`,
+  `Frame.CopyToClipboard`.
+- `app.go` — per-frame annex buffer on the `Frame` (`&Frame{}` methods
+  no-op, the zero-frame guarantee), gates checked when the methods are
+  called, queue copied to the surface after a successful Present, and
+  the writer goroutine writes it BEFORE the `OnPresented` callbacks. A
+  dropped or failed frame drops its annexes; the newest frame wins.
+- `examples/annex` — a live demo: keys walk the progress states
+  (space), bump the percent (a), queue a toast (n), queue a clipboard
+  write (c). The View re-reports progress every frame — the state, not
+  an event — so the bar survives suspend/resume for free.
+
+Consent model: all three channels are opt-in; OSC 52 is write-only
+(never a read); the terminal's own prompt (kitty, tmux `set-clipboard`)
+is the terminal's consent layer, untouched by the library.
+
+## Verification (all green)
+
+Host (Windows 11, Go 1.25.5):
+- `gofmt -l .`: empty. `go vet ./...`: EXIT=0. `go build ./...`:
+  EXIT=0. `go mod tidy`: no changes.
+- `GOOS=linux go build ./...`: EXIT=0. `GOOS=darwin go build ./...`:
+  EXIT=0.
+
+Container (golang:1.25-alpine, `GOFLAGS=-buildvcs=false`):
+- `go test ./...`: DOCKER_EXIT=0 — all 13 packages ok.
+- New tests: `internal/terminal/annex_test.go` (encoder tables,
+  sanitization, size caps, WriteAnnex discipline incl. context cancel,
+  Close/suspend reset suffixes, option latching) and `app_annex_test.go`
+  (annex rides a successful frame in Present → annex → OnPresented
+  order with the exact byte concatenation; zero `&Frame{}` queues
+  nothing; backends without `AnnexWriter` are ignored; each gate off
+  drops its own kind; a failed Present drops the annex).
+- `TestSequencesTitle` extended: progress reset closes behind the title
+  pop; progress without a title writes the reset alone.
+- `TestDefaultBackendOptions` updated: four base options, progress
+  defaults off.
+
+Real-terminal lane (`.verification/matrix/annex-lane.sh`, docker run
+exit 0, "annex lane OK", tmux 3.7c, pane TERM tmux-256color):
+- OSC 52 proven BEHAVIORALLY: `set-clipboard on` tmux decodes the
+  clipboard annex into its paste buffer; `tmux show-buffer` returned
+  exactly `hello from lux OSC 52` (evidence `annex-buffer.txt`).
+- OSC 9;4 and 9;777 proven as byte truth: pipe-pane recorded the
+  process's own pty output before tmux's screen model saw it
+  (`annex-output.raw`). All five state payloads present after the
+  scripted keys (`9;4;0`, `9;4;1;10`, `9;4;2;10`, `9;4;3;10`,
+  `9;4;4;10`), the toast with its exact sanitized fields, and the
+  clipboard write with the exact base64 payload.
+- The raw capture's final bytes are the leave sequence ending in the
+  title pop and `ESC]9;4;0 BEL`: the reset is the last thing on the
+  wire, no taskbar bar outlives the program.
+- Pane captures: `annex-pane-text.txt`, `annex-pane-after-keys.txt`
+  ("progress state: paused", "percent 10" after the walk).
+- Clean exit: `demo exit status: 0`, session torn down by the app.
+
+## Notes for the record
+
+- `go test -race` does NOT run in plain `golang:1.25-alpine`: `-race`
+  needs cgo and the image has no gcc. The house docker lane is plain
+  `go test ./...`; race coverage would need a build-base image.
+- tmux's `pipe-pane` with no argument (stop the pipe) fails with
+  "target pane has exited" on a dead pane — the lane copies the raw
+  file after the app exits and lets the pipe die with the session.
+- OSC 9;4 state 0 (none) carries no percent field by spec reading, so
+  the demo's first frame writes `9;4;0` — the same bytes as the leave
+  reset. The lane distinguishes them by position: the reset is asserted
+  on the capture's tail.
+- tmux implements neither 9;4 nor 9;777 (it drops them), so the
+  container cannot show a drawn bar or a raised toast; the lane records
+  the raw bytes honestly instead. A real drawing terminal is listed in
+  the matrix README's "not validated, on purpose" table.
+- The annex queue is unordered between kinds: it is the concatenation
+  of the calls in View order. The writer goroutine emits it after the
+  frame diff, before callbacks — the same ordering the pty shows in
+  `annex-output.raw`.

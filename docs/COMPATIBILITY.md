@@ -647,6 +647,53 @@ Not claimed: runtime retitling after Open, per-frame titles, the
 icon-only OSC 1 form, title handling in a custom `Backend` (the interface
 is unchanged; an adapter owns its own title policy).
 
+## Sideband channels (OSC 9;4, OSC 9;777, OSC 52)
+
+Three frame-riding sideband channels, each opt-in through a run option:
+`WithProgress` (taskbar progress), `WithNotifications` (desktop
+notifications), `WithClipboard` (clipboard writes). A `View` arms them
+per frame with `frame.SetProgress`, `frame.Notify`, and
+`frame.CopyToClipboard`; the queued bytes ride the same terminal write
+as the frame that queued them — after the diff, before the
+`OnPresented` callbacks — and a dropped or failed frame drops its
+annexes with it.
+
+- **OSC 9;4 (progress)**: states none/indeterminate/normal/error/paused
+  with a percent clamped to 0–100; state none carries no percent field.
+  Progress is a reported state, not an event — the View re-states it
+  every frame while the bar should exist — so a suspend/resume cycle
+  restores the bar when the next frame re-states it. Every leave path
+  ends with `ESC]9;4;0 BEL` after the title pop, so no taskbar bar
+  outlives the program.
+- **OSC 9;777 (notify)**: title and body are sanitized (control runes
+  stripped; `;` stripped from the title only, the body may carry it);
+  both-empty queues nothing.
+- **OSC 52 (clipboard)**: write-only. The read direction is never
+  built — a program never reads the user's clipboard through the
+  terminal. Payloads are base64 (std encoding) over the empty selection
+  (the terminal chooses); payloads over 32 KiB are dropped rather than
+  clipped. The terminal's own consent layer (kitty's prompt, tmux's
+  `set-clipboard`) stays the terminal's decision.
+
+Consent is layered by design: every channel defaults off, a zero
+`&Frame{}` queues nothing, backends without the one-method `AnnexWriter`
+extension ignore annexes entirely, and a default build is byte-identical
+to a sideband-unaware program.
+
+Terminal matrix:
+
+| Terminal class | 9;4 | 9;777 | 52 write |
+|---|---|---|---|
+| Windows Terminal, iTerm2, kitty, VTE-family | varies (WT: yes) | varies | yes (prompted in some) |
+| tmux | dropped (pane) | dropped | decoded with `set-clipboard on` |
+| plain pipe, `TERM=dumb` | no bytes | no bytes | no bytes |
+
+The sequences are undetectable by reply, so no probe is sent — the
+matrix is the honest cost, and the raw wire truth is pinned by the
+annex validation lane. Not claimed: an OSC 52 read path, kitty's
+clipboard-name extensions, notify actions, per-terminal progress
+implementations behind one state API.
+
 ## Suspend and resume (job control)
 
 `SIGTSTP` (Ctrl+Z on a foreground job) and the shell's continue (`SIGCONT`,
@@ -746,7 +793,10 @@ report a viewport. `WithIO` changes the default adapter's files;
 - Treat the effective chain separately: outer emulator → multiplexer →
   transport → application.
 - Gate OSC, clipboard, notifications, and graphics passthrough by positive
-  evidence.
+  evidence. (Deviation accepted for the sideband channels: OSC 9;4/9;777/52
+  have no report a probe could parse without ambiguity, so they are gated by
+  explicit opt-in consent instead — every channel defaults off and OSC 52 is
+  write-only. Graphics remain evidence-gated.)
 - Repaint fully after a partial write, resize, or detected desynchronization.
 
 ## Validation matrix

@@ -112,20 +112,21 @@ func (m *testModel) View(frame *Frame) {
 
 // TestDefaultBackendOptions pins the app-side wiring of the backend Run
 // constructs for itself: the base set always carries the pixel-mouse,
-// hyperlink, and title opt-ins from the settings — the title is the
-// backend's own no-op when empty — and an explicit text width policy
-// appends exactly one suppression, the UnicodeCore(false) override, so an
+// hyperlink, title, and progress opt-ins from the settings — the title is
+// the backend's own no-op when empty, and progress defaults to off — and
+// an explicit text width policy appends exactly one suppression, the
+// UnicodeCore(false) override, so an
 // explicit width claim and mode 2027 never both steer the same stream. The
 // identity of the base options belongs to the terminal package's own
-// tests; here the observable contract is the shape: three defaults, four
-// with a policy, and the fourth only when the policy is nonzero.
+// tests; here the observable contract is the shape: four defaults, five
+// with a policy, and the fifth only when the policy is nonzero.
 func TestDefaultBackendOptions(t *testing.T) {
 	base := defaultBackendOptions(config{})
-	if len(base) != 3 {
-		t.Fatalf("default options = %d entries, want the pixel-mouse, hyperlink, and title defaults", len(base))
+	if len(base) != 4 {
+		t.Fatalf("default options = %d entries, want the pixel-mouse, hyperlink, title, and progress defaults", len(base))
 	}
 	explicit := defaultBackendOptions(config{widthPolicy: render.WidthPolicy{AmbiguousWidth: 2}})
-	if len(explicit) != 4 {
+	if len(explicit) != 5 {
 		t.Fatalf("explicit-policy options = %d entries, want the defaults plus the Unicode core suppression", len(explicit))
 	}
 	// The settings still steer the base set: a zero policy with the app
