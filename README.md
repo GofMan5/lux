@@ -27,9 +27,20 @@ cell backends. The gap is a single lightweight stack that combines:
 - a terminal-independent renderer that is easy to benchmark and snapshot-test;
 - one ordinary Go binary, without a JavaScript or native-GPU runtime.
 
-The project does **not** claim to be faster than existing libraries yet. The
-measurement contract is documented in [docs/PERFORMANCE.md](docs/PERFORMANCE.md);
-comparative claims require reproducible results.
+Measured cross-framework numbers are now published. The committed full run
+([benchmarks/results/report.md](benchmarks/results/report.md): 168 runs, 0
+failed, one pinned host, one docker command to reproduce) shows lux
+allocating 1–2 orders of magnitude fewer bytes per frame than the
+bubbletea and tview lanes in every scene — full repaint 240x80: 55,504
+B/frame for lux vs 5,464,384 for tea and 2,723,542 for tview — with 0.0 ms
+p50 input-to-output latency in the input-burst scene (tview: 282.3 ms) and
+8,581 us CPU/frame in the heaviest scene (tea: 88,920). The report also
+records where lux loses: tview's wall-clock ms/frame is lower in the light
+scenes (6.18 vs 12.67 static 120x40) at roughly 150x the allocations, and
+tea paints nothing in some scenes, so per-frame cells for it are honestly
+"—". The measurement contract is documented in
+[docs/PERFORMANCE.md](docs/PERFORMANCE.md); every comparison above is
+reproducible from `benchmarks/`.
 
 ## Current packages
 
@@ -107,37 +118,29 @@ go test ./...
 go vet ./...
 ```
 
-Launch the adaptive animated 3D showcase:
+The examples are numbered as a curriculum:
+
+| Example | What it shows |
+| --- | --- |
+| `01-counter` | The smallest complete program — model, keys, centered view ([QUICKSTART.md](docs/QUICKSTART.md) walks it line by line) |
+| `02-animation` | The motion loop — tween and spring, retarget-from-momentum, `RequestFrame` ([ANIMATION.md](docs/ANIMATION.md)) |
+| `03-textedit` | Multiline editing — wrap, grapheme caret moves, bounded undo, the clipboard port |
+| `04-table` | Virtualized tabular data — 200k rows, sorting, selection |
+| `05-widgets` | The widget catalog — every control end to end ([CUSTOM-CONTROL.md](docs/CUSTOM-CONTROL.md)) |
+| `06-showcase` | The adaptive animated 3D showcase with a live Interaction Lab |
+| `07-ssh` | A LUX TUI served over SSH — the engine in a child on a real pty |
+| `annex` | Sideband channels — taskbar progress, a toast, a clipboard write |
 
 ```sh
-go run ./examples/showcase
+go run ./examples/01-counter
+go run ./examples/02-animation
+go run ./examples/06-showcase   # and so on
 ```
 
-Or the multiline editor, which exercises wrap, grapheme caret moves, bounded
-undo, and the clipboard port:
+The SSH server is a nested Go module with its own build:
 
 ```sh
-go run ./examples/textedit
-```
-
-The widget catalog walks the stage-8 controls one by one:
-
-```sh
-go run ./examples/widgets
-```
-
-There is also an SSH server that serves a LUX TUI over the wire — the
-engine runs in a child on a real pty, so nothing in the library changes:
-
-```sh
-cd examples/ssh && go run .   # then: ssh -t -p 2222 localhost
-```
-
-And a sideband demo — taskbar progress, a toast, and a clipboard write,
-queued from the frame:
-
-```sh
-go run ./examples/annex
+cd examples/07-ssh && go run .   # then: ssh -t -p 2222 localhost
 ```
 
 The module currently declares Go 1.23. See
@@ -178,8 +181,8 @@ paints only the visible window — the 120×40 million-row benchmark costs
 ~1.8 ms per repaint with 41 allocations. Sorting stays a request: the table
 reports `SortRequested` and the app re-slices its own data, so the widget never
 mutates the source. Not claimed: horizontal scrolling, row height above one
-cell, per-cell content styling, and IME preedit. `examples/table` shows the
-full pattern with 200k rows, `examples/widgets` is the stage-8 widget
+cell, per-cell content styling, and IME preedit. `examples/04-table` shows the
+full pattern with 200k rows, `examples/05-widgets` is the stage-8 widget
 catalog (arrow keys, click selection, Escape quits), and the showcase's
 Interaction Lab embeds a second live Table in its scrolling panel.
 
@@ -433,7 +436,7 @@ replay; a twelve-lane terminal validation matrix (tmux and Screen ptys,
 ssh over a real sshd/ssh pair, netem-shaped ssh, plain and dumb
 profiles on Linux and Windows, CJK and NO_COLOR panes, an interactive
 scripted Windows Terminal window, a headless conhost lifecycle, the
-examples/ssh server, and the sideband raw-wire lane) runs as
+examples/07-ssh server, and the sideband raw-wire lane) runs as
 self-asserting scripts with committed evidence; the SSH example serves
 the engine over the wire by bridging each session onto a real pty; and
 the frame's sideband channels — taskbar progress, notifications, and a
@@ -445,6 +448,8 @@ only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 
+- [Quick start](docs/QUICKSTART.md)
+- [Animation](docs/ANIMATION.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Compatibility](docs/COMPATIBILITY.md)
 - [Interaction model](docs/INTERACTION.md)

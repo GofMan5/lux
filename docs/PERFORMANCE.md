@@ -1,7 +1,11 @@
 # Performance contract
 
-Snapshot: **2026-08-11**. LUX TUI has microbenchmarks, but it has not published
-cross-framework results. This document defines how claims must be earned.
+Snapshot: **2026-10-10**. Cross-framework numbers are now published: the
+full comparative run lives in [benchmarks/results/report.md](../benchmarks/results/report.md)
+(168 runs, 0 failed, one pinned host, reproduced by the single docker
+command in [benchmarks/README.md](../benchmarks/README.md)). This document
+keeps defining how claims must be earned, and the committed report is the
+current earned baseline.
 
 ## Current mechanisms, not benchmark claims
 
