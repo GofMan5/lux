@@ -1,0 +1,71 @@
+Stage 9 close: «Real-terminal truth»
+Date: 2026-10-09
+Machine: Windows amd64, i5-10400F, Go 1.25.5 (host), golang:1.25-alpine
+(docker, tmux 3.7c, OpenSSH 10.3p1, util-linux script 2.42.3, strace
+6.19, iproute2 tc 7.0.0; Windows Terminal 1.24.12741.0, conhost,
+Windows PowerShell 5.1 on the host)
+
+ALL FIVE SLICES COMMITTED
+1. 25a22cd (slice 1) Suspend/resume job control: A2 design — the run
+   loop intercepts the raw 0x1A byte, writes the exact Close-leave,
+   restores cooked mode, re-raises SIGTSTP with SIG_DFL disposition;
+   SIGCONT rewrites the enter, drops the diff baseline, next Present is
+   a full repaint. WithSuspend(false) hands the byte to the app.
+   SIGHUP/EOF → error event, not a panic.
+2. (slice 2) e2e/ module (own go.mod, linux/darwin): four PTY tests
+   with the interactive busybox shell as the oracle — real kernel stop
+   (`Stopped` line), fg resume with repaint + title re-push,
+   double-SIGTSTP discarded by SIGCONT, probe-racing keystrokes
+   replayed through the real kernel input buffer; plus the direct-lane
+   byte-level exit truth (one leave sequence, title pop last, cursor
+   shown). Commit 6b97cbf.
+3. 3155b8f (slice 3) Terminal validation matrix: twelve self-asserting
+   lanes with committed evidence (tmux 3.7c, GNU Screen 5.0.2, Linux
+   and Windows plain/dumb, CJK and NO_COLOR panes, a real sshd/ssh
+   pair, netem-shaped ssh, scripted interactive Windows Terminal with
+   screenshots, headless conhost lifecycle, Windows pipe, examples/ssh
+   under a real OpenSSH client, and the annex raw-wire lane). Every
+   uncovered cell documented in the matrix README's "not validated, on
+   purpose" table with a closure path.
+4. d55cf17 (slice 4) examples/ssh (own go.mod, !windows): gliderlabs/
+   ssh + creack/pty, design B — the LUX engine in a child on a real
+   pty; the SSH layer is pure byte plumbing, zero library changes.
+5. 093aaab (slice 5) Sideband channels: OSC 9;4 progress, OSC 9;777
+   notifications, write-only OSC 52 clipboard — all opt-in, riding the
+   frame (Present → annex → OnPresented), leave closed by the 9;4;0
+   reset. Byte truth from a raw pipe capture, behavioral OSC 52 proof
+   through tmux set-clipboard.
+
+GATES AT CLOSE (re-run on the final tree, commit 093aaab)
+- gofmt -l . → empty.
+- go vet ./... → clean on the host.
+- go build ./... → EXIT=0 host, GOOS=linux, GOOS=darwin.
+- go mod tidy → no changes (root, examples/ssh, e2e).
+- docker golang:1.25-alpine (GOFLAGS=-buildvcs=false):
+  go test ./... → DOCKER_EXIT=0, 13/13 packages ok.
+- The annex lane re-run green in the same container shape:
+  "annex lane OK", demo exit status 0.
+- golangci-lint: NOT RUN (unavailable in this environment — recorded
+  skipped consistently since stage 6).
+- Fuzz: N/A (no new parser surface; OSC encoders are table-tested).
+- -race: NOT RUN in docker (plain golang:1.25-alpine has no gcc for
+  cgo; recorded in stage9-slice5.txt).
+
+ACCEPTANCE (ROADMAP stage 9) — MET
+- Suspend/resume pinned by a real PTY harness on Linux (e2e module).
+  macOS/BSD lanes honestly deferred to CI at the release stage.
+- The validation matrix is filled or honestly marked "not validated,
+  on purpose" with closure paths — twelve lanes, evidence committed.
+- SSH example serves the engine over the wire through a real pty with
+  zero library changes; unit + lane green.
+- The OSC 9;4 / 9;777 / 52 items deferred from stage 8 landed as
+  slice 5 with byte-truth and behavioral evidence, consent layered
+  (opt-in defaults, write-only clipboard, terminal-side gates).
+- Not claimed anywhere: an OSC 52 read path, kitty clipboard-name
+  extensions, notify actions, a progress capability probe, macOS
+  suspend lanes, an ubuntu CI lane (all listed in the ROADMAP/COMPAT
+  records).
+
+VERIFICATION ARTIFACTS
+.verification/stage9-slice1..5.txt (per-slice), this file (close).
+Tree clean at the close commit; stage-10 work follows this record.

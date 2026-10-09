@@ -423,15 +423,25 @@ worked stepper compiles as a `ui` test, so the recipe cannot rot; the
 immutable `Theme` (four roles, per-Context, no global mutable style
 table) resolving across all nine styled widgets; and the window title
 (`WithTitle`) riding the enter and leave writes with the XTWINOPS stack
-restore — that closes the widget-truth stage. The real-terminal stage is under way: job control (Ctrl+Z suspend / `fg`
+restore — that closes the widget-truth stage. The real-terminal stage is
+closed: job control (Ctrl+Z suspend / `fg`
 resume with full repaint, Suspend/Resume events, SIGHUP as an error exit,
-Windows console-close cleanup) is in, and the whole cycle is pinned by a
-pseudo-terminal end-to-end suite that proves the real kernel stop and the
-real shell's `Stopped` line, the double-stop discard, and probe-racing
-keystroke replay. Next in that stage: the validation matrix, an SSH
-adapter — and semantic accessibility bridges. Graphics protocols follow
-only after
-these paths are measurable.
+Windows console-close cleanup) is in, pinned by a pseudo-terminal
+end-to-end suite that proves the real kernel stop and the real shell's
+`Stopped` line, the double-stop discard, and probe-racing keystroke
+replay; a twelve-lane terminal validation matrix (tmux and Screen ptys,
+ssh over a real sshd/ssh pair, netem-shaped ssh, plain and dumb
+profiles on Linux and Windows, CJK and NO_COLOR panes, an interactive
+scripted Windows Terminal window, a headless conhost lifecycle, the
+examples/ssh server, and the sideband raw-wire lane) runs as
+self-asserting scripts with committed evidence; the SSH example serves
+the engine over the wire by bridging each session onto a real pty; and
+the frame's sideband channels — taskbar progress, notifications, and a
+write-only clipboard — are pinned by byte truth and a decoded tmux
+buffer. The prove-it stage is next: a benchmarks module with a
+reproducible report, a facts-only README pass, and the v0.1.0 release.
+Graphics protocols and semantic accessibility bridges follow
+only after these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

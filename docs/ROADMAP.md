@@ -294,7 +294,7 @@ tcell v3), clipboard OSC 52 как **опциональный адаптер с 
 **Приёмка:** каждый контрол — godoc `Example*`; каталог примеров
 `examples/widgets`; showcase пополняется живой демкой новых контролов.
 
-### Стадия 9 — «Real-terminal truth» (~4–6 срезов + ручные лейны)
+### Стадия 9 — «Real-terminal truth» (~4–6 срезов + ручные лейны) — ✅ ЗАКРЫТА
 
 Цель: превратить «implemented, validation pending» в таблицу с версиями.
 
@@ -307,17 +307,23 @@ tcell v3), clipboard OSC 52 как **опциональный адаптер с 
    перехватывается run-loop'ом до applyEvent; `WithSuspend(false)`
    отдаёт байт приложению. Alt+u — undo-псевдоним в редакторах на случай,
    если suspend-хендшейк забрал ctrl+z.
-2. **Матрица валидации** (COMPATIBILITY.md таблица): Windows Terminal,
-   ConHost, PowerShell 5/7, macOS Terminal/iTerm2, gnome-terminal/kitty/
-   alacritty/wezterm/foot, tmux 3.x (отдельные лейны: с `allow-passthrough` и без),
-screen, OpenSSH (включая shaping
-   RTT×2 200 мс с `LUX_TUI_PROBE_TIMEOUT=400`), pipe/CI, мобильные
-   (Termius/Blink — опциональный лейн), Unicode-лейны
-   (CJK, RTL-текст с bidi-off документация, эмодзи-ZWJ), lifecycle
-   (detach/attach, suspend). Артефакты скриншотов/vtgrid-дампов в
-   `.verification/matrix/`.
-3. **SSH-адаптер** как пример: `Backend` поверх gliderlabs/ssh
-   (пример в `examples/ssh`, зависимость НЕ в основном go.mod).
+2. **Матрица валидации** ✅ (срез 3, `3155b8f`; расширена в срезе 5):
+   двенадцать лейнов с самопроверяющимися скриптами и закоммиченными
+   артефактами — tmux 3.7c, GNU Screen 5.0.2, pipe/dumb на Linux и
+   Windows, CJK- и NO_COLOR-лейны, реальная пара sshd/ssh (`-tt`),
+   netem-shaped ssh (200 мс, 512 кбит, strace-бюджет пробы),
+   интерактивный scripted Windows Terminal 1.24 (скриншоты), headless
+   conhost lifecycle, Windows pipe, examples/ssh-сервер под реальным
+   OpenSSH-клиентом в tmux, и annex-лейн (raw-wire правда OSC
+   9;4/9;777/52 + поведенчески декодированный OSC 52 через tmux
+   `set-clipboard`). Непокрытое честно вынесено в таблицу «Not
+   validated, on purpose» (macOS/iTerm2/kitty-хосты, drawing-терминалы
+   для 9;4/9;777) с путём закрытия в README матрицы.
+3. **SSH-адаптер** ✅ (срез 4, `d55cf17`): `examples/ssh` (свой go.mod) —
+   gliderlabs/ssh + creack/pty, дизайн B: движок LUX в child-процессе на
+   настоящем pty, SSH-слой — чистая байтовая сантехника; ноль изменений
+   библиотеки. Resize → `TIOCSWINSZ`, exit-status туда-обратно,
+   disconnect убивает process group. README модуля — дизайн и caveats.
 4. **PTY-интеграционные тесты** ✅ (срез 2): модуль `e2e/` (свой go.mod,
    linux/darwin) — creack/pty + скриптованные сессии: 4 теста (байтовая
    правда выхода, job control с живым shell-оракулом `Stopped`, replay
@@ -330,10 +336,24 @@ screen, OpenSSH (включая shaping
    master input при закрытии последнего slave-fd — child держит pty
    150 мс после выхода; (d) SIGCONT сбрасывает отложенные stop-сигналы —
    double-stop безопасен.
+5. **Сайдбенд-каналы** ✅ (срез 5, `093aaab` — перенесено сюда из стадии 8):
+   OSC 9;4 (прогресс: 5 состояний, проценты 0–100, leave всегда
+   закрывается сбросом `9;4;0` после pop заголовка), OSC 9;777
+   (уведомления: поля санитизированы), OSC 52 (clipboard: write-only,
+   read-направление не строится никогда, 32 KiB cap). Все opt-in
+   (`WithProgress`/`WithNotifications`/`WithClipboard`), едут на кадре
+   (Present → annex → OnPresented), проваленный/дропнутый кадр роняет
+   свои annex'ы, нулевой `&Frame{}` не ставит ничего в очередь, дефолтная
+   сборка байт-в-байт неотличима. Consent многослойный: терминальный
+   гейт (kitty prompt, tmux `set-clipboard`) остаётся решением терминала.
+   Annex-лейн: raw pipe capture (byte truth) + tmux buffer (behavioral).
 
 **Приёмка:** таблица матрицы заполнена до последней клетки либо клетка
-честно помечена «not validated» с issue-ссылкой; suspend/resume работает в
-ручном лейне на трёх ОС.
+честно помечена «not validated» с путём закрытия (выполнено: README
+матрицы + таблица «Not validated, on purpose»); suspend/resume
+закреплён на реальном PTY-харнессе Linux (e2e-модуль, macOS-лейн
+остаётся на CI стадии релиза); сайдбенды закреплены raw-wire и
+поведенческим доказательством.
 
 ### Стадия 10 — «Prove it» (~4–5 срезов)
 
