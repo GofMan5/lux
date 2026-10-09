@@ -119,6 +119,14 @@ type Backend struct {
 	opened    bool
 	plain     bool
 	kitty     bool
+	// suspended latches the job-control state between the terminal half and
+	// the present path: suspendTerminal sets it under the mutex before any
+	// restore is attempted, Present refuses to write frames while it is set
+	// (a frame cannot be painted onto the shell's screen), and resumeTerminal
+	// clears it only after the terminal is back. The latch also makes plain
+	// and closed backends refuse the whole dance, which keeps the signal
+	// watchers from stopping a process that never had terminal state.
+	suspended bool
 	// win32 latches win32-input-mode use: it needs a probe answer for
 	// mode 9001 and the kitty protocol being absent, and every exit path
 	// uses it to decide whether the mode reset belongs in the restore.
@@ -435,6 +443,13 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// Windows poller notices the change on its first tick, and the replay
 	// below covers everything before the watcher existed.
 	b.resize.start(readCtx, b.input, b.resizes)
+	// The lifecycle watcher translates job-control signals (Unix) and
+	// console-close events (Windows) into terminal suspension, resume, and
+	// the terminal-loss error. It rides the read context like the resize
+	// watcher, so Close cancels it together with the read side, and the
+	// suspend and resume paths re-check the backend under the mutex so a
+	// Close racing the signals never leaves a half-restored terminal.
+	go b.watchLifecycle(readCtx)
 	// A resize that landed inside the probe window is replayed here as the
 	// first event, so the app's first layout reflects the real terminal size
 	// instead of the pre-probe snapshot. The offer is plain, not
@@ -606,6 +621,16 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		b.mu.Unlock()
 		return errors.New("terminal: nil output")
 	}
+	if b.suspended {
+		// A suspended terminal is showing the shell's screen. Painting a
+		// frame there would corrupt it, and committing the frame into the
+		// diff baseline would make the terminal remember a state it never
+		// showed. The frame is dropped instead — the suspension is short,
+		// the user is not looking, and resumeTerminal drops the baseline so
+		// the next frame repaints everything anyway.
+		b.mu.Unlock()
+		return nil
+	}
 	output, plain, synchronized, scrollRegions, links, features, previous := b.writer, b.plain, b.features.SynchronizedOutput, b.features.ScrollRegions, b.hyperlink, b.features, b.previous
 	b.mu.Unlock()
 	// The write slot serializes Present, so the encode scratch and the retained
@@ -714,6 +739,7 @@ func (b *Backend) Close() error {
 	b.pixel = false
 	b.unicodeCore = false
 	b.previous = nil
+	b.suspended = false
 	b.lastResizeOK = false
 	b.mu.Unlock()
 
@@ -757,6 +783,142 @@ func (b *Backend) Close() error {
 	// every platform, so Close never waits for readDone.
 	_ = done
 	return result
+}
+
+// makeRaw is the raw-mode entry the resume path uses, indirected as a var so
+// the suspend and resume write paths stay testable on plain files — a real
+// terminal is not available in a unit-test process, and the actual
+// MakeRaw/Restore round trip is pinned by the PTY verification lane. Tests
+// swap the var; production runs the term.MakeRaw default. The var is only
+// read on the resume path, which runs on the lifecycle watcher goroutine, so
+// the swap is safe while no watcher is running.
+var makeRaw = term.MakeRaw
+
+// suspendTerminal hands the terminal back to the shell and latches the
+// suspended state. It is the terminal half of job-control suspension: the
+// same leave sequences Close writes, from the same table, bounded by the same
+// write-slot grace so a wedged in-flight frame can neither deadlock the signal
+// watcher nor hold the process stopped. The returned bool reports whether the
+// suspended state was entered; a plain or closed backend refuses, and so does
+// a double suspend, which keeps a stray second SIGTSTP from re-restoring a
+// terminal that is already cooked. Write and restore errors are tolerated
+// rather than returned — the process is about to stop regardless, and
+// resumeTerminal's full repaint heals whatever a failed leave left behind.
+func (b *Backend) suspendTerminal() bool {
+	b.mu.Lock()
+	if !b.opened || b.plain || b.suspended {
+		b.mu.Unlock()
+		return false
+	}
+	b.suspended = true
+	writer, input, state := b.writer, b.input, b.state
+	pixel, kitty, win32, unicodeCore, title := b.pixel, b.kitty, b.win32, b.unicodeCore, b.title
+	b.mu.Unlock()
+	if writer != nil && b.acquireWriteSlot(restoreGrace) {
+		// The re-check under the mutex closes the Close race down to the
+		// concurrent window: if the backend closed while the slot was being
+		// acquired, Close's own leave has already run or is about to, and a
+		// second leave here would pop the kitty and title stacks twice.
+		b.mu.Lock()
+		stillOpen := b.opened
+		b.mu.Unlock()
+		if stillOpen {
+			_, leave := sequences(pixel, kitty, win32, unicodeCore, title)
+			_ = writeAll(writer, []byte(leave))
+		}
+		<-b.writeSlotChan()
+	}
+	if state != nil && input != nil {
+		// Cooked input is restored before the process stops, so the shell
+		// that takes the terminal over sees the termios it left behind —
+		// the state Open saved, the same state the eventual Close restores.
+		// Restore failures are tolerated: the terminal half is best effort
+		// by the same contract as Close, and a stopped process cannot
+		// report the error anywhere useful anyway.
+		_ = term.Restore(int(input.Fd()), state)
+	}
+	return true
+}
+
+// resumeTerminal takes the terminal back after job control returned it: raw
+// mode first, then the same enter sequences Open wrote from the same table,
+// then the latch clears and the diff baseline drops so the next frame
+// repaints everything. The baseline drops on every exit path — after a
+// suspension the terminal has been through the shell's hands and the baseline
+// is untrusted — which is what makes a failed leave in suspendTerminal
+// recoverable: the first presented frame heals the screen. MakeRaw failing
+// leaves the latch set, so Present keeps refusing frames on a terminal whose
+// input mode is unknown; the enter write failing clears the latch instead,
+// because the full repaint is precisely the recovery for a half-delivered
+// enter. The returned error reports either failure, and the watcher routes it
+// to the application through the error event.
+func (b *Backend) resumeTerminal() error {
+	b.mu.Lock()
+	if !b.opened || b.plain || !b.suspended {
+		b.mu.Unlock()
+		return nil
+	}
+	input, writer := b.input, b.writer
+	pixel, kitty, win32, unicodeCore, title := b.pixel, b.kitty, b.win32, b.unicodeCore, b.title
+	b.mu.Unlock()
+	if input == nil {
+		b.mu.Lock()
+		if b.opened && b.suspended {
+			b.previous = nil
+		}
+		b.mu.Unlock()
+		return errors.New("terminal: resume without terminal input")
+	}
+	// Raw mode returns before the enter sequences are written so the input
+	// stream is already in the mode those sequences enable: a keypress
+	// landing between the two is decoded in raw, exactly as during Open.
+	// The state MakeRaw returns is discarded — b.state keeps the Open-time
+	// cooked state the eventual Close restores, so a shell that changed the
+	// termios while the job was stopped finds its own state again on exit.
+	// The call goes through the makeRaw var: the resume write path has to be
+	// testable on plain files, and the real PTY round trip is pinned by the
+	// pty verification lane instead of by these unit tests.
+	if _, err := makeRaw(int(input.Fd())); err != nil {
+		b.mu.Lock()
+		if b.opened && b.suspended {
+			b.previous = nil
+		}
+		b.mu.Unlock()
+		return err
+	}
+	var enterErr error
+	if writer != nil && b.acquireWriteSlot(restoreGrace) {
+		b.mu.Lock()
+		stillOpen := b.opened
+		b.mu.Unlock()
+		if stillOpen {
+			enter, _ := sequences(pixel, kitty, win32, unicodeCore, title)
+			enterErr = writeAll(writer, []byte(enter))
+		}
+		<-b.writeSlotChan()
+	}
+	b.mu.Lock()
+	if b.opened && b.suspended {
+		b.suspended = false
+		b.previous = nil
+	}
+	b.mu.Unlock()
+	return enterErr
+}
+
+// deliverLifecycle offers a Suspend or Resume notice — or the terminal-loss
+// error — to the application without ever blocking the signal watcher. The
+// watcher runs between the terminal restore and the process stop, where a
+// blocked send would wedge job control itself, and the events queue is deep
+// enough that a full buffer means the application is busy, not that the
+// notice is load-bearing: the terminal transitions have already happened,
+// and the full repaint on resume does not depend on the event being seen.
+// The timestamp is stamped by deliverEvent like every other event's.
+func (b *Backend) deliverLifecycle(next event.Event) {
+	select {
+	case b.events <- next:
+	default:
+	}
 }
 
 func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<- event.Event, parser *parser, prefill []byte) {

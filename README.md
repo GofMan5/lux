@@ -43,7 +43,7 @@ comparative claims require reproducible results.
 | [`ui`](./ui) | presentation-bound focus/hit/modal routing, scoped shortcuts, buttons, EGC text input with bounded undo, drag selection and a hardware caret, small lists, virtual scroll viewports with wheel bubbling, modal panels, and an explicit clipboard port |
 | [`event`](./event) | compact keyboard, text, paste, mouse, resize, focus, frame, quit, and error events |
 | [`capability`](./capability) | immutable terminal feature snapshots and portable defaults |
-| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with four enable-only verdicts), streaming input parser with kitty CSI u and win32-input-mode record decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, Unicode core mode 2027, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
+| `internal/terminal` | VT lifecycle, startup capability negotiation (DA1/DECRQM/kitty query, bounded, veto-only with four enable-only verdicts), streaming input parser with kitty CSI u and win32-input-mode record decoding, mouse (SGR cell plus opt-in kitty pixel 1016), paste, and focus decoding, resize handling, suspend/resume job control (`SIGTSTP`/`SIGCONT`, Windows console-close), shortest-form ANSI diff encoding with scrolling regions, styled underlines and opt-in OSC 8 hyperlinks, Unicode core mode 2027, caret and cursor visibility, color downgrade, plain-output fallback, and a VT reference-grid conformance test |
 
 The concrete terminal adapter stays internal; applications use `lux.Run` or
 provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
@@ -247,6 +247,21 @@ the terminal backend Run constructs for itself — a custom adapter owns its
 title policy. Not claimed: runtime retitling, a per-frame title, the
 terminal's icon-only OSC 1 form.
 
+Ctrl+Z works the way a shell user expects it to. `SIGTSTP` makes the
+backend write the same leave sequences Close would write — modes, kitty
+pop, title pop — and restore cooked mode before re-raising the stop, so
+the shell reads clean input while the process is stopped. `SIGCONT`
+(through `fg`) rewrites the enter sequences, drops the diff baseline, and
+the next frame is a full repaint, because anything may have been printed
+while the process was stopped. Models hear both ends as ordinary
+`event.Suspend` and `event.Resume` updates and each dirties the frame, so
+pausing an animation is a one-line `Update` case. The double stop is
+latched out, a plain or closed backend refuses suspension, and a failing
+raw-mode resume keeps the suspension held until a later resume recovers.
+Windows has no job control: a console-close event releases the console
+immediately and reports an Error event before the OS terminates the
+process — best-effort cleanup, not a resume path.
+
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
 and some stacks ignore emoji presentation selectors. `lux.WithWidthPolicy`
@@ -360,9 +375,12 @@ worked stepper compiles as a `ui` test, so the recipe cannot rot; the
 immutable `Theme` (four roles, per-Context, no global mutable style
 table) resolving across all nine styled widgets; and the window title
 (`WithTitle`) riding the enter and leave writes with the XTWINOPS stack
-restore — that closes the widget-truth stage. Next: the real-terminal
-stage — suspend/resume, the validation matrix, an SSH adapter — and
-semantic accessibility bridges. Graphics protocols follow only after
+restore — that closes the widget-truth stage. The real-terminal stage has
+opened: job control (Ctrl+Z suspend / `fg` resume with full repaint,
+Suspend/Resume events, SIGHUP as an error exit, Windows console-close
+cleanup) is in. Next in that stage: PTY-verified suspend/resume, the
+validation matrix, an SSH adapter — and semantic accessibility bridges.
+Graphics protocols follow only after
 these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.

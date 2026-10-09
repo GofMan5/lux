@@ -384,6 +384,27 @@ work and the API may still change.
   Not claimed: runtime retitling, per-frame titles, the icon-only OSC 1
   form, a capability probe for the title stack, or title support in
   custom adapters (the public `Backend` interface is unchanged).
+- Job control (suspend/resume): `SIGTSTP` suspends the Unix backend by
+  writing the same leave `sequences()` Close would write (modes, kitty
+  pop, title pop), restoring cooked mode before re-raising the stop with
+  the shell's disposition; `SIGCONT` rewrites the enter, drops the diff
+  baseline, and the next frame is a full repaint — anything may have been
+  printed while the process was stopped. Present during suspension is a
+  clean no-op; the double stop is latched out; a plain, closed, or
+  input-less backend refuses; a failing raw-mode resume keeps the
+  suspension held until a later resume recovers. The resume restores the
+  Open-time cooked state (the MakeRaw-returned state is discarded), so
+  the final Close restores exactly what Open found. `event.Suspend` and
+  `event.Resume` ride the ordinary update path and dirty the frame, so
+  models pause animations and repaint without app-side wiring — models
+  written before the kinds existed treat them as ordinary updates.
+  `SIGHUP` is delivered as an Error event and exits through the normal
+  restoration path. Windows: no job control — CTRL_CLOSE/LOGOFF/SHUTDOWN
+  surface as SIGTERM, the console is released immediately, and an Error
+  event is reported before the OS terminates the process (best-effort
+  cleanup). Not claimed: `SIGTTOU` background-write stops, a Windows
+  resume path, or real-terminal evidence (that is the PTY lane of the
+  validation matrix).
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed

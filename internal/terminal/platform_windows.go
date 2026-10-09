@@ -6,6 +6,8 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/lux-tui/lux/capability"
@@ -138,5 +140,43 @@ func (w *resizeWatcher) stop() {
 	if w.cancel != nil {
 		w.cancel()
 		w.cancel = nil
+	}
+}
+
+// errConsoleClose is the error the lifecycle watcher reports for the console
+// events Windows delivers as SIGTERM: CTRL_CLOSE_EVENT (the window's close
+// button), CTRL_LOGOFF_EVENT, and CTRL_SHUTDOWN_EVENT.
+var errConsoleClose = errors.New("terminal: console close event")
+
+// watchLifecycle waits for the SIGTERM that Windows console events arrive
+// as. os/signal translates CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, and
+// CTRL_SHUTDOWN_EVENT into syscall.SIGTERM when a handler is registered, and
+// the translation is explicitly non-blocking: the process is terminated
+// unless it exits, and Notify only buys the cleanup window. The terminal
+// restore therefore happens right here on the watcher — within microseconds
+// of the event — instead of waiting for the application loop to unwind, and
+// the error event that follows still routes the exit through that loop and
+// its deferred Close whenever the OS grants the time. This is honest best
+// effort: the restore wins the race more often than an app that starts
+// unwinding only after the event, but no handler can promise it.
+func (b *Backend) watchLifecycle(ctx context.Context) {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-signals:
+			// suspendTerminal is reused for its terminal half — the leave
+			// sequences and the cooked restore — while the suspended latch
+			// it sets doubles as the present gate: the dying application
+			// stops painting frames onto a console that is closing. The
+			// process exits through the error path either way, and Close's
+			// own restore is idempotent on top of this one.
+			b.suspendTerminal()
+			b.deliverLifecycle(event.Event{Kind: event.Error, Err: errConsoleClose})
+			return
+		}
 	}
 }

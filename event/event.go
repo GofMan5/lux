@@ -21,6 +21,17 @@ const (
 	Frame
 	Quit
 	Error
+	// Suspend reports the terminal state being handed away: the backend has
+	// written its leave sequences, restored cooked input, and (on Unix) is
+	// about to stop the process for job control. Frames presented while
+	// suspended are dropped, and the resume that follows repaints from
+	// scratch, so a model usually only marks the pause and stops animations.
+	Suspend
+	// Resume reports the terminal state coming back: the backend has
+	// re-entered raw mode and its enter sequences, and dropped its diff
+	// baseline, so the next presented frame is a full repaint. A resize
+	// riding the same wakeup is delivered separately before this event.
+	Resume
 )
 
 // Event is deliberately a compact tagged value instead of an interface tree.

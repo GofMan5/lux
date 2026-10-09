@@ -1,0 +1,114 @@
+Stage 9, slice 1 — job control: suspend/resume, SIGHUP, Windows console-close — local verification, 2026-10-08
+=================================================================================================================
+
+Scope (ROADMAP.md, stage 9 item 1): terminal truth for process lifecycle
+under job control. Code:
+  - event/event.go: Kind gains Suspend and Resume (additive; no existing
+    kind value changed, no String() added — kinds are matched, not
+    printed).
+  - internal/terminal/backend.go: Backend.suspended latch; Present skip
+    during suspension (clean nil, no baseline commit); Close resets the
+    latch; var makeRaw = term.MakeRaw indirection (test seam; Open still
+    calls term.MakeRaw directly); suspendTerminal() bool and
+    resumeTerminal() error; deliverLifecycle() non-blocking notice;
+    Open starts watchLifecycle on the read goroutine's context.
+  - internal/terminal/platform_unix.go: watchLifecycle(ctx) — SIGTSTP
+    suspend + re-raise with the shell's disposition (cooked restored
+    first), re-register before resume, fresh terminalSize -> resize +
+    Resume on the other side, SIGCONT no-op without a stop, SIGHUP ->
+    Error event + exit. defer signal.Reset (shell dispositions, not
+    signal.Stop) for all three signals.
+  - internal/terminal/platform_windows.go: watchLifecycle(ctx) — SIGTERM
+    (CTRL_CLOSE/LOGOFF/SHUTDOWN via os/signal): suspendTerminal
+    immediately, errConsoleClose Error event, return. cap-1 channel,
+    signal.Stop deferred.
+Tests:
+  - internal/terminal/backend_suspend_test.go (11 tests, direct
+    &Backend{} construction on temp files, makeRaw stubbed via var swap
+    with t.Cleanup restore).
+  - app_suspend_test.go: TestRunDeliversSuspendAndResumeAndRepaints (real
+    Run loop, fake backend; Suspend dirties the frame, Resume quits, both
+    reach model.updates).
+  - event/event_test.go: TestKindValuesAreUnique (all 12 kinds distinct).
+Docs: README.md (Ctrl+Z paragraph after the title paragraph, package
+table, stage narrative), docs/COMPATIBILITY.md (new "Suspend and resume
+(job control)" section before the degradation ladder, environment table
+row, v1-requirement bullet, snapshot 2026-10-08), CHANGELOG.md (Added).
+
+API (verified by test, not by inspection):
+  - suspendTerminal(): true = the terminal was handed away cooked. Refuses
+    (false, zero writes) on !opened, plain, or already-suspended; the
+    leave is the exact sequences() Close would write for the same latch
+    state (kitty pop before mode reset, title pop after); cooked restored
+    via term.Restore with the OPEN-time state; errors inside the suspend
+    are tolerated (the process is stopping regardless).
+  - resumeTerminal(): nil = the terminal is raw again and the next Present
+    is a full repaint. Nil no-op on !opened, plain, or !suspended. Error
+    "terminal: resume without terminal input" keeps the latch SET and the
+    baseline dropped. A MakeRaw failure returns the error, latch stays
+    set, Present keeps refusing; a later successful resume recovers
+    (enter written, latch cleared). Success always: suspended = false,
+    previous = nil.
+  - Present during suspension: nil error, zero bytes, previous untouched.
+  - Close during suspension: leave written again (idempotent double-pop —
+    the kitty/title stacks underflow-protect on xterm-family terminals;
+    documented), latch cleared, later Present fails as on any closed
+    backend.
+  - deliverLifecycle: non-blocking send into b.events — a busy app drops
+    the notice instead of wedging the watcher (the terminal transitions
+    have already happened; the repaint does not depend on the event).
+  - Run loop: Suspend/Resume ride the default applyEvent branch — Update
+    + dirty + repaint on tick; no app.go changes; models written before
+    the kinds existed treat them as ordinary updates.
+
+Test evidence (windows/amd64, 2026-10-08):
+  gofmt -l .                           empty (after gofmt -w of the new
+                                       test files)
+  go vet ./...                         clean
+  go build ./...                       clean
+  go test ./... -count=1 -timeout 300s ok, all 13 packages
+  docker golang:1.25-alpine (linux/amd64, GOFLAGS=-buildvcs=false):
+       gofmt -l . && go vet &&          ok, all 13 packages, exit 0
+       go test ./... -count=1           (the unix watcher compiles and
+                                        its signal handling type-checks;
+                                        exit code re-verified without the
+                                        pwsh stderr-redirect artifact)
+  go mod verify                        all modules verified
+  fuzz: not applicable — no new parser surface; the watcher is a signal
+      reducer over the already-fuzzed event delivery
+  golangci-lint: NOT RUN (not installed on this machine)
+  new terminal tests: TestSuspendWritesLeaveOnceAndRefusesFrames
+      (leave written exactly once, double suspend refused, Present skip
+      is nil with zero bytes and no baseline), TestResumeRewritesEnterAnd
+      ClearsTheLatch, TestResumeForcesFullRepaintOfUnchangedRows (the
+      unchanged "AA" row appears twice after resume — full repaint — and
+      once before it — the plain diff), TestSuspendRefusesPlainAndClosed
+      Backends, TestResumeWithoutSuspensionIsNoOp, TestResumeWithoutInput
+      KeepsSuspensionLatched, TestFailedRawEntryKeepsSuspensionLatchedAnd
+      Recovers, TestCloseDuringSuspensionClearsTheLatch (leave twice,
+      Close's leave is the last bytes), TestSuspendResumeWithKittyAnd
+      TitleRoundTripsTheStacks (leave suffix kittyLeave+leave+titlePop,
+      enter suffix titlePush+setWindowTitle+enter+kittyEnter),
+      TestDeliverLifecycleNeverBlocks (cap-1 channel, both sends complete,
+      the queued one is Suspend)
+  app test: TestRunDeliversSuspendAndResumeAndRepaints (frame count
+      advances after Suspend; model sees both kinds; Run closes the
+      backend)
+  event test: TestKindValuesAreUnique
+
+Not claimed (doc truth, mirrored in README + CHANGELOG + COMPATIBILITY):
+  - SIGTTOU: a background-write stop happens outside this watcher; the
+    design targets foreground job control only.
+  - Windows resume: console-close cleanup is best-effort — the OS still
+    terminates the process in its ~5-second window.
+  - real-terminal SIGTSTP/fg evidence: the unit tests pin the byte and
+    state contracts on file streams; the actual PTY round trip is the
+    stage-9 PTY lane (next slices).
+  - signal watcher goroutine itself untested in this slice — its
+    suspend/resume calls are the unit-tested methods; the PTY lane runs
+    the watcher for real.
+
+Authorities consulted before writing docs: signal(7)/termios semantics
+for SIGTSTP re-raise and shell disposition reset; the in-repo lifecycle
+precedent (backend_lifecycle_test.go) for restoration contracts; MSDN
+console-close 5-second window behavior via os/signal SIGTERM mapping.
