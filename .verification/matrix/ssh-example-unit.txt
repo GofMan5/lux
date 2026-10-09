@@ -1,0 +1,1 @@
+ok  	github.com/lux-tui/lux/examples/ssh	0.399s

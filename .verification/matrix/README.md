@@ -2,7 +2,7 @@
 
 Snapshot: **2026-10-09**.
 
-Real-terminal evidence for LUX TUI stage 9, slice 3. Every lane below ran
+Real-terminal evidence for LUX TUI stage 9 (slices 3–4). Every lane below ran
 against an actual terminal or terminal-shaped transport and left its
 artifacts in this directory. Nothing here is a simulated or mocked
 terminal: multiplexers allocate a pty, the ssh lane crosses a real
@@ -31,6 +31,7 @@ needle; the evidence files are the raw captures those asserts ran on.
 | unicode | pty via tmux, wide/CJK/emoji content | PASS | `unicode-pane.txt` |
 | NO_COLOR | pty via tmux with NO_COLOR=1 | PASS | `nocolor-text.txt`, `nocolor-escape.txt` |
 | ssh | pty over real sshd/ssh pair (127.0.0.1, `-tt`) | PASS | `ssh-wire.raw`, `ssh-text.txt` |
+| ssh example | the examples/ssh Go server serving the demo TUI to a real ssh client inside tmux | PASS | `ssh-example-pane-80x24.txt`, `ssh-example-pane-100x30.txt`, `ssh-example-exit.txt`, `ssh-example-child-alive.txt`, `ssh-example-child-gone.txt`, `ssh-example-unit.txt`, `ssh-example-pane-final.txt` |
 | netem | ssh loopback shaped: 200 ms delay, 512 kbit/s | PASS | `netem-wire.raw`, `netem-probe-trace.txt` |
 | Windows Terminal 1.24 | interactive real window, scripted F1/TAB/edit/quit | PASS | `windows-terminal-main.png`, `windows-terminal-help.png` |
 | conhost (headless) | classic conhost lifecycle, transcript capture | PASS | `conhost-transcript.bin` |
@@ -47,7 +48,16 @@ docker run --rm -v <repo>:/src -w /src -e TERM=xterm-256color \
 ```
 
 `netem-lane.sh` additionally needs `--cap-add NET_ADMIN` for `tc`.
-The ssh and netem lanes build their own sshd inside the container.
+The ssh and netem lanes build their own sshd inside the container. The
+ssh-example lane runs the Go server from `examples/ssh` and connects
+with a real OpenSSH client whose terminal is tmux
+(`SSH_ASKPASS_REQUIRE=force` supplies the password — no sshpass):
+
+```
+docker run --rm -v <repo>:/src -w /src -e TERM=xterm-256color \
+    -e GOFLAGS=-buildvcs=false golang:1.25-alpine \
+    sh /src/.verification/matrix/ssh-example-lane.sh
+```
 
 Windows lanes run on the host with Windows PowerShell 5.1:
 
@@ -78,6 +88,13 @@ plain profile. Both kill their launchers before and after (best effort).
 - **ssh**: full-screen mode crosses a real ssh transport — alt-screen
   enter and leave, frame content, and a clean exit with the leave
   sequence intact on the wire.
+- **ssh example**: the examples/ssh server (gliderlabs/ssh + creack/pty)
+  serves the demo TUI to a real OpenSSH client whose terminal is tmux.
+  The pane captures prove the title, size readout, and client TERM at
+  80x24; a `resize-window` to 100x30 repaints the readout (the resize
+  crossed tmux, the ssh window-change request, and the server's
+  TIOCSWINSZ); `q` returns exit status 0 at the ssh client; and killing
+  the client session leaves no `-child` process behind.
 - **netem**: the same transport shaped to 200 ms / 512 kbit. Input still
   gets serviced (the scripted quit key works), frames still flow, and the
   run completes on its own — no freeze from blocking writes. The probe
@@ -105,6 +122,12 @@ plain profile. Both kill their launchers before and after (best effort).
   input. Under strace (which slows startup) this reproduces reliably.
   Test harnesses should send scripted keys after raw mode is up (the
   lanes sleep first); real users type later than that anyway.
+- **Interactive shells demand DSR replies.** busybox ash, sitting on a
+  pty in interactive mode, emits a cursor-position query (`ESC[6n`) at
+  its prompt and blocks until the reply arrives. Anything that drives an
+  interactive shell through a pty must answer device-status queries the
+  way a terminal does — the examples/ssh unit-test fake does, and so
+  does tmux in the lanes.
 
 ## Not validated, on purpose
 

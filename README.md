@@ -126,6 +126,13 @@ The widget catalog walks the stage-8 controls one by one:
 go run ./examples/widgets
 ```
 
+There is also an SSH server that serves a LUX TUI over the wire — the
+engine runs in a child on a real pty, so nothing in the library changes:
+
+```sh
+cd examples/ssh && go run .   # then: ssh -t -p 2222 localhost
+```
+
 The module currently declares Go 1.23. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) before extending the core.
 

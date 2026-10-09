@@ -1,0 +1,79 @@
+# Stage 9 — Slice 4: examples/ssh (LUX TUI over SSH)
+
+Snapshot: 2026-10-09. Module: `github.com/lux-tui/lux/examples/ssh`
+(nested Go module, `//go:build !windows` on all files — creack/pty has no
+Windows port; the root module's `./...` does not descend into it).
+
+## What was built
+
+An SSH server (gliderlabs/ssh v0.3.8) that serves LUX TUI by bridging each
+SSH session onto a real pty (creack/pty v1.1.24, `StartWithSize` —
+`setsid` + `TIOCSCTTY`) and running the requested program there as the
+session leader. Design B: the full LUX engine runs in a child process on
+a genuine terminal — raw mode, capability probes, and SIGWINCH go through
+the same code paths as a local terminal; the SSH layer is pure byte
+plumbing. Zero changes to the library.
+
+- `main.go` — single binary, `-child` re-exec mode (default argv is the
+  binary itself), or a generic pty forwarder for any argv
+  (`-- /bin/sh`, `-- ../showcase/showcase`); `-addr`, `-password` flags.
+- `serve.go` — pty spawn with the client's TERM, winch goroutine
+  (`TIOCSWINSZ` on every window-change), input/output pumps, context
+  cancel → SIGKILL to the child's process group (session leader), exit
+  status mapped to the SSH exit-status request (signal death → 1).
+- `child.go` — the demo TUI: title, live pty-size readout, TERM value,
+  transport line; quits on `q`/Escape.
+- `README.md` — design rationale, run instructions, caveats (demo
+  password auth, no signal forwarding, 0x0 ptys from piped clients).
+
+## Verification (all green)
+
+Host (Windows 11, Go 1.25.5):
+- `go mod tidy` in the module: EXIT=0 (gliderlabs v0.3.8, creack/pty
+  v1.1.24, and five indirects resolved; go.sum 14 lines).
+- `GOOS=linux go build ./... && GOOS=linux go vet ./...`: EXIT=0.
+- `GOOS=darwin go build ./... && GOOS=darwin go vet ./...`: EXIT=0.
+- `gofmt -l .`: empty.
+
+Container (golang:1.25-alpine, `go test -count=1 -timeout 60s .`):
+`ok  github.com/lux-tui/lux/examples/ssh  0.399s` — six unit tests:
+no-pty refusal, pty size/TERM propagation + newline munging + exit
+status 7, resize-driven `stty size` update to 100x30, disconnect kills
+the child (cancel → done ≤10 s, code 1), exit-code mapping incl.
+signal death → 1. The fake session replicates gliderlabs' `\n` → `\r\n`
+munging and answers the DSR query (`ESC[6n` → `ESC[1;1R`) the way real
+client terminals do.
+
+Real-terminal lane (evidence in `.verification/matrix/`, script
+`ssh-example-lane.sh`, docker run exit 0, "ssh-example lane OK"):
+- tmux 3.7c plays the client terminal (80x24 pty, answers probes).
+- A real OpenSSH 10.3p1 client (`-tt`, password auth via
+  `SSH_ASKPASS_REQUIRE=force`) connects to the Go server on
+  127.0.0.1:2222 through the encrypted tunnel.
+- `ssh-example-pane-80x24.txt`: title "LUX OVER SSH", "pty size 80 x 24",
+  "TERM tmux-256color" (the client's TERM crossed the tunnel),
+  "transport ssh -> pty -> LUX engine".
+- `tmux resize-window -x 100 -y 30` → `ssh-example-pane-100x30.txt`
+  shows "100 x 30": the resize crossed tmux, the SSH window-change
+  request, the server's TIOCSWINSZ, and the child's SIGWINCH repaint.
+- `tmux send-keys q` → `ssh-example-exit.txt` = "SSH_EXIT=0".
+- Session kill (abrupt disconnect) → `ssh-example-child-alive.txt`
+  recorded `/tmp/tui-ssh-server -child` running; after the kill,
+  `ssh-example-child-gone.txt` shows the process table without it.
+- Matrix README updated: eleven lanes, new row, what-it-proves entry,
+  re-run snippet, and the busybox-ash DSR finding.
+
+## Notes for the record
+
+- Two compile fixes during the slice: gliderlabs' pty request field is
+  `Pty.Term`, not `Terminal`.
+- Two stacked causes in the resize unit test: (a) interactive busybox
+  ash blocks on an unanswered `ESC[6n`; (b) the test waited for a
+  command's output before typing the command. Both fixed; the fake now
+  auto-replies DSR.
+- `ptmx.SetReadDeadline` is unsupported on a pty master (Read blocks
+  forever) — deadlines are never used on pty fds in this module.
+- The ssh wire is encrypted, so evidence is pane captures, not raw
+  bytes (unlike the sshd-lane raw wire).
+- `ssh-example-server.log` is gitignored (`*.log`); the pane captures
+  and unit output are the committed evidence.

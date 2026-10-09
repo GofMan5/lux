@@ -432,20 +432,41 @@ work and the API may still change.
   ctrl+alt+u, alt+shift+u, and hyper/meta chords are not the alias and
   pass through to the application.
 - Verification artifacts under `.verification/` at every stage close.
-- A terminal validation matrix (`.verification/matrix/`, ten lanes with
-  self-asserting scripts and captured evidence): real `tmux 3.7c` and GNU
-  `Screen 5.0.2` multiplexer ptys, `TERM=dumb` and redirected-output plain
-  profiles on Linux and Windows, grapheme-heavy and `NO_COLOR` panes, a
-  real sshd/ssh pair over `-tt`, the same transport shaped by `tc netem`
-  (200 ms delay, 512 kbit) with an strace-measured probe budget, an
-  interactive scripted Windows Terminal 1.24 window with screenshots, a
-  headless classic-conhost lifecycle transcript, and the Windows
-  redirected plain profile. Two integration findings came out of it and
+- A terminal validation matrix (`.verification/matrix/`, eleven lanes
+  with self-asserting scripts and captured evidence): real `tmux 3.7c`
+  and GNU `Screen 5.0.2` multiplexer ptys, `TERM=dumb` and
+  redirected-output plain profiles on Linux and Windows,
+  grapheme-heavy and `NO_COLOR` panes, a real sshd/ssh pair over
+  `-tt`, the same transport shaped by `tc netem` (200 ms delay,
+  512 kbit) with an strace-measured probe budget, an interactive
+  scripted Windows Terminal 1.24 window with screenshots, a headless
+  classic-conhost lifecycle transcript, the Windows redirected plain
+  profile, and the examples/ssh server driven by a real OpenSSH
+  client inside tmux. Three integration findings came out of it and
   are documented in the matrix README: `ssh -tt` from a piped client
-  requests a zero-row/zero-col pty (a 0-cell canvas paints nothing — size
-  the remote pty with `stty` first), and keystrokes sent before raw mode
-  is established can be eaten by the cooked line discipline as XON/XOFF
-  flow control.
+  requests a zero-row/zero-col pty (a 0-cell canvas paints nothing —
+  size the remote pty with `stty` first); keystrokes sent before raw
+  mode is established can be eaten by the cooked line discipline as
+  XON/XOFF flow control; and an interactive busybox ash on a pty
+  emits a cursor-position query (`ESC[6n`) and blocks until the reply
+  — anything driving an interactive shell through a pty must answer
+  DSR like a terminal does.
+- `examples/ssh`: a nested Go module serving LUX TUI over SSH
+  (gliderlabs/ssh + creack/pty). Each session is bridged onto a real
+  pty and the requested program — by default the binary itself
+  re-exec'd with `-child` — runs there as the session leader, so the
+  engine sees a genuine terminal (raw mode, probes, SIGWINCH) with
+  zero library changes. The server is also a generic pty forwarder:
+  any argv can be served (`-- /bin/sh`, `-- ../showcase/showcase`).
+  Resize window-change requests become `TIOCSWINSZ`; the child's exit
+  status travels back as the SSH exit status; a canceled connection
+  kills the child's process group (nothing leaks). Unit tests fake
+  the gliderlabs session seam — including its newline munging and the
+  DSR reply a real terminal gives — and drive `sh` on a real pty for
+  size/TERM propagation, exit codes, resize, and disconnect-kill.
+  Unix-only (`//go:build !windows`, creack/pty has no Windows port).
+  README documents the design and its caveats (demo password auth,
+  no signal forwarding — disconnect already kills the child).
 
 ### Changed
 
