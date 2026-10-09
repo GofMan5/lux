@@ -1,0 +1,90 @@
+Stage 9, slice 3 — validation matrix
+=====================================
+
+Goal: real-terminal truth across a representative matrix — every lane
+either passes with captured evidence or is honestly marked not-validated.
+No lane may pass against a simulated terminal.
+
+Lanes and verdicts
+------------------
+
+All lanes below ran on 2026-10-09 and left artifacts under
+.verification/matrix/ (the lane scripts re-run from scratch and assert
+their own needles).
+
+- tmux 3.7c (docker golang:1.25-alpine): pane content, escape wire,
+  resize redraw, F1 help dialog — PASS (tmux-pane-*.txt,
+  tmux-help-text.txt).
+- GNU Screen 5.0.2 (docker): pane content and help dialog — PASS
+  (screen-pane.txt, screen-help.txt).
+- TERM=dumb + redirected stdout (docker): plain ASCII snapshot — PASS
+  (dumb-out.txt, pipe-out.txt, pipe-err.txt).
+- unicode (docker, tmux pty): wide/CJK/emoji content with intact pane
+  text — PASS (unicode-pane.txt).
+- NO_COLOR=1 (docker, tmux pty): SGR color stripped, layout kept — PASS
+  (nocolor-text.txt, nocolor-escape.txt).
+- ssh (docker): real sshd/ssh pair, `ssh -tt` to 127.0.0.1, TAB focus +
+  ctrl+q quit scripted over the wire — PASS (ssh-wire.raw 11008 bytes
+  with 1049h/1049l, ssh-text.txt with frame content, exit 0).
+- netem (docker, --cap-add NET_ADMIN): same ssh transport shaped by
+  `tc qdisc add dev lo root netem delay 200ms rate 512kbit` — exit 0,
+  5971 wire bytes, alt-screen enter+leave on the wire, 5 s wall with the
+  scripted quit still serviced; probe budget measured from strace -f
+  -ttt -s 200 write(2) timestamps: 0.402 s wait with
+  LUX_TUI_PROBE_TIMEOUT=400 vs 0.151 s with the 150 ms default — the
+  budget knob is measured, not asserted — PASS (netem-wire.raw,
+  netem-probe-trace.txt).
+- Windows Terminal 1.24.12741.0 (host, interactive): scripted F1 → help
+  modal → Esc → Tab → rune 'z' → ctrl+q with screenshots — PASS
+  (windows-terminal-main.png, windows-terminal-help.png).
+- conhost, headless (host): full alt-screen/focus/mouse/cursor lifecycle
+  transcript asserted byte-for-byte, exit clean — PASS
+  (conhost-transcript.bin).
+- Windows redirected pipe (host): plain UTF-8 snapshot, 2107 bytes, 25
+  lines, exit 0 — PASS (windows-pipe-out.txt).
+
+Not validated (honest): macOS Terminal/iTerm2/kitty/alacritty/wezterm/
+foot/GNOME Terminal (no macOS host, none installed on Windows),
+interactive conhost window (needs registry console-delegation GUIDs —
+host policy), real-network (non-loopback) latency lane (needs a remote
+machine). Documented with closing plans in .verification/matrix/README.md.
+
+Integration findings (documented, no engine changes needed)
+-----------------------------------------------------------
+
+1. ssh -tt from a piped client requests a 0-row/0-col pty (no local
+   terminal to size from). A 0x0 canvas paints nothing: app runs, serves
+   input, exits 0, zero frame bytes. Not a lux defect: backend.Size()
+   reports 0x0 without error and app.go skips 0-cell frames by design;
+   WithFallbackSize does not apply (no error, and a pty exists). Fix on
+   the user side: `ssh -tt host 'stty rows 24 cols 80; my-tui-app'`.
+   Proven: DA1-reply injection changed nothing; stty alone fixed it.
+2. Keystrokes at t=0 race MakeRaw: the cooked line discipline eats
+   0x11/0x13 as XON/XOFF. Reproduced deterministically under strace
+   (slower startup). Lanes send scripted keys after raw mode is up.
+   Documented for test-harness authors in the matrix README.
+
+Code changes in this slice
+--------------------------
+
+- ui/shortcut.go: lock bits (ModCapsLock|ModNumLock) excluded from
+  shortcut matching on both sides (Fixed in CHANGELOG; found live in the
+  WT lane — F1 under num-lock never opened help).
+- ui/shortcut_test.go: TestShortcutIgnoresKeyboardLockState (3 cases).
+- internal/terminal/platform_windows.go: makeRawTerm also sets
+  ENABLE_VIRTUAL_TERMINAL_INPUT before raw flags (best-effort), shared
+  by Open and resume; platform_windows_test.go pins it.
+- examples/showcase: footer documents q/ctrl+q/esc quits; debug dump
+  removed.
+- .gitignore: /.probe/ and .dsh-vision-toolkit/ excluded.
+- CHANGELOG + docs/COMPATIBILITY.md updated (matrix entry, ssh/stty and
+  XON-race integration notes).
+
+Gates
+-----
+
+- go test ./... — all packages ok.
+- gofmt -l . — empty.
+- go vet ./... — clean.
+
+Matrix evidence root: .verification/matrix/ (README.md indexes it).

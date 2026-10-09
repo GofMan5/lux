@@ -180,6 +180,32 @@ func TestShortcutOwnerMayDifferFromActionTarget(t *testing.T) {
 	}
 }
 
+func TestShortcutIgnoresKeyboardLockState(t *testing.T) {
+	var ctx Context
+	// The binding asks for plain F1 — the Windows Terminal win32-input-mode
+	// record for an F1 press with NumLock on carries NUMLOCK_ON in its
+	// control-key state, and kitty reports the same state pair, so real
+	// events arrive with the lock bits set.
+	shortcutSnapshot(t, &ctx, "", Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "app", Kind: Activate, Scope: ScopeApp, Priority: true})
+	action, handled := ctx.Handle(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyF1, Mod: event.ModNumLock | event.ModCapsLock}})
+	if !handled || action.Target != "app" || action.Kind != Activate {
+		t.Fatalf("F1 with lock state = %#v handled=%v", action, handled)
+	}
+	// Lock bits also ride along on the binding side without changing the
+	// intent match: F1+num-lock as a binding still routes plain F1.
+	shortcutSnapshot(t, &ctx, "", Shortcut{Key: event.KeyEvent{Code: event.KeyF1, Mod: event.ModNumLock}, Target: "app", Kind: Dismiss, Scope: ScopeApp, Priority: true})
+	action, handled = ctx.Handle(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyF1}})
+	if !handled || action.Kind != Dismiss {
+		t.Fatalf("binding lock state = %#v handled=%v", action, handled)
+	}
+	// Lock state never turns one intent into another: F1+ctrl must not
+	// match the F1 binding even when num-lock rides along.
+	action, handled = ctx.Handle(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyF1, Mod: event.ModCtrl | event.ModNumLock}})
+	if handled && action.Kind == Dismiss {
+		t.Fatalf("ctrl+F1 matched the F1 binding: %#v", action)
+	}
+}
+
 func TestPriorityNonAppPanics(t *testing.T) {
 	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(10, 2))}
 	var ctx Context

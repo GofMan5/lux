@@ -5,6 +5,11 @@
 *.yaml text eol=lf
 *.patch text eol=lf
 *.ps1 text eol=lf
+# Lane scripts must stay byte-exact LF or bash chokes on \r.
+*.sh text eol=lf
+# Raw wire captures are evidence, not text: never normalize them.
+*.raw -text
+*.bin -text
 testdata/fuzz/** text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf

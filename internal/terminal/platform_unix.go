@@ -26,6 +26,12 @@ func defaultColorDepth() capability.ColorDepth {
 
 func enableVT(*os.File) (func() error, error) { return nil, nil }
 
+// makeRawTerm is the Unix raw-mode entry: the term package already produces
+// exactly the mode the parser needs, and the restore story is a single
+// term.Restore. Windows needs the extra VT-input bit and wraps this in
+// platform_windows.go.
+func makeRawTerm(fd int) (*term.State, error) { return term.MakeRaw(fd) }
+
 func duplicateFile(file *os.File, name string) (*os.File, error) {
 	if file == nil {
 		return nil, nil

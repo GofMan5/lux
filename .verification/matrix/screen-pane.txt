@@ -1,0 +1,24 @@
+  LUX TUI                                                 * LIVE / CELL ENGINE
+  terminal graphics, without the weight
+
+ ╭─────────────────────╮  ╭─ ROTATING CUBE ───────────────────────────────────╮
+ │ INTERACTION LAB     │  │                                                   │
+ │                     │  │                                                   │
+ │ Project name        │  │                                                   │
+ │ LUX explorer        │  │                                                   │
+ │                     │  │                      ▄                            │
+ │ Scene               │  │                     ▀▀▀▀▀▀▄▄▄▄                    │
+ │ > Aurora cube       │  │                    ▀▀▀▀▀▀▀▀▀▀▀▀▀▀                 │
+ │ Wire pulse          │  │                    ▀▀▀▀▀▀▀▀▀▀▀▀▀                  │
+ │ Solar drift         │  │                   ▄▀▀▀▀▀▀▀▀▀▀▀▀▀                  │
+ │ Mono matrix         │  │                   ▀▀▀▀▀▀▀▀▀▀▀▀▀▀                  │
+ │ Calm orbit          │  │                   ▀▀▀▀▀▀▀▀▀▀▀▀▀                   │
+ │                     │  │                    ▀▀▀▀▀▀▀▀▀▀▀▀                   │
+ │ Virtual log (1M)    │  │                                                   │
+ │ 000001 event ready  │  │                                                   │
+ │ 000002 event ready  │  │                                                   │
+ │ 000003 event ready  │  │                                                   │
+ │ 000004 event ready  │  │                                                   │
+ ╰─────────────────────╯  ╰───────────────────────────────────────────────────╯
+
+            [tab] focus  [enter] activate  [F1] help  [ctrl+q] quit

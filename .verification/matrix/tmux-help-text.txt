@@ -1,0 +1,30 @@
+  LUX TUI                                                                     * LIVE / CELL ENGINE
+  terminal graphics, without the weight
+
+ ╭──────────────────────────╮  ╭─ ROTATING CUBE ──────────────────────────────────────────────────╮
+ │ INTERACTION LAB          │  │                                                                  │
+ │                          │  │                                                                  │
+ │ Project name      ╭─ Interactive controls ─────────────────────────────────╮                   │
+ │ LUX explorer      │                                                        │                   │
+ │                   │ Tab / Shift+Tab  move focus                            │                   │
+ │ Scene             │ Enter / Space     activate                             │                   │
+ │ > Aurora cube     │ Arrows / wheel    select or scroll                     │                   │
+ │ Wire pulse        │ Type / paste       edit project name                   │                   │
+ │ Solar drift       │ Ctrl+Z / Shift+Z  undo / redo                          │                   │
+ │ Mono matrix       │ Esc / outside      close this dialog                   │                   │
+ │ Calm orbit        │ Ctrl+Q             quit application                    │                   │
+ │                   │                                                        │                   │
+ │ Virtual log (1M)  │                                                        │                   │
+ │ 000001 event ready│                                                        │                   │
+ │ 000002 event ready│                                                        │                   │
+ │ 000003 event ready│                                                        │                   │
+ │ 000004 event ready│                                            ╭────────╮  │                   │
+ │                   │                                            │ Close  │  │                   │
+ │ ╭────────────╮  ╭─│                                            ╰────────╯  │                   │
+ │ │   Pause    │  │ ╰────────────────────────────────────────────────────────╯                   │
+ │ ╰────────────╯  ╰──────╯ │  │                                                                  │
+ │                          │  │                                                                  │
+ │ WIDGET TABLE             │  │                                                                  │
+ ╰──────────────────────────╯  ╰──────────────────────────────────────────────────────────────────╯
+
+                      [tab] focus  [enter] activate  [F1] help  [ctrl+q] quit

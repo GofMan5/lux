@@ -35,13 +35,15 @@ LUX TUI does not read/write OSC 52 automatically; clipboard mutation requires
 an explicit application-supplied `Clipboard` implementation. No OS adapter is
 bundled; remote OSC 52 remains outside core and needs capability/user policy.
 
-Scoped shortcuts compare exact key code, rune, and modifiers while ignoring
-repeat count and the press/repeat/release action: a shortcut fires on the
-activation, once. Legacy VT aliases (Tab/Ctrl-I, Enter/Ctrl-M) remain
-indistinguishable on the legacy path; once the kitty protocol is positively
-negotiated, a terminal that reports the pairs as CSI u decodes them into
-distinct events. Do not rely on the split until the terminal has answered the
-probe.
+Scoped shortcuts compare exact key code, rune, and intent modifiers while
+ignoring repeat count and the press/repeat/release action: a shortcut fires on
+the activation, once. The caps-lock and num-lock bits report keyboard lock
+state, not intent, so they never participate in the comparison — a user with
+num-lock on gets the same F1 shortcut as one without. Legacy VT aliases
+(Tab/Ctrl-I, Enter/Ctrl-M) remain indistinguishable on the legacy path; once
+the kitty protocol is positively negotiated, a terminal that reports the pairs
+as CSI u decodes them into distinct events. Do not rely on the split until the
+terminal has answered the probe.
 
 `cmd.exe`, PowerShell, and shells running under SSH are command interpreters,
 not terminal emulators. Compatibility decisions must be based on the actual TTY
@@ -763,4 +765,22 @@ run at least:
 | Lifecycle | resize storm, writer failure, cancellation, panic cleanup, suspend/resume — the `e2e` PTY module covers the suspend/resume round trip and probe-race replay on Linux |
 
 Compatibility evidence belongs in reproducible scripts or CI artifacts, not in
-an anecdotal “works on my terminal” table.
+an anecdotal "works on my terminal" table.
+
+The stage 9 run of this matrix lives in `.verification/matrix/` with
+self-asserting lane scripts and captured evidence. Two integration
+findings from that run apply to anyone driving a LUX TUI app through
+piped transports:
+
+- **Zero-size pty from piped ssh clients.** `ssh -tt` sizes the remote
+  pty from the client's local terminal. With piped client stdin there is
+  no local terminal, so ssh requests a 0-row/0-col pty, and a 0-cell
+  canvas paints nothing — the app runs, serves input, and exits, but
+  never writes a frame. `WithFallbackSize` does not help here because a
+  pty exists and reports 0x0 as a legal size. Size the remote side
+  yourself: `ssh -tt host 'stty rows 24 cols 80; my-tui-app'`.
+- **Keystrokes racing raw mode.** Input written in the first milliseconds
+  after spawn can arrive while the line discipline is still cooked, and
+  `0x11`/`0x13` are then consumed as XON/XOFF flow control instead of
+  reaching the app. Scripted drivers should send keys only after raw
+  mode is up; humans typing interactively always qualify.

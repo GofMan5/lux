@@ -12,8 +12,11 @@ const (
 )
 
 // Shortcut routes an exact key to an ordinary Action. Repeat is deliberately
-// ignored while Code, Rune, and modifiers must match exactly. The zero value is
-// active; Disabled conditionally removes a binding without changing layout.
+// ignored while Code, Rune, and the intent modifiers must match exactly;
+// the caps-lock and num-lock bits report keyboard state rather than intent,
+// so they are ignored on both the binding and the incoming key. The zero
+// value is active; Disabled conditionally removes a binding without
+// changing layout.
 type Shortcut struct {
 	Key event.KeyEvent
 	// Owner is the focus/modal ID that enables this binding. Empty defaults to
@@ -84,8 +87,20 @@ func shortcutOwner(binding Shortcut) ID {
 	return binding.Target
 }
 
+// modLocks masks the keyboard-state bits: caps-lock and num-lock report
+// what the keyboard is doing, not what the user asked for. Enhanced
+// terminals attach them to real key events (win32-input-mode records carry
+// NUMLOCK_ON; kitty reports the same pair), so a binding registered
+// without them must still match a press that carries them — otherwise
+// every functional-key shortcut dies the moment NumLock is on.
+const modLocks = event.ModCapsLock | event.ModNumLock
+
+// sameShortcutKey compares key intent: code, rune, and the shift, alt,
+// ctrl, super, hyper, and meta bits must match exactly on both sides,
+// while the lock bits ride along as state and never affect routing.
 func sameShortcutKey(left, right event.KeyEvent) bool {
-	return left.Code == right.Code && left.Rune == right.Rune && left.Mod == right.Mod
+	return left.Code == right.Code && left.Rune == right.Rune &&
+		left.Mod&^modLocks == right.Mod&^modLocks
 }
 
 func shortcutAction(binding Shortcut, next event.Event) Action {

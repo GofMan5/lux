@@ -30,6 +30,39 @@ func defaultColorDepth() capability.ColorDepth {
 
 const enableVirtualTerminalProcessing = 0x0004
 
+// enableVirtualTerminalInput is the console input flag that makes conhost
+// and conpty translate function, arrow, and modifier keys into the escape
+// sequences the parser decodes. Without it a raw Read on the console only
+// ever receives keys that carry a character code — F1 and the arrows reach
+// nothing — which is exactly the gap the Windows Terminal verification
+// lane caught: the rune keys worked, F1 never arrived.
+const enableVirtualTerminalInput = 0x0200
+
+// makeRawTerm drives the console input into the mode the parser expects.
+// term.MakeRaw clears the line/echo/processed bits, and the extra
+// ENABLE_VIRTUAL_TERMINAL_INPUT bit turns key events into VT input. MakeRaw
+// snapshots the mode before any change, so a single term.Restore rolls both
+// changes back — the suspend/resume dance keeps working unchanged. Legacy
+// consoles that reject the bit degrade to MakeRaw's mode instead of failing
+// Open: the raw character path still works there.
+func makeRawTerm(fd int) (*term.State, error) {
+	state, err := term.MakeRaw(fd)
+	if err != nil {
+		return nil, err
+	}
+	handle := windows.Handle(fd)
+	var mode uint32
+	if err := windows.GetConsoleMode(handle, &mode); err != nil {
+		return state, nil
+	}
+	if mode&enableVirtualTerminalInput == 0 {
+		if err := windows.SetConsoleMode(handle, mode|enableVirtualTerminalInput); err != nil {
+			return state, nil
+		}
+	}
+	return state, nil
+}
+
 func enableVT(file *os.File) (func() error, error) {
 	handle := windows.Handle(file.Fd())
 	var mode uint32

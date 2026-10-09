@@ -9,6 +9,8 @@ coverage*.html
 
 # Local tooling
 /.tmp/
+/.probe/
+.dsh-vision-toolkit/
 .idea/
 .vscode/
 .DS_Store

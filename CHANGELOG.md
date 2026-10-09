@@ -432,6 +432,20 @@ work and the API may still change.
   ctrl+alt+u, alt+shift+u, and hyper/meta chords are not the alias and
   pass through to the application.
 - Verification artifacts under `.verification/` at every stage close.
+- A terminal validation matrix (`.verification/matrix/`, ten lanes with
+  self-asserting scripts and captured evidence): real `tmux 3.7c` and GNU
+  `Screen 5.0.2` multiplexer ptys, `TERM=dumb` and redirected-output plain
+  profiles on Linux and Windows, grapheme-heavy and `NO_COLOR` panes, a
+  real sshd/ssh pair over `-tt`, the same transport shaped by `tc netem`
+  (200 ms delay, 512 kbit) with an strace-measured probe budget, an
+  interactive scripted Windows Terminal 1.24 window with screenshots, a
+  headless classic-conhost lifecycle transcript, and the Windows
+  redirected plain profile. Two integration findings came out of it and
+  are documented in the matrix README: `ssh -tt` from a piped client
+  requests a zero-row/zero-col pty (a 0-cell canvas paints nothing — size
+  the remote pty with `stty` first), and keystrokes sent before raw mode
+  is established can be eaten by the cooked line discipline as XON/XOFF
+  flow control.
 
 ### Changed
 
@@ -463,6 +477,29 @@ work and the API may still change.
 
 ### Fixed
 
+- Scoped shortcuts no longer compare keyboard lock state: the caps-lock and
+  num-lock modifier bits now drop out of shortcut matching on both the
+  binding and the incoming event. The win32-input parser faithfully reports
+  lock state in its modifier byte — every F1 arriving under Windows Terminal
+  with num-lock on carried `ModNumLock`, while the binding registered plain
+  F1, and the exact `Mod` comparison made the shortcut unmatchable (F1 help
+  never opened; the same failure shape hits kitty's modifier set, since it
+  also reports lock bits). Bindings with intent modifiers (Ctrl+F1, …) keep
+  requiring them exactly; only the lock bits are exempt. A regression test
+  covers all three cases: plain binding matched under lock bits, locked
+  binding matched by a plain key, and Ctrl+F1 not matched by num-lock-only.
+  Found and verified end-to-end in a real Windows Terminal 1.24 lane
+  (F1 → modal screenshot → Esc → Tab → rune → Ctrl+Q → exit 0), not just in
+  unit tests. The showcase footer now honestly advertises that plain `q`
+  also quits.
+- Windows raw mode is entered through a hardened `makeRawTerm` that also
+  sets the `ENABLE_VIRTUAL_TERMIN_INPUT` console mode bit before the raw
+  flags land (best-effort: a failure degrades to the x/term raw state).
+  Defense-in-depth found during the same investigation — under ConPTY,
+  `x/term`'s `MakeRaw` already sets the bit (verified
+  `0x1f7 → 0x3f0`), so this is not the fix for the shortcut bug above,
+  only an explicit, tested contract that `Open` and `resume` share one
+  make-raw path.
 - Blocked terminal writes are interrupted instead of wedging shutdown, and
   restoration and panic cleanup errors are preserved.
 - Presentation callback failures are contained; clipped interaction coordinates

@@ -332,7 +332,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	if b.input == nil || !isTerminal(b.input) {
 		return capability.Set{}, errors.New("terminal: interactive output requires terminal input")
 	}
-	state, err := term.MakeRaw(int(b.input.Fd()))
+	state, err := makeRaw(int(b.input.Fd()))
 	if err != nil {
 		return capability.Set{}, err
 	}
@@ -785,15 +785,17 @@ func (b *Backend) Close() error {
 	return result
 }
 
-// makeRaw is the raw-mode entry the resume path uses, indirected as a var so
-// the suspend and resume write paths stay testable on plain files — a real
-// terminal is not available in a unit-test process, and the actual
-// MakeRaw/Restore round trip is pinned by the PTY verification lane. Tests
-// swap the var; production runs the term.MakeRaw default. The var is only
-// read on the resume path, which runs on whatever goroutine called Suspend
-// — the run loop's, never a background watcher — so the swap is safe while
-// no suspend handshake is in flight.
-var makeRaw = term.MakeRaw
+// makeRaw is the raw-mode entry both Open and the resume path use,
+// indirected as a var so the suspend and resume write paths stay testable
+// on plain files — a real terminal is not available in a unit-test process,
+// and the actual MakeRaw/Restore round trip is pinned by the PTY
+// verification lane. Production runs the platform default makeRawTerm:
+// Unix term.MakeRaw, Windows the same plus ENABLE_VIRTUAL_TERMINAL_INPUT so
+// function keys reach the parser. Tests swap the var; the var is only read
+// on paths that run on whatever goroutine called them — Open on the setup
+// goroutine, the resume on the run loop's — so the swap is safe while no
+// suspend handshake is in flight.
+var makeRaw = makeRawTerm
 
 // suspendTerminal hands the terminal back to the shell and latches the
 // suspended state. It is the terminal half of job-control suspension: the

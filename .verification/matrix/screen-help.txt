@@ -1,0 +1,24 @@
+  LUX TUI                                                 * LIVE / CELL ENGINE
+  terminal graphics, without the weight
+
+ ╭─────────╭─ Interactive controls ─────────────────────────────────╮─────────╮
+ │ INTERACT│                                                        │         │
+ │         │ Tab / Shift+Tab  move focus                            │         │
+ │ Project │ Enter / Space     activate                             │         │
+ │ LUX expl│ Arrows / wheel    select or scroll                     │         │
+ │         │ Type / paste       edit project name                   │         │
+ │ Scene   │ Ctrl+Z / Shift+Z  undo / redo                          │         │
+ │ > Aurora│ Esc / outside      close this dialog                   │         │
+ │ Wire pul│ Ctrl+Q             quit application                    │         │
+ │ Solar dr│                                                        │         │
+ │ Mono mat│                                                        │         │
+ │ Calm orb│                                                        │         │
+ │         │                                                        │         │
+ │ Virtual │                                                        │         │
+ │ 000001 e│                                            ╭────────╮  │         │
+ │ 000002 e│                                            │ Close  │  │         │
+ │ 000003 e│                                            ╰────────╯  │         │
+ │ 000004 e╰────────────────────────────────────────────────────────╯         │
+ ╰─────────────────────╯  ╰───────────────────────────────────────────────────╯
+
+            [tab] focus  [enter] activate  [F1] help  [ctrl+q] quit

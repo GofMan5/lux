@@ -197,7 +197,7 @@ func (app *showcase) View(frame *lux.Frame) {
 	if app.showHelp {
 		app.drawHelp(canvas, area)
 	}
-	footer := " [tab] focus  [enter] activate  [F1] help  [ctrl+q] quit "
+	footer := " [tab] focus  [enter] activate  [F1] help  [q or ctrl+q] quit "
 	canvas.Text(max((area.W-canvas.TextWidth(footer))/2, 0), max(area.H-1, 0), footer, render.Style{Foreground: muted})
 	if frame.Capabilities.Interactive && !app.paused && !frame.ReducedMotion {
 		frame.RequestFrame()
