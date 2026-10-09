@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lux-tui/lux/capability"
+	"github.com/GofMan5/lux/capability"
 )
 
 // TestProgressAnnexBytes pins the wire form of OSC 9;4: the none state

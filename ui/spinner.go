@@ -3,7 +3,7 @@ package ui
 import (
 	"time"
 
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 // SpinnerStyle picks the glyph orbit and pacing. Frames are single-cell

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/event"
+	"github.com/GofMan5/lux/event"
 )
 
 // TestDetectMultiplexer pins the witness matrix: environment variables, the

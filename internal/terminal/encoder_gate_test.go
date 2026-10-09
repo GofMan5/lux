@@ -4,8 +4,8 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/lux-tui/lux/capability"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/capability"
+	"github.com/GofMan5/lux/render"
 )
 
 // regionSequence matches the escape sequences only the scrolling path emits:

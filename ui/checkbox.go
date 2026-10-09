@@ -1,8 +1,8 @@
 package ui
 
 import (
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 // CheckboxState is the persistent checked flag of one checkbox. Its zero

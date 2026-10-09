@@ -5,7 +5,7 @@ most-used Go TUI frameworks — [bubbletea](https://github.com/charmbracelet/bub
 (tea) and [tview](https://github.com/rivo/tview) — on identical scenes,
 identical input byte streams, and real pseudo-terminals.
 
-This is a nested Go module (`github.com/lux-tui/lux/benchmarks`): competitor
+This is a nested Go module (`github.com/GofMan5/lux/benchmarks`): competitor
 dependencies and Linux-only harness syscalls stay out of the root lux module,
 which keeps its `<=3` dependency budget intact.
 

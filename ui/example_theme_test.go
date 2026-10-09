@@ -3,8 +3,8 @@ package ui_test
 import (
 	"fmt"
 
-	"github.com/lux-tui/lux/render"
-	"github.com/lux-tui/lux/ui"
+	"github.com/GofMan5/lux/render"
+	"github.com/GofMan5/lux/ui"
 )
 
 // ExampleContext_UseTheme shows the theme filling zero-value styles: a tab

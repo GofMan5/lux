@@ -10,8 +10,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/lux-tui/lux/capability"
-	"github.com/lux-tui/lux/event"
+	"github.com/GofMan5/lux/capability"
+	"github.com/GofMan5/lux/event"
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
 )

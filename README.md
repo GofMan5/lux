@@ -62,7 +62,7 @@ provide the public `lux.Backend` port for a PTY, SSH session, recorder, or test.
 ## Quick start
 
 ```sh
-go get github.com/lux-tui/lux
+go get github.com/GofMan5/lux
 ```
 
 ```go
@@ -72,9 +72,9 @@ import (
 	"context"
 	"fmt"
 
-	lux "github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	lux "github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 type app struct{ width, height int }

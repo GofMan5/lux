@@ -3,7 +3,7 @@ package ui
 import (
 	"testing"
 
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 func TestDefaultThemeIsAttributesOnly(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/lux-tui/lux/event"
+	"github.com/GofMan5/lux/event"
 )
 
 // Clipboard is an application-supplied text clipboard port.

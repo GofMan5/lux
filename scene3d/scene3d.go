@@ -4,7 +4,7 @@ package scene3d
 import (
 	"math"
 
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 const defaultRamp = " .:-=+*#%@"

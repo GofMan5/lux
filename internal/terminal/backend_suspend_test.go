@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/capability"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/capability"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 	"golang.org/x/term"
 )
 

@@ -1,7 +1,7 @@
 // Package layout provides small, content-driven responsive layout primitives.
 package layout
 
-import "github.com/lux-tui/lux/render"
+import "github.com/GofMan5/lux/render"
 
 // Class is a coarse disclosure level derived from available cells.
 type Class uint8

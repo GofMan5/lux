@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/capability"
+	"github.com/GofMan5/lux/capability"
 )
 
 // Tests for the capability negotiation probe: the reply parser, the probe

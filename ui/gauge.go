@@ -1,7 +1,7 @@
 package ui
 
 import (
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 // GaugeState is the progress value a Gauge paints. The zero value is an empty

@@ -4,7 +4,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 func TestNearTriangleWinsRegardlessOfDrawOrder(t *testing.T) {

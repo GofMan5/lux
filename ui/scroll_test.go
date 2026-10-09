@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"testing"
 
-	lux "github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	lux "github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 func scrollAction(next event.Event) Action { return Action{Kind: Scroll, Event: next} }

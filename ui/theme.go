@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/lux-tui/lux/render"
+import "github.com/GofMan5/lux/render"
 
 // Theme is the palette a Context resolves zero-value widget styles against.
 // It is a value: pass a copy to Context.UseTheme, and nothing in this

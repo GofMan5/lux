@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/lux-tui/lux/render"
-	"github.com/lux-tui/lux/ui"
+	"github.com/GofMan5/lux/render"
+	"github.com/GofMan5/lux/ui"
 )
 
 // renderRows returns one line of text per canvas row, skipping empty rows and

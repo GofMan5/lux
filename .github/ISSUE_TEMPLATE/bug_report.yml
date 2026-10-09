@@ -1,0 +1,40 @@
+name: Bug report
+about: Something behaves incorrectly or crashes
+labels: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing. A bug report that includes the version, terminal,
+        and a reproduction is usually fixed within a release cycle.
+  - type: input
+    id: version
+    attributes:
+      label: LUX version
+      description: Tag or commit hash (`go list -m github.com/lux-tui/lux`)
+    validations:
+      required: true
+  - type: input
+    id: terminal
+    attributes:
+      label: Terminal and OS
+      description: e.g. Windows Terminal 1.22 / Windows 11, kitty 0.30 / Linux
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal steps or a small program. Screenshots or pane captures help.
+      placeholder: |
+        1. go run ./examples/01-counter
+        2. Resize the window to 20 columns
+        3. The hint overlaps the counter
+    validations:
+      required: true
+  - type: textarea
+    id: expectation
+    attributes:
+      label: Expected vs actual
+    validations:
+      required: true

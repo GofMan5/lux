@@ -10,10 +10,10 @@ import (
 	"os"
 	"time"
 
-	lux "github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/motion"
-	"github.com/lux-tui/lux/render"
+	lux "github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/motion"
+	"github.com/GofMan5/lux/render"
 )
 
 const (

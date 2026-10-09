@@ -3,7 +3,7 @@ package capability_test
 import (
 	"fmt"
 
-	"github.com/lux-tui/lux/capability"
+	"github.com/GofMan5/lux/capability"
 )
 
 // ExamplePortable shows the fallback used for redirected output: a non-

@@ -3,9 +3,9 @@ package ui_test
 import (
 	"fmt"
 
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
-	"github.com/lux-tui/lux/ui"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
+	"github.com/GofMan5/lux/ui"
 )
 
 // ExampleContext_Checkbox draws one checkbox, then applies the same

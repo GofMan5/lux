@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	lux "github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	lux "github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 func caretOf(t *testing.T, buffer *render.Buffer) (int, int, bool) {

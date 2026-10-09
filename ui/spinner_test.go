@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 var spinNow = time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)

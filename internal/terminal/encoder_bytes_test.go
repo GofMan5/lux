@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/lux-tui/lux/capability"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/capability"
+	"github.com/GofMan5/lux/render"
 )
 
 // present encodes one frame and replays it through the reference grid, so every

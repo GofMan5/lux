@@ -438,7 +438,7 @@ func renderReport(spec machineSpec, aggs []cellAgg, quick bool) string {
 // renderBenchstat emits a benchstat-shaped metrics file.
 func renderBenchstat(spec machineSpec, aggs []cellAgg) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "goos: %s\ngoarch: %s\npkg: github.com/lux-tui/lux/benchmarks\n\n", spec.GOOS, spec.GOARCH)
+	fmt.Fprintf(&b, "goos: %s\ngoarch: %s\npkg: github.com/GofMan5/lux/benchmarks\n\n", spec.GOOS, spec.GOARCH)
 	for _, cell := range aggs {
 		for _, l := range cell.Lanes {
 			if l.frames() <= 0 {

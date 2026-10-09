@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/capability"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
-	"github.com/lux-tui/lux/ui"
+	"github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/capability"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
+	"github.com/GofMan5/lux/ui"
 )
 
 // hangTimeout bounds a test that would otherwise wait forever; a loaded

@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/lux-tui/lux/motion"
+	"github.com/GofMan5/lux/motion"
 )
 
 // ExampleTween samples an eased tween against absolute time: before it

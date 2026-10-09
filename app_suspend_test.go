@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/event"
+	"github.com/GofMan5/lux/event"
 )
 
 // waitForFrames polls the model's frame counter until it reaches want or

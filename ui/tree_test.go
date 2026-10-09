@@ -3,8 +3,8 @@ package ui
 import (
 	"testing"
 
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 // benchTreeRows is a flat sample of the file tree the widget tests use: two

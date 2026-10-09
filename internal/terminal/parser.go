@@ -6,7 +6,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/lux-tui/lux/event"
+	"github.com/GofMan5/lux/event"
 )
 
 const (

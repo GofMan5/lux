@@ -3,7 +3,7 @@ package ui
 import (
 	"math"
 
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/render"
 )
 
 // sparkGlyphs are the eight partial-block glyphs a column can wear as its

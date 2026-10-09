@@ -25,9 +25,9 @@ import (
 	"os"
 	"time"
 
-	"github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 const markerRows = 20

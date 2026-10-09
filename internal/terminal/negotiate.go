@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/lux-tui/lux/capability"
+	"github.com/GofMan5/lux/capability"
 )
 
 // defaultProbeTimeout bounds capability negotiation. A terminal that answers

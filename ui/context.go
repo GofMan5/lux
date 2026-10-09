@@ -4,9 +4,9 @@ package ui
 import (
 	"sync"
 
-	lux "github.com/lux-tui/lux"
-	"github.com/lux-tui/lux/event"
-	"github.com/lux-tui/lux/render"
+	lux "github.com/GofMan5/lux"
+	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/render"
 )
 
 // ID is a stable control identity. IDs must be unique within a frame.

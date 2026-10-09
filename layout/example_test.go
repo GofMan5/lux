@@ -3,8 +3,8 @@ package layout_test
 import (
 	"fmt"
 
-	"github.com/lux-tui/lux/layout"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/layout"
+	"github.com/GofMan5/lux/render"
 )
 
 // ExampleFlex lays out three children across 31 cells with one-cell gaps:

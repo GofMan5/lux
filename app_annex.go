@@ -1,7 +1,7 @@
 package lux
 
 import (
-	"github.com/lux-tui/lux/internal/terminal"
+	"github.com/GofMan5/lux/internal/terminal"
 )
 
 // ProgressState selects the shape a terminal draws for taskbar progress.

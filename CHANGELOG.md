@@ -4,8 +4,14 @@ All notable changes to this project are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
-No version has been tagged yet: everything below is unreleased pre-`v0.1.0`
-work and the API may still change.
+
+## Versioning policy for v0.x
+
+While the major version is 0, **minor releases may break**: a `0.x.0` minor
+bump can change or remove API, and the changelog's Changed/Removed sections
+list every break. Patch releases are strictly compatible — fixes and
+performance only. From `v1.0.0` the project switches to conventional
+semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 

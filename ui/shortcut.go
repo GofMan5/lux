@@ -1,6 +1,6 @@
 package ui
 
-import "github.com/lux-tui/lux/event"
+import "github.com/GofMan5/lux/event"
 
 // ShortcutScope selects where a key binding participates in routing.
 type ShortcutScope uint8

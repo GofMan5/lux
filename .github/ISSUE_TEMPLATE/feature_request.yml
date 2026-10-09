@@ -1,0 +1,25 @@
+name: Feature request
+about: Propose a capability, control, or protocol support
+labels: enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to build that the library blocks today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: The proposal
+      description: API shape, if you have one. Sketches welcome.
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: I checked docs/ROADMAP.md — this is not already planned
+          required: true
+        - label: I checked the "not claimed" lists in README.md — this is not an explicit non-goal
+          required: true

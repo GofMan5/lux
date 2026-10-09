@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/capability"
-	"github.com/lux-tui/lux/render"
+	"github.com/GofMan5/lux/capability"
+	"github.com/GofMan5/lux/render"
 )
 
 // hangTimeout only bounds a test that would otherwise hang forever, so a loaded

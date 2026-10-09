@@ -1,4 +1,4 @@
-module github.com/lux-tui/lux
+module github.com/GofMan5/lux
 
 go 1.23.0
 

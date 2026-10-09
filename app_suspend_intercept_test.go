@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/lux-tui/lux/event"
+	"github.com/GofMan5/lux/event"
 )
 
 // The intercept tests pin the run loop's claim on Ctrl+Z at the only

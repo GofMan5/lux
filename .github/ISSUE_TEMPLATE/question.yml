@@ -1,0 +1,14 @@
+name: Question
+about: Usage questions and "how do I X"
+labels: question
+body:
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: |
+        Mention what you already read (QUICKSTART, ANIMATION,
+        CUSTOM-CONTROL, ARCHITECTURE) so the answer can point at the gap
+        rather than repeat it.
+    validations:
+      required: true
