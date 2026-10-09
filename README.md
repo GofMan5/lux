@@ -258,9 +258,21 @@ while the process was stopped. Models hear both ends as ordinary
 pausing an animation is a one-line `Update` case. The double stop is
 latched out, a plain or closed backend refuses suspension, and a failing
 raw-mode resume keeps the suspension held until a later resume recovers.
-Windows has no job control: a console-close event releases the console
-immediately and reports an Error event before the OS terminates the
-process — best-effort cleanup, not a resume path.
+`lux.WithSuspend(false)` turns the whole behavior off — raw-mode ISIG stays
+disabled, so a custom binding can claim the Ctrl+Z byte instead. Windows
+has no job control: a console-close event releases the console immediately
+and reports an Error event before the OS terminates the process —
+best-effort cleanup, not a resume path.
+
+The whole cycle is verified against real operating-system truth, not
+fakes: an end-to-end suite (`e2e/`, Linux and macOS) runs the runtime
+inside a pseudo-terminal under a live interactive shell, types the 0x1A
+byte, and asserts the shell itself reports `Stopped` — a line only a
+waitpid on a genuinely stopped job produces — before `fg` resumes it.
+A second `SIGTSTP` raised straight at the stopped job is discarded by
+`fg`'s SIGCONT, exactly one suspension is delivered, and keystrokes that
+race the capability probe are replayed against the real kernel input
+buffer.
 
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
@@ -375,12 +387,14 @@ worked stepper compiles as a `ui` test, so the recipe cannot rot; the
 immutable `Theme` (four roles, per-Context, no global mutable style
 table) resolving across all nine styled widgets; and the window title
 (`WithTitle`) riding the enter and leave writes with the XTWINOPS stack
-restore — that closes the widget-truth stage. The real-terminal stage has
-opened: job control (Ctrl+Z suspend / `fg` resume with full repaint,
-Suspend/Resume events, SIGHUP as an error exit, Windows console-close
-cleanup) is in. Next in that stage: PTY-verified suspend/resume, the
-validation matrix, an SSH adapter — and semantic accessibility bridges.
-Graphics protocols follow only after
+restore — that closes the widget-truth stage. The real-terminal stage is under way: job control (Ctrl+Z suspend / `fg`
+resume with full repaint, Suspend/Resume events, SIGHUP as an error exit,
+Windows console-close cleanup) is in, and the whole cycle is pinned by a
+pseudo-terminal end-to-end suite that proves the real kernel stop and the
+real shell's `Stopped` line, the double-stop discard, and probe-racing
+keystroke replay. Next in that stage: the validation matrix, an SSH
+adapter — and semantic accessibility bridges. Graphics protocols follow
+only after
 these paths are measurable.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.

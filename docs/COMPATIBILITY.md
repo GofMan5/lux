@@ -13,7 +13,7 @@ behavior; **planned validation** = plausible path without current evidence.
 | Windows Terminal + ConPTY | implemented, validation pending | VT output, raw input through `x/term`, win32-input-mode keyboard when the mode 9001 probe answers, 100 ms resize polling |
 | Windows 10+ ConHost in cmd/PowerShell | degraded, validation pending | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; answers the mode 9001 probe with full win32-input support, so the keyboard path matches Windows Terminal there; modern mouse behavior depends on console support |
 | Windows 7/8 legacy console | not supported | no published fallback to classic screen-buffer rendering |
-| Unix PTYs on Linux/macOS/BSD | implemented, validation pending | termios raw mode, VT output, `SIGWINCH` resize, `SIGTSTP`/`SIGCONT` suspend-resume round trip |
+| Unix PTYs on Linux/macOS/BSD | implemented, e2e-verified | termios raw mode, VT output, `SIGWINCH` resize, `SIGTSTP`/`SIGCONT` suspend-resume round trip |
 | tmux | planned validation | legacy VT keyboard and mouse; tmux's own DECRPM answers for the output family (DECOM, 2026) are trusted because tmux implements those for its panes; input-family verdicts (kitty, pixel mouse, win32 input) are downgraded by the multiplexer gate so a pane never runs an input encoding tmux did not re-emit — see "Multiplexer provenance" below |
 | GNU screen | planned validation | basic VT/ANSI path only; detected through `$STY` or a `screen*` `$TERM` and gated the same way as tmux; screen itself implements neither 2026 nor kitty for panes |
 | SSH/mosh | planned validation | negotiation runs before the first frame over the same transport; slow links can spend the whole 150 ms budget (raise `LUX_TUI_PROBE_TIMEOUT`), and impaired-link validation remains |
@@ -660,6 +660,16 @@ does this without application code:
   own disposition, so the shell reads clean input while the process is
   stopped. A `SIGTSTP` that arrives while already suspended is refused by
   the latch — one leave, never a double pop.
+- The stop itself is the kernel's, not a signal handler's: lux never
+  registers `SIGTSTP` with the Go runtime, so the disposition stays
+  SIG_DFL and the re-raised stop truly stops the process group (the Go
+  1.21+ runtime swallows a `Notify`→`Reset` cycle's self-raised `TSTP`,
+  which would make the stop a silent no-op). Raw mode disables `ISIG`,
+  so Ctrl+Z arrives as the ordinary byte `0x1A`; the run loop intercepts
+  it, and `lux.WithSuspend(false)` hands that byte back as a key event
+  for an application binding instead. An external `kill -TSTP` is a
+  plain kernel-default stop without leave bytes; the normal resume path
+  still picks the process up.
 - The resume drops the diff baseline: the first Present after resume is a
   full repaint, because the shell or another job may have printed anything
   while the process was stopped. Present while suspended is a clean no-op
@@ -688,9 +698,17 @@ Scope and honest limits:
   immediately — raw input reset, leave written — and reports an Error
   event, but the OS still terminates the process within its ~5-second
   window. This is best-effort cleanup, not a resume path.
-- The signal watcher and the suspend/resume byte contracts are unit-tested
-  on file streams; real-terminal `SIGTSTP`/`fg` evidence lands with the
-  PTY lane of the validation matrix below.
+- The signal watcher and the suspend/resume byte contracts are
+  unit-tested on file streams, and the whole cycle is now verified
+  against real operating-system truth: the `e2e` suite (Linux/macOS) runs
+  the runtime under `creack/pty` with an interactive shell as session
+  leader and asserts the shell's own `Stopped` line after the raw `0x1A`
+  byte, the `fg` resume with full repaint and re-pushed title, the
+  double-`SIGTSTP` discard by `SIGCONT`, and probe-racing keystroke
+  replay through the real kernel input buffer. One stop-chain fact the
+  suite depends on: an orphaned process group (no session leader) has no
+  parent to receive `waitpid`, so the kernel discards its stop signals —
+  which is exactly why the suite runs the shell lane at all.
 
 ## Required degradation ladder
 
@@ -721,8 +739,8 @@ report a viewport. `WithIO` changes the default adapter's files;
 - Parse partial input incrementally with bounded memory and configurable escape
   disambiguation.
 - Keep the implemented normal/error/panic restoration checks green; signal
-  and suspend/resume handling is implemented — its real-terminal evidence
-  (PTY lane) must land before v1.
+  and suspend/resume handling is implemented and the PTY lane (the
+  `e2e` module, Linux) is green — macOS and one BSD lane remain for CI.
 - Treat the effective chain separately: outer emulator → multiplexer →
   transport → application.
 - Gate OSC, clipboard, notifications, and graphics passthrough by positive
@@ -742,7 +760,7 @@ run at least:
 | Remote | OpenSSH local→remote; delayed and bandwidth-limited stream |
 | Noninteractive | pipe, file, CI, `TERM=dumb`, `NO_COLOR` |
 | Unicode | combining marks, ZWJ emoji, flags, VS15/VS16, CJK, final-column wide glyph |
-| Lifecycle | resize storm, writer failure, cancellation, panic cleanup, suspend/resume |
+| Lifecycle | resize storm, writer failure, cancellation, panic cleanup, suspend/resume — the `e2e` PTY module covers the suspend/resume round trip and probe-race replay on Linux |
 
 Compatibility evidence belongs in reproducible scripts or CI artifacts, not in
 an anecdotal “works on my terminal” table.

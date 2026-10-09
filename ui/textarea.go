@@ -335,13 +335,28 @@ func (t *TextArea) applyScroll(action Action) bool {
 	return t.Scroll.Apply(action, t.layout.totalRows, rows)
 }
 
+// applyHistoryKey maps the editor undo and redo bindings onto the history
+// stack. Two families qualify: the ctrl family — ctrl+z undo, ctrl+y redo,
+// ctrl+shift+z redo — and the alt escape hatch, pure alt+u undo, which
+// exists because the runtime claims ctrl+z for job control by default; a
+// nano-style alias keeps undo reachable inside a live terminal without the
+// application giving the whole key up. Super, hyper, and meta never carry
+// editor history, and the alt alias must be pure alt — ctrl+alt+u is not
+// undo, and a terminal never sends it as such.
 func (t *TextArea) applyHistoryKey(key event.KeyEvent) (handled, changed bool) {
-	if key.Code != event.KeyRune || key.Mod&event.ModCtrl == 0 || key.Mod&(event.ModAlt|event.ModSuper) != 0 {
+	if key.Code != event.KeyRune {
 		return false, false
 	}
+	var undo, redo bool
 	r := unicode.ToLower(key.Rune)
-	undo := r == 'z' && key.Mod&event.ModShift == 0
-	redo := r == 'y' && key.Mod&event.ModShift == 0 || r == 'z' && key.Mod&event.ModShift != 0
+	if key.Mod&event.ModAlt != 0 {
+		if key.Mod&(event.ModCtrl|event.ModShift|event.ModSuper|event.ModHyper|event.ModMeta) == 0 && r == 'u' {
+			undo = true
+		}
+	} else if key.Mod&event.ModCtrl != 0 && key.Mod&(event.ModSuper|event.ModHyper|event.ModMeta) == 0 {
+		undo = r == 'z' && key.Mod&event.ModShift == 0
+		redo = r == 'y' && key.Mod&event.ModShift == 0 || r == 'z' && key.Mod&event.ModShift != 0
+	}
 	if !undo && !redo {
 		return false, false
 	}
@@ -359,7 +374,10 @@ func (t *TextArea) applyHistoryKey(key event.KeyEvent) (handled, changed bool) {
 func (t *TextArea) applyKey(key event.KeyEvent, bounds render.Rect) {
 	shift := key.Mod&event.ModShift != 0
 	ctrl := key.Mod&event.ModCtrl != 0
-	if key.Mod&(event.ModAlt|event.ModSuper) != 0 {
+	// Alt, super, hyper, and meta chords are the application's to bind, so
+	// the editor never eats them as edits — the same family boundary the
+	// history bindings honor.
+	if key.Mod&(event.ModAlt|event.ModSuper|event.ModHyper|event.ModMeta) != 0 {
 		return
 	}
 	count := min(max(int(key.Repeat), 1), 4096)

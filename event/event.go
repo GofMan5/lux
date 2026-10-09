@@ -34,6 +34,38 @@ const (
 	Resume
 )
 
+// String names the kind for logs and test failures; the names match the
+// constants, lowercase.
+func (k Kind) String() string {
+	switch k {
+	case None:
+		return "none"
+	case Key:
+		return "key"
+	case Text:
+		return "text"
+	case Paste:
+		return "paste"
+	case Mouse:
+		return "mouse"
+	case Resize:
+		return "resize"
+	case Focus:
+		return "focus"
+	case Frame:
+		return "frame"
+	case Quit:
+		return "quit"
+	case Error:
+		return "error"
+	case Suspend:
+		return "suspend"
+	case Resume:
+		return "resume"
+	}
+	return fmt.Sprintf("kind(%d)", uint8(k))
+}
+
 // Event is deliberately a compact tagged value instead of an interface tree.
 // Fields unrelated to Kind are zero-valued.
 type Event struct {

@@ -1,0 +1,143 @@
+Stage 9, slice 2 — real-terminal truth: PTY end-to-end suite + A2 stop design — local verification, 2026-10-08
+=================================================================================================================
+
+Scope (ROADMAP.md, stage 9 items 1 and 4): suspend/resume proven against
+a real kernel and a real shell, plus the runtime pieces that design
+requires. Code:
+  - e2e/ (NEW, own Go module, linux/darwin tests): go.mod (creack/pty
+    only — the core module stays dependency-clean), doc.go (package
+    contract: drive a real pty against the PUBLIC lux API, no internal
+    imports), childapp/main.go (scripted lux.Run model with EVT markers,
+    ready/dirty/quit), pty_unix_test.go (4 tests + harness: pty pair,
+    session-leading interactive busybox `sh -i`, feed bytes, waitpid-free
+    "Stopped" oracle, snapshot/wire capture).
+  - e2e/childapp: time.Sleep(150ms) after Run returns — Linux flushes
+    the master's pending input when the LAST slave fd closes (the
+    process exit itself), so the test reader needs a window in which
+    the final Close writes are readable while the slave still exists.
+  - app.go: WithSuspend(enabled bool) Option (default true) + the run
+    loop's intercept of the 0x1A byte (after the key-release filter,
+    before applyEvent) that opens the suspend handshake instead of
+    delivering a Key event.
+  - internal/terminal/platform_unix.go: A2 stop design — lux never
+    Notify's SIGTSTP (the kernel disposition stays SIG_DFL so the
+    re-raise truly stops the group; Go 1.21+ runtime swallows a
+    kill-sent TSTP after Notify->Reset). Raw mode runs ISIG-off, so
+    Ctrl+Z arrives as byte 0x1A. SIGCONT watch stays for the resume
+    side; SIGHUP watch unchanged.
+  - event/event.go: Kind.String() — lowercase kind names ("key",
+    "suspend", "resume", ...) for logs and test failures.
+  - ui/textinput.go, ui/textarea.go: pure alt+u undo alias (for
+    terminals where the suspend handshake claims ctrl+z) and hyper/meta
+    chord exclusion — the editors treat hyper/meta-modified keys as
+    non-editor keys (same family boundary as alt/super), so
+    hyper+u no longer inserts 'u'.
+  - app_suspend_intercept_test.go, internal/terminal/
+    backend_handshake_unix_test.go: unit pins for the intercept order,
+    WithSuspend(false) key delivery, and the handshake state machine.
+Docs: README.md (suspend section + e2e paragraph, stage narrative),
+CHANGELOG.md (Added: WithSuspend, Kind.String, e2e suite, alt+u alias;
+Changed: A2/TSTP disposition, hyper/meta chord exclusion),
+docs/COMPATIBILITY.md (environment row e2e-verified, kernel-stop bullet,
+e2e evidence bullet, v1-requirement, validation matrix row),
+docs/ROADMAP.md (stage 9 items 1 and 4 marked done, stop-chain facts).
+
+API (verified by e2e on a real kernel, not by inspection):
+  - WithSuspend(false): the handshake never runs, ISIG stays off, and
+    the 0x1A byte reaches the model as an ordinary Key event a custom
+    binding can own (pinned by TestSuspendInterceptOptOutRestoresTheKey).
+  - Interception order: a ctrl+z keystroke NEVER reaches the model as a
+    Key; the model sees Suspend (before the leave bytes) and later
+    Resume. With the handshake raced by a probe, the model sees Suspend
+    then the replayed Key — never a spurious Resume.
+  - e2e byte truth: exactly one leave sequence on a plain exit
+    (enter ... leave), title pop \x1b[23;0t as the FINAL bytes on the
+    wire, cursor shown, leave bytes precede the pop. Suspend+close
+    writes leave exactly twice (idempotent, test-pinned), titleSet
+    exactly twice (open + resume).
+  - Shell oracle: under `sh -i` as session leader, typing 0x1a produces
+    the shell's own "Stopped" line — proof of a real waitpid-visible
+    stop of the process group. `fg` resumes: S:1 R:1 to the model, full
+    repaint, title re-pushed. A second SIGTSTP raised straight at the
+    stopped job is discarded (SIGCONT flushes pending stop signals).
+  - Probe-race replay survives a real kernel input buffer: keystrokes
+    that race the DA1/kitty probe are delivered after it, not eaten.
+
+Test evidence (host windows/amd64, i5-10400F 12 threads, Go 1.25.5,
+2026-10-08):
+  gofmt -l .                           empty
+  go vet ./...                         clean
+  go test ./... -count=1 -timeout 300s ok, all 13 packages
+  GOOS=linux go vet ./internal/terminal ./e2e   clean (unix-only files
+                                       type-check; e2e module vetted in
+                                       its own module below)
+  go mod verify                        all modules verified
+  docker golang:1.25-alpine root lane (GOFLAGS=-buildvcs=false):
+       gofmt -l . && go vet ./... &&
+       go test -count=1 ./... &&
+       go mod verify                   exit 0, "root lane OK"
+  docker golang:1.25-alpine e2e lane:
+       cd /src/e2e && go vet ./... &&
+       go test -count=1 -v ./...       exit 0, "e2e lane OK" — 4/4
+                                       tests pass in 0.750s
+                                       (TestPTYRendersReceivesKeys
+                                        ResizesAndRestores,
+                                        TestPTYSuspendResumeJobControl,
+                                        TestPTYKeystrokesRacingTheProbe
+                                        AreReplayed,
+                                        TestPTYSuspendRefusesTo
+                                        DoubleWrite)
+  flake check, docker, /src/e2e:       go test -count=3 ./... —
+                                       "ok github.com/lux-tui/lux/e2e
+                                       1.682s" (3 consecutive green)
+  benchmarks (host, -benchtime=1s, -bench=Bench because pwsh mangles
+       -bench=. by dropping the dot; same regex family):
+       ui: 28 benchmark results, all green (41.4s package time) —
+           SpinnerDraw 713 ns/op (1 alloc), GaugeDraw 14667 (1),
+           CheckboxDraw 13969 (2), RadioGroupDraw 27320 (4),
+           SelectDrawClosed/Open 6236/7052 (1 each), SparklineDraw
+           16771 (1), TabsDraw 111434 (2), TreeDraw 298577 (11),
+           TableDraw 2637045 (41), TextAreaDraw 831447 (6),
+           TextAreaKeystroke/many-lines 78796 (7),
+           TextInput/32 11069 (0 allocs), WheelBubbling/32 488 (0),
+           HitRouting/1000 89.6 (0), ScrollRangeMillion/80 54.2 (0)
+       render: 12 green (20.2s) — TextWidthOverlay 3567 (3 allocs),
+           CanvasTextOverlay 20346 (2), WrapWords64KiB 15.16 ms,
+           CanvasFrame 1.447 ms (0 allocs), BufferDiffNoChanges 113726
+       scene3d: Renderer 80x24 294355 ns/op 13.05 MB/s (0 allocs),
+           160x48 1131503 ns/op 13.57 MB/s
+       internal/terminal: EncodeFrame 114090 ns/op 249 bytes/frame
+           (0 allocs), ScanUnchanged 43847, ScrollFrame 254686,
+           IdlePresent 44901 (0 allocs)
+       Deltas vs the prior baseline run are within host-load noise
+       (same machine, same Go; several benches ~10% slower, none
+       regressed structurally — no alloc-count increase anywhere).
+  golangci-lint: NOT RUN (not installed on this machine; recorded as
+      skipped, not as passed)
+
+Stop-chain facts discovered while making the lane green (mirrored in
+ROADMAP/README/COMPATIBILITY):
+  (a) An orphaned process group has no parent to waitpid it, so the
+      kernel DISCARDS its stop signals — a direct child lane can never
+      observe a stop; the shell lane (sh -i as session leader) is the
+      only honest oracle.
+  (b) The Go 1.21+ runtime swallows a self-raised TSTP after
+      Notify->Reset — the A2 design (never Notify TSTP at all) exists
+      because of this.
+  (c) Linux flushes the master's pending unread input when the last
+      slave fd closes: a child that exits immediately loses its final
+      Close writes — hence childapp's 150 ms post-Run slave hold.
+  (d) SIGCONT discards pending stop signals: raising a second SIGTSTP
+      straight at a stopped job is safe — fg's SIGCONT throws it away,
+      so exactly one suspension is delivered.
+  (e) The wire ends with the title pop after the leave bytes — the
+      shipped protocol order is now e2e-pinned, not just unit-pinned.
+
+Not claimed:
+  - macOS and BSD PTY lanes: the e2e module tags tests linux+darwin but
+    only the Linux lane has run (no macOS host here) — recorded in
+    docs/COMPATIBILITY.md as remaining for CI.
+  - CI wiring (ubuntu-lane in a pipeline) — stage 10 release work.
+  - The manual validation matrix (Windows Terminal/ConHost/iTerm2/tmux/
+    screen/SSH/...) — stage 9 slice 3, .verification/matrix/.
+  - golangci-lint — skipped, see above.

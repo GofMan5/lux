@@ -143,6 +143,28 @@ func (w *resizeWatcher) stop() {
 	}
 }
 
+// SuspendSupported reports whether the platform implements job-control
+// suspension. The Windows console has no analogue: processes are not grouped
+// under a shell's job control, there is no stop-and-continue handshake, and
+// the console's Ctrl handling is a different mechanism entirely. Suspend on
+// Windows therefore always reports false and the run loop lets the suspend
+// key reach the model as an ordinary key event.
+const SuspendSupported = false
+
+// CanSuspend is always false on the Windows console: the pre-flight lets
+// the run loop drop Ctrl+Z onto the model without ever synthesizing a
+// Suspend event for a process that cannot stop.
+func (b *Backend) CanSuspend() bool {
+	return false
+}
+
+// Suspend is the Windows half of the suspend handshake contract: it never
+// starts one. The console has no job control to hand a terminal back to,
+// so the honest answer is the refusal, not an emulation.
+func (b *Backend) Suspend(context.Context) (bool, error) {
+	return false, nil
+}
+
 // errConsoleClose is the error the lifecycle watcher reports for the console
 // events Windows delivers as SIGTERM: CTRL_CLOSE_EVENT (the window's close
 // button), CTRL_LOGOFF_EVENT, and CTRL_SHUTDOWN_EVENT.

@@ -269,6 +269,80 @@ func TestTextAreaUndoRedoAndInvalidation(t *testing.T) {
 	}
 }
 
+// TestTextAreaHistoryKeyBindings pins the two binding families the editor
+// claims: ctrl+z undo, ctrl+y and ctrl+shift+z redo, and the pure alt+u
+// undo alias for terminals where the runtime's suspend handshake owns
+// ctrl+z. The alias must be pure alt — ctrl+alt+u and alt+shift+u are
+// different chords and reach the application — and super/hyper/meta never
+// carry editor history, so window-manager chords stay available.
+func TestTextAreaHistoryKeyBindings(t *testing.T) {
+	newArea := func() *TextArea {
+		area := &TextArea{}
+		typed(area, "abc")
+		return area
+	}
+	binding := func(area *TextArea, r rune, mod event.Mod) {
+		area.Apply(areaAction(event.RuneKey(r, mod)))
+	}
+
+	area := newArea()
+	binding(area, 'u', event.ModAlt)
+	if area.Text() != "ab" {
+		t.Fatalf("alt+u undo = %q; want %q", area.Text(), "ab")
+	}
+	binding(area, 'y', event.ModCtrl)
+	if area.Text() != "abc" {
+		t.Fatalf("ctrl+y redo = %q; want %q", area.Text(), "abc")
+	}
+	binding(area, 'z', event.ModCtrl)
+	if area.Text() != "ab" {
+		t.Fatalf("ctrl+z undo = %q; want %q", area.Text(), "ab")
+	}
+	binding(area, 'z', event.ModCtrl|event.ModShift)
+	if area.Text() != "abc" {
+		t.Fatalf("ctrl+shift+z redo = %q; want %q", area.Text(), "abc")
+	}
+	// A legacy terminal delivers the raw 0x1A byte as uppercase 'Z'; the
+	// kitty protocol and the Windows console report lowercase 'z'.
+	binding(area, 'Z', event.ModCtrl)
+	if area.Text() != "ab" {
+		t.Fatalf("legacy ctrl+z undo = %q; want %q", area.Text(), "ab")
+	}
+	// Caps lock does not disqualify the alias.
+	caps := newArea()
+	binding(caps, 'U', event.ModAlt|event.ModCapsLock)
+	if caps.Text() != "ab" {
+		t.Fatalf("alt+capslock+u undo = %q; want %q", caps.Text(), "ab")
+	}
+
+	for _, tc := range []struct {
+		name string
+		mod  event.Mod
+	}{
+		{"ctrl+alt+u is not the alias", event.ModAlt | event.ModCtrl},
+		{"alt+shift+u is not the alias", event.ModAlt | event.ModShift},
+		{"super+u never touches history", event.ModSuper},
+		{"hyper+u never touches history", event.ModHyper},
+		{"meta+u never touches history", event.ModMeta},
+	} {
+		area := newArea()
+		binding(area, 'u', tc.mod)
+		if area.Text() != "abc" {
+			t.Fatalf("%s: text = %q", tc.name, area.Text())
+		}
+		binding(area, 'z', event.ModCtrl|tc.mod)
+		if area.Text() != "abc" {
+			t.Fatalf("%s: ctrl family stolen; text = %q", tc.name, area.Text())
+		}
+	}
+	// Undo counts key repeats, so a burst is one deliberate undo streak.
+	burst := newArea()
+	burst.Apply(areaAction(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'u', Mod: event.ModAlt, Repeat: 2}}))
+	if burst.Text() != "a" {
+		t.Fatalf("repeated alt+u undo = %q; want %q", burst.Text(), "a")
+	}
+}
+
 func TestTextAreaUndoBoundsAndDisable(t *testing.T) {
 	bounded := &TextArea{UndoBytes: 64}
 	typed(bounded, strings.Repeat("x", 30))

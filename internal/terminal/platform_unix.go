@@ -106,86 +106,148 @@ func (w *resizeWatcher) stop() {
 	}
 }
 
-// watchLifecycle translates Unix job-control signals into the terminal
-// suspend and resume dance. SIGTSTP is caught so the stop happens only after
-// the leave sequences and cooked restore have run — Ctrl+Z would otherwise
-// stop the process mid-frame with raw mode, the alternate screen, and every
-// negotiated mode still latched, leaving the shell unusable. The stop itself
-// is then handed back to the kernel: Notify consumed the signal, so the
-// default disposition has to be restored and the signal re-raised, which is
-// the canonical job-control handshake (the same one the shells, tmux, and
-// vim run). SIGCONT re-enters the terminal state and reports the resume; a
-// SIGHUP means the controlling terminal is gone, and exits through the error
-// event the read loop's EOF uses.
+// SuspendSupported reports whether the platform implements job-control
+// suspension. Unix does; the Windows console has no job-control analogue, so
+// Suspend there always reports false and the suspend key reaches the model
+// as an ordinary key event.
+const SuspendSupported = true
+
+// raiseStop stops the whole process group the way a shell's job control
+// would, indirected as a var so the suspend handshake is testable in a
+// process that must not really stop: unit tests swap the var and pin the
+// byte sequence around it, while the PTY verification lane runs the real
+// kernel stop. The group id 0 — not getpid — matters: the shell continues
+// the group, and a stop aimed at one pid leaves group semantics behind.
+var raiseStop = func() error { return unix.Kill(0, unix.SIGTSTP) }
+
+// CanSuspend reports whether a job-control handshake can start right now.
+// It is the pre-flight the run loop uses to decide whether a Ctrl+Z means
+// suspend or an ordinary key: the Suspend event must not reach a model
+// whose process is never going to stop, so the refusal has to be knowable
+// before the handshake, not discovered inside it. A true answer is a
+// promise — while the application runs, only the run loop moves the
+// suspend state, so the Suspend call that follows either enters the
+// handshake or fails with an error.
+func (b *Backend) CanSuspend() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.opened && !b.plain && !b.suspended
+}
+
+// watchLifecycle watches for terminal loss. Job-control suspension is NOT
+// handled here: this process never notifies SIGTSTP, so the kernel's default
+// disposition survives untouched and a stop that arrives anyway — an
+// external kill -TSTP, or a Ctrl+Z forwarded by a terminal in cooked mode —
+// stops the process the ordinary kernel way. The raw-mode runtime claims
+// the Ctrl+Z byte itself and runs the suspend handshake on the run loop's
+// goroutine through Backend.Suspend, which is the only place that can
+// order the model's Suspend event before the leave sequences. What the
+// watcher owns is SIGHUP: the controlling terminal went away, which is an
+// error event and an exit, never a suspend. Reset in the deferred cleanup
+// restores the default disposition a shell expects to find after the
+// program exits — a terminal loss must not leave behind a process that
+// survives the next HUP.
 func (b *Backend) watchLifecycle(ctx context.Context) {
-	signals := make(chan os.Signal, 8)
-	signal.Notify(signals, syscall.SIGTSTP, syscall.SIGCONT, syscall.SIGHUP)
-	defer func() {
-		// Reset restores the dispositions a shell expects to find after the
-		// program exits: Stop only detaches this channel and leaves the
-		// runtime consuming the signals. SIGHUP's default terminate matters
-		// most — a terminal loss must not leave a deaf process behind.
-		signal.Reset(syscall.SIGTSTP, syscall.SIGCONT, syscall.SIGHUP)
-	}()
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGHUP)
+	defer signal.Reset(syscall.SIGHUP)
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-signals:
+			// The controlling terminal is gone: raw mode, the alternate
+			// screen, and any restore all died with it — writes would fail
+			// and the read loop already saw EOF — so the loss is reported
+			// through the same error path and the application exits through
+			// its deferred Close. The watcher stops too: a dead terminal
+			// produces no further job control.
+			b.mu.Lock()
+			opened := b.opened
+			b.mu.Unlock()
+			if opened {
+				b.deliverLifecycle(event.Event{Kind: event.Error, Err: errHangup})
+			}
+			return
+		}
+	}
+}
+
+// Suspend hands the terminal to the shell, stops the process group, and
+// blocks until the shell continues it. It is the application-facing half of
+// job control: the run loop calls it after the model has already seen the
+// Suspend event, so the leave sequences that make the terminal ordinary
+// land on a model that is already paused.
+//
+// The stop itself is never notified by this process — the Go runtime
+// installs no handler for a signal nobody calls Notify on, so SIGTSTP's
+// kernel default survives — and is raised on the whole group, exactly the
+// handshake shells, tmux, and vim run. A second Ctrl+Z inside the stop
+// window queues a second stop; SIGCONT always discards pending stop
+// signals, so a queued stop cannot wedge the resume.
+//
+// The returned bool reports which of two outcomes happened: true means the
+// terminal was handed over and the process group really stopped, and the
+// caller follows up with the Resume event; false means the handshake never
+// started — a plain or closed backend refuses before anything changes, so
+// the caller should let the suspend key reach the model as an ordinary key
+// event. An error means the window ended abnormally: a hangup lost the
+// terminal, the context was canceled, or the re-entry failed. Every error
+// path relies on the deferred Close for cleanup: the leave sequences are
+// idempotent, and Close's own leave after a failed resume is the
+// documented belt-and-braces.
+//
+// SIGCONT and SIGHUP are armed on a private channel before the stop is
+// raised, so a continue that races ahead of the observed stop still wakes
+// the wait. The channel is detached with Stop — not Reset — when the wait
+// ends: Reset would also tear down the lifecycle watcher's SIGHUP
+// registration, and a Suspend call must never silence the hangup watcher.
+func (b *Backend) Suspend(ctx context.Context) (bool, error) {
+	if !b.suspendTerminal() {
+		return false, nil
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGCONT, syscall.SIGHUP)
+	defer signal.Stop(signals)
+	if err := raiseStop(); err != nil {
+		// The group stop itself failed, which only happens on a malformed
+		// call; the terminal is already handed over and latched, so the
+		// error routes the exit and the deferred Close restores.
+		return true, err
+	}
+	if err := b.waitContinue(ctx, signals); err != nil {
+		return true, err
+	}
+	if err := b.resumeTerminal(); err != nil {
+		return true, err
+	}
+	// The terminal may have been resized while the process was stopped; the
+	// SIGWINCH the resize watcher buffers is delivered only after the
+	// continue, so the fresh size rides the wakeup without waiting for it,
+	// and the slot's last-wins semantics keep the duplicate harmless.
+	if width, height, err := terminalSize(b.input); err == nil {
+		deliverResize(b.resizes, event.ResizeTo(width, height))
+	}
+	return true, nil
+}
+
+// waitContinue blocks until SIGCONT, a hangup, or cancellation — the three
+// ways the stop window can end. The continue channel is armed before the
+// stop is raised, so a shell's fg that races ahead of the observed stop
+// still wakes the wait. A hangup ends the window with errHangup; the error
+// is returned rather than delivered as an event because the caller is the
+// run loop itself — the same goroutine that would have consumed the event.
+func (b *Backend) waitContinue(ctx context.Context, signals <-chan os.Signal) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
 		case sig := <-signals:
 			switch sig {
-			case syscall.SIGTSTP:
-				if !b.suspendTerminal() {
-					// Plain, closed, or already suspended: the signal is
-					// consumed and the state is either absent or already
-					// correct, so the stop is not re-raised — a closed
-					// backend must not stop a process that is exiting.
-					continue
-				}
-				b.deliverLifecycle(event.Event{Kind: event.Suspend})
-				// Reset restores SIG_DFL before the re-raise; the SIGCONT
-				// and SIGHUP arms stay registered, so the continue wakes
-				// this watcher and a terminal loss still reports. The
-				// process stops inside the kill and returns here only
-				// after the shell's SIGCONT.
-				signal.Reset(syscall.SIGTSTP)
-				_ = unix.Kill(unix.Getpid(), unix.SIGTSTP)
-				// Re-register before taking the terminal back, so a second
-				// Ctrl+Z landing in this window is queued and handled
-				// instead of stopping the process behind raw mode's back.
-				signal.Notify(signals, syscall.SIGTSTP)
-				if err := b.resumeTerminal(); err != nil {
-					b.deliverLifecycle(event.Event{Kind: event.Error, Err: err})
-					continue
-				}
-				// The terminal may have been resized while the process was
-				// stopped; the SIGWINCH the resize watcher buffers is
-				// delivered only after the continue, so the fresh size
-				// rides the wakeup without waiting for it, and the slot's
-				// last-wins semantics keep the duplicate harmless.
-				if width, height, err := terminalSize(b.input); err == nil {
-					deliverResize(b.resizes, event.ResizeTo(width, height))
-				}
-				b.deliverLifecycle(event.Event{Kind: event.Resume})
 			case syscall.SIGCONT:
-				// A continue without a matching stop through this watcher —
-				// kill -CONT on a background job, most commonly — finds the
-				// terminal state already current, so nothing is re-entered
-				// and no event is synthesized: a resume that was never
-				// suspended is a no-op, not a repaint trigger.
+				return nil
 			case syscall.SIGHUP:
-				// The controlling terminal is gone: raw mode, the alternate
-				// screen, and any restore all died with it — writes would
-				// fail and the read loop already saw EOF — so the loss is
-				// reported through the same error path and the application
-				// exits through its deferred Close. The watcher stops too:
-				// a dead terminal produces no further job control.
-				b.mu.Lock()
-				opened := b.opened
-				b.mu.Unlock()
-				if opened {
-					b.deliverLifecycle(event.Event{Kind: event.Error, Err: errHangup})
-				}
-				return
+				return errHangup
 			}
 		}
 	}

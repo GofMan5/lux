@@ -137,6 +137,69 @@ func TestTextInputUndoRedoAndInvalidation(t *testing.T) {
 	}
 }
 
+// TestTextInputHistoryKeyBindings pins the same two binding families as
+// the textarea: ctrl+z undo, ctrl+y and ctrl+shift+z redo, and the pure
+// alt+u undo alias for terminals where the runtime's suspend handshake
+// owns ctrl+z. Impure alt chords and super/hyper/meta are never history.
+func TestTextInputHistoryKeyBindings(t *testing.T) {
+	newInput := func() *TextInput {
+		input := &TextInput{}
+		input.SetValue("a")
+		input.Apply(inputAction(event.RuneKey('b', 0)))
+		input.Apply(inputAction(event.RuneKey('c', 0)))
+		return input
+	}
+
+	input := newInput()
+	if !input.Apply(inputAction(event.RuneKey('u', event.ModAlt))) || input.Value != "ab" {
+		t.Fatalf("alt+u undo = %q", input.Value)
+	}
+	if !input.Apply(inputAction(event.RuneKey('y', event.ModCtrl))) || input.Value != "abc" {
+		t.Fatalf("ctrl+y redo = %q", input.Value)
+	}
+	if !input.Apply(inputAction(event.RuneKey('z', event.ModCtrl))) || input.Value != "ab" {
+		t.Fatalf("ctrl+z undo = %q", input.Value)
+	}
+	if !input.Apply(inputAction(event.RuneKey('Z', event.ModCtrl))) || input.Value != "a" {
+		t.Fatalf("legacy ctrl+z undo = %q", input.Value)
+	}
+	if !input.Apply(inputAction(event.RuneKey('z', event.ModCtrl|event.ModShift))) || input.Value != "ab" {
+		t.Fatalf("ctrl+shift+z redo = %q", input.Value)
+	}
+	// Caps lock does not disqualify the alias.
+	caps := newInput()
+	if !caps.Apply(inputAction(event.RuneKey('U', event.ModAlt|event.ModCapsLock))) || caps.Value != "ab" {
+		t.Fatalf("alt+capslock+u undo = %q", caps.Value)
+	}
+
+	for _, tc := range []struct {
+		name string
+		mod  event.Mod
+	}{
+		{"ctrl+alt+u is not the alias", event.ModAlt | event.ModCtrl},
+		{"alt+shift+u is not the alias", event.ModAlt | event.ModShift},
+		{"super+u never touches history", event.ModSuper},
+		{"hyper+u never touches history", event.ModHyper},
+		{"meta+u never touches history", event.ModMeta},
+	} {
+		input := newInput()
+		input.Apply(inputAction(event.RuneKey('u', tc.mod)))
+		if input.Value != "abc" {
+			t.Fatalf("%s: value = %q", tc.name, input.Value)
+		}
+		input.Apply(inputAction(event.RuneKey('z', event.ModCtrl|tc.mod)))
+		if input.Value != "abc" {
+			t.Fatalf("%s: ctrl family stolen; value = %q", tc.name, input.Value)
+		}
+	}
+	// A held key with repeats over-undoes and stops at the beginning.
+	burst := newInput()
+	burst.Apply(inputAction(event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'u', Mod: event.ModAlt, Repeat: 3}}))
+	if burst.Value != "a" {
+		t.Fatalf("repeated alt+u undo = %q; want %q", burst.Value, "a")
+	}
+}
+
 func TestTextInputUndoBoundsAndDisable(t *testing.T) {
 	input := TextInput{UndoBytes: 2}
 	input.SetValue("a")

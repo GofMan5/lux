@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime/debug"
 	"time"
+	"unicode"
 
 	"github.com/lux-tui/lux/capability"
 	"github.com/lux-tui/lux/event"
@@ -219,6 +220,20 @@ func WithWidthPolicy(policy render.WidthPolicy) Option {
 	}
 }
 
+// WithSuspend controls whether the runtime claims Ctrl+Z for job control.
+// The default is on: in a terminal, Ctrl+Z is the suspend reflex every
+// classic program honors, so the runtime runs the full handshake — the
+// model sees Suspend, the terminal is handed back to the shell, the process
+// group stops, and on the shell's fg the model sees Resume and the screen
+// repaints — without the application writing any signal code. Passing false
+// lets Ctrl+Z reach the model as an ordinary key event instead, for
+// applications that want the key for themselves; on platforms without job
+// control (the Windows console) the option is inert either way and the key
+// always reaches the model.
+func WithSuspend(enabled bool) Option {
+	return func(config *config) error { config.suspend = enabled; return nil }
+}
+
 type config struct {
 	backend                       Backend
 	input, output                 *os.File
@@ -228,12 +243,13 @@ type config struct {
 	keyReleases                   bool
 	pixelMouse                    bool
 	hyperlinks                    bool
+	suspend                       bool
 	title                         string
 	widthPolicy                   render.WidthPolicy
 }
 
 func defaultConfig() config {
-	return config{input: os.Stdin, output: os.Stdout, maxFPS: 60, maxWidth: 500, maxHeight: 200, fallbackWidth: 80, fallbackHeight: 24}
+	return config{input: os.Stdin, output: os.Stdout, maxFPS: 60, maxWidth: 500, maxHeight: 200, fallbackWidth: 80, fallbackHeight: 24, suspend: true}
 }
 
 // defaultBackendOptions turns app settings into backend options for the
@@ -454,6 +470,12 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 				// Opting in via WithKeyReleases restores the raw stream.
 				continue
 			}
+			if settings.suspend && isSuspendKey(next) {
+				if done, err := suspendForKey(ctx, model, settings, next, &width, &height, &dirty, startCommand); done || err != nil {
+					return err
+				}
+				continue
+			}
 			if done, err := applyEvent(model, next, settings, &width, &height, &dirty, startCommand); done || err != nil {
 				return err
 			}
@@ -551,6 +573,85 @@ func applyEvent(model Model, next event.Event, settings config, width, height *i
 	startCommand(model.Update(next))
 	*dirty = true
 	return false, nil
+}
+
+// suspendTransport is the optional job-control handshake a backend can
+// offer the runtime. It is deliberately not part of Backend: test fakes,
+// plain streams, and SSH adapters have no process group to stop, and the
+// run loop reaches it through a type assertion so those backends simply
+// never suspend through this path.
+type suspendTransport interface {
+	// CanSuspend reports whether a handshake could start right now; the
+	// answer must be knowable before any Suspend event is delivered.
+	CanSuspend() bool
+	// Suspend hands the terminal over, stops the process group, and blocks
+	// until the shell continues it. False means the handshake never
+	// started and the key should fall through to the model.
+	Suspend(context.Context) (bool, error)
+}
+
+// isSuspendKey reports whether an event is the Ctrl+Z press the runtime
+// claims for job control. The rune arrives spelled two ways — a legacy
+// terminal sends the raw byte 0x1A, which the parser decodes as rune(byte
+// + '@') = 'Z' uppercase, while the kitty keyboard protocol and the
+// Windows console report the typed 'z' — so both spellings match. Presses
+// and auto-repeats both qualify — a held Ctrl+Z is one suspend intent —
+// and Shift does not disqualify, because a legacy terminal reports
+// Ctrl+Shift+Z as the same 0x1A byte; releases are excluded so a
+// WithKeyReleases stream cannot suspend twice on one press.
+func isSuspendKey(next event.Event) bool {
+	if next.Kind != event.Key || next.Key.Code != event.KeyRune || unicode.ToLower(next.Key.Rune) != 'z' {
+		return false
+	}
+	return next.Key.Mod&event.ModCtrl != 0 &&
+		next.Key.Mod&(event.ModAlt|event.ModSuper) == 0 &&
+		next.Key.Action != event.ActionRelease
+}
+
+// suspendForKey runs the job-control handshake for one Ctrl+Z press, or —
+// when the backend cannot suspend — delivers the key as the ordinary event
+// it always was. The ordering is the contract: the model pauses first, so
+// the leave sequences that make the terminal ordinary land on a model that
+// is already suspended; the handshake then runs synchronously on the run
+// loop's goroutine, which is safe precisely because the process is about
+// to stop — no frame composes, no command finishes, and the reader
+// goroutine is frozen in a read the kernel will not complete until the
+// shell continues the group. Keystrokes that land in the stop window wait
+// in the terminal's kernel buffer and replay after the continue.
+//
+// The Resume event is delivered from here rather than from the backend, so
+// the model's suspend bookkeeping and the run loop's repaint dirtying stay
+// one ordering: event, handshake, event. The backend's diff baseline is
+// already dropped by its own resume path, so the first frame after resume
+// is a full repaint of a screen that went through the shell's hands.
+//
+// An error ends the run: a hangup or failed re-entry leaves the terminal
+// in a state only the deferred Close can make safe, and the leave Close
+// writes on a latched-but-failed suspend is the documented idempotent
+// belt-and-braces.
+func suspendForKey(ctx context.Context, model Model, settings config, key event.Event, width, height *int, dirty *bool, startCommand func(Command)) (bool, error) {
+	handshake, ok := settings.backend.(suspendTransport)
+	if !ok || !handshake.CanSuspend() {
+		// Plain streams, pipes, test fakes, Windows consoles: Ctrl+Z is
+		// just a key, and models keep seeing exactly the stream a legacy
+		// terminal produces.
+		return applyEvent(model, key, settings, width, height, dirty, startCommand)
+	}
+	if done, err := applyEvent(model, event.Event{Kind: event.Suspend}, settings, width, height, dirty, startCommand); done || err != nil {
+		return done, err
+	}
+	suspended, err := handshake.Suspend(ctx)
+	if err != nil {
+		return true, err
+	}
+	if !suspended {
+		// CanSuspend promised a handshake and something raced the promise
+		// — a backend closing underneath the press. The key falls through
+		// so the model at least sees its input; the closing error is
+		// already on its way through the events queue.
+		return applyEvent(model, key, settings, width, height, dirty, startCommand)
+	}
+	return applyEvent(model, event.Event{Kind: event.Resume}, settings, width, height, dirty, startCommand)
 }
 
 func clampSize(width, height int, settings config) (int, int) {

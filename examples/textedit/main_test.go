@@ -127,6 +127,12 @@ func TestTextEditEndToEndInputAndQuit(t *testing.T) {
 	// Ctrl+Z undoes the line split as one edit.
 	backend.events <- event.RuneKey('z', event.ModCtrl)
 	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 3 })
+	// Alt+U is the same undo when the runtime's suspend handshake owns
+	// Ctrl+Z in a live terminal, which is why the example documents both.
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 4 })
+	backend.events <- event.RuneKey('u', event.ModAlt)
+	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 3 })
 	// The priority Escape shortcut quits even while the editor holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	select {

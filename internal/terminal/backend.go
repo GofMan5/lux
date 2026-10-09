@@ -790,8 +790,9 @@ func (b *Backend) Close() error {
 // terminal is not available in a unit-test process, and the actual
 // MakeRaw/Restore round trip is pinned by the PTY verification lane. Tests
 // swap the var; production runs the term.MakeRaw default. The var is only
-// read on the resume path, which runs on the lifecycle watcher goroutine, so
-// the swap is safe while no watcher is running.
+// read on the resume path, which runs on whatever goroutine called Suspend
+// — the run loop's, never a background watcher — so the swap is safe while
+// no suspend handshake is in flight.
 var makeRaw = term.MakeRaw
 
 // suspendTerminal hands the terminal back to the shell and latches the
@@ -906,14 +907,16 @@ func (b *Backend) resumeTerminal() error {
 	return enterErr
 }
 
-// deliverLifecycle offers a Suspend or Resume notice — or the terminal-loss
-// error — to the application without ever blocking the signal watcher. The
-// watcher runs between the terminal restore and the process stop, where a
-// blocked send would wedge job control itself, and the events queue is deep
-// enough that a full buffer means the application is busy, not that the
-// notice is load-bearing: the terminal transitions have already happened,
-// and the full repaint on resume does not depend on the event being seen.
-// The timestamp is stamped by deliverEvent like every other event's.
+// deliverLifecycle offers a terminal-loss error — or, on Windows, the
+// console-close error — to the application without ever blocking the
+// lifecycle watcher. A blocked send would wedge the watcher's own exit,
+// and the events queue is deep enough that a full buffer means the
+// application is busy, not that the notice is load-bearing: the run exits
+// through its deferred Close whether or not the error event is seen. The
+// suspend handshake delivers no events from this path — its Suspend and
+// Resume events are delivered by the run loop, in order around the
+// handshake — so the timestamping by deliverEvent is the only shared
+// machinery left.
 func (b *Backend) deliverLifecycle(next event.Event) {
 	select {
 	case b.events <- next:

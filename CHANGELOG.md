@@ -402,13 +402,56 @@ work and the API may still change.
   restoration path. Windows: no job control — CTRL_CLOSE/LOGOFF/SHUTDOWN
   surface as SIGTERM, the console is released immediately, and an Error
   event is reported before the OS terminates the process (best-effort
-  cleanup). Not claimed: `SIGTTOU` background-write stops, a Windows
-  resume path, or real-terminal evidence (that is the PTY lane of the
-  validation matrix).
+  cleanup). Not claimed: `SIGTTOU` background-write stops, or a Windows
+  resume path.
+- `lux.WithSuspend(enabled bool)` opts the whole job-control behavior out
+  (default on). With it off, the run loop never claims the Ctrl+Z byte —
+  raw-mode ISIG stays disabled, so the byte arrives as an ordinary key
+  event a custom binding can own, and the `SIGTSTP`/`SIGCONT` handshake is
+  never entered.
+- `event.Kind.String()` names every event kind (lowercase: "key",
+  "suspend", "resume", "frame", …), so logs and test failures read as
+  words instead of integers.
+- A pseudo-terminal end-to-end suite (`e2e/`, a separate Go module
+  restricted to `linux` and `darwin`) pins job control against the real
+  operating system instead of fakes: a scripted child runs under `lux.Run`
+  inside a `creack/pty` terminal with an interactive busybox shell as the
+  session leader. The suite proves the shell's own `Stopped` line — which
+  only a waitpid on a genuinely stopped job produces — after the raw 0x1A
+  byte is typed; that `fg` resumes it with the Suspend/Resume counts, a
+  full repaint, and the title re-pushed; that a second `SIGTSTP` raised
+  straight at the stopped job is discarded by `fg`'s SIGCONT (SIGCONT
+  flushes pending stop signals, so the double stop is safe); and that a
+  keystrokes-racing-the-probe replay survives a real kernel input buffer.
+  The direct-lane test pins byte-level exit truth: exactly one leave
+  sequence, the title pop as the final bytes, and the cursor shown.
+- The editor undo family gains a pure alt alias: alt+u undoes in
+  `ui.TextInput` and `ui.TextArea` — for terminals where the runtime's
+  suspend handshake claims the ctrl+z chord, undo keeps a modifier
+  combination that job control can never eat. The alias must be pure alt:
+  ctrl+alt+u, alt+shift+u, and hyper/meta chords are not the alias and
+  pass through to the application.
 - Verification artifacts under `.verification/` at every stage close.
 
 ### Changed
 
+- The Unix backend no longer `Notify`s `SIGTSTP` to itself: a signal that
+  was never registered keeps the kernel's default disposition, so the
+  re-raised stop truly stops the process group (the Go 1.21+ runtime
+  swallows kill-sent `TSTP` after a `Notify`→`Reset` cycle, which made
+  suspend a no-op on a direct terminal lane). The stop chain is now: raw
+  mode disables `ISIG` so Ctrl+Z arrives as byte 0x1A, the run loop
+  intercepts it, writes the leave sequences, restores cooked mode, and
+  only then re-raises `SIGTSTP` — the shell's disposition takes it from
+  there. An external `kill -TSTP` on the running process is now a plain
+  kernel-default stop with no leave bytes (the handshake runs only for
+  the intercepted byte); the stopped process still resumes cleanly
+  through the normal resume path.
+- `ui.TextInput` and `ui.TextArea` treat hyper and meta modifier chords
+  exactly like alt and super: the editor never eats them as edits, so
+  the application stays free to bind them — the same family boundary the
+  undo bindings already honor. Previously a hyper+u keystroke inserted
+  `u` as text.
 - The encoder emits the shortest VT encoding of a frame and lets the terminal
   move rows it already has through scroll regions instead of repainting them.
 - Resizes are delivered through a last-wins slot, so a resize storm cannot

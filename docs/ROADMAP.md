@@ -298,9 +298,15 @@ tcell v3), clipboard OSC 52 как **опциональный адаптер с 
 
 Цель: превратить «implemented, validation pending» в таблицу с версиями.
 
-1. **Suspend/resume**: SIGTSTP → восстановить cooked-терминал → SIGCONT →
-   re-raw + full repaint; на Windows — обработка `CTRL_CLOSE`, буфер
-   консоли. SIGHUP/EOF → событие, не паника.
+1. **Suspend/resume** ✅ (срезы 1–2, `25a22cd` + срез 2): SIGTSTP →
+   восстановить cooked-терминал → SIGCONT → re-raw + full repaint; на
+   Windows — обработка `CTRL_CLOSE`, буфер консоли. SIGHUP/EOF → событие,
+   не паника. Реализация A2 (bubbletea-канон): lux никогда не Notify'ит
+   `SIGTSTP` — disposition остаётся SIG_DFL, и re-raise по-настоящему
+   стопит группу; Ctrl+Z приходит байтом `0x1A` (raw ISIG off) и
+   перехватывается run-loop'ом до applyEvent; `WithSuspend(false)`
+   отдаёт байт приложению. Alt+u — undo-псевдоним в редакторах на случай,
+   если suspend-хендшейк забрал ctrl+z.
 2. **Матрица валидации** (COMPATIBILITY.md таблица): Windows Terminal,
    ConHost, PowerShell 5/7, macOS Terminal/iTerm2, gnome-terminal/kitty/
    alacritty/wezterm/foot, tmux 3.x (отдельные лейны: с `allow-passthrough` и без),
@@ -312,9 +318,18 @@ screen, OpenSSH (включая shaping
    `.verification/matrix/`.
 3. **SSH-адаптер** как пример: `Backend` поверх gliderlabs/ssh
    (пример в `examples/ssh`, зависимость НЕ в основном go.mod).
-4. **PTY-интеграционные тесты** в CI (ubuntu-lane): creack/pty + скриптованные
-   сессии (запуск, ввод, скриншот-в-dump, сравнение). Ни один Go-конкурент
-   этого не публикует — станет доказуемым преимуществом.
+4. **PTY-интеграционные тесты** ✅ (срез 2): модуль `e2e/` (свой go.mod,
+   linux/darwin) — creack/pty + скриптованные сессии: 4 теста (байтовая
+   правда выхода, job control с живым shell-оракулом `Stopped`, replay
+   клавиш против реального kernel input buffer, double-stop discard).
+   CI-подключение (ubuntu-lane) — на стадии релиза. Ни один Go-конкурент
+   этого не публикует — доказуемое преимущество. Факты, вскрытые
+   реализацией: (a) осиротевшие process group'ы DISCARD'ят kernel stop
+   сигналы — потому нужен shell-лейн; (b) Go 1.21+ runtime глотает
+   kill-посланный TSTP после Notify→Reset — потому A2; (c) Linux флашит
+   master input при закрытии последнего slave-fd — child держит pty
+   150 мс после выхода; (d) SIGCONT сбрасывает отложенные stop-сигналы —
+   double-stop безопасен.
 
 **Приёмка:** таблица матрицы заполнена до последней клетки либо клетка
 честно помечена «not validated» с issue-ссылкой; suspend/resume работает в

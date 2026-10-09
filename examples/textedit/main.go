@@ -137,7 +137,10 @@ func (app *textedit) View(frame *lux.Frame) {
 	}
 	status := fmt.Sprintf(" Ln %d/%d  Col %d  wrap %s ", line, len(app.editor.Lines), column, wrapMode)
 	canvas.Text(2, area.H-2, status, render.Style{Foreground: muted, Background: background})
-	footer := " [ctrl+w] wrap  [ctrl+z] undo  [ctrl+c/x/v] clipboard  [esc] quit "
+	footer := " [ctrl+w] wrap  [ctrl+z/alt+u] undo  [ctrl+y] redo  [ctrl+c/x/v] clipboard  [esc] quit "
+	if canvas.TextWidth(footer) > area.W-2 {
+		footer = " [ctrl+z/alt+u] undo  [esc] quit "
+	}
 	if canvas.TextWidth(footer) > area.W-2 {
 		footer = " [esc] quit "
 	}
