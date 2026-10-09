@@ -1,0 +1,19 @@
+{
+  "adapter": "lux",
+  "scene": "static",
+  "width": 120,
+  "height": 40,
+  "round": 1,
+  "quick": false,
+  "events": 300,
+  "bytes": 0,
+  "bursts": 0,
+  "paints": 379,
+  "draws": 379,
+  "cpu_us": 925517,
+  "wall_ms": 4802,
+  "alloc_bytes": 373640,
+  "mallocs": 1765,
+  "idle_cpu_us": 6215,
+  "settle_ms": 0
+}

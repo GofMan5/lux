@@ -1,0 +1,60 @@
+# Stage 10 — Slice 1: benchmark contract (full run)
+
+Snapshot: 2026-10-10. Module: `github.com/lux-tui/lux` (root go 1.23,
+benchmarks/ nested module go 1.26).
+
+## What was built
+
+A reproducible, one-command comparative benchmark: nested Go module
+`benchmarks/` with its own go.mod (competitor deps stay out of the root
+module's <=3 budget), scene adapters 1-10 from PERFORMANCE.md on lux,
+bubbletea+lipgloss, and tview+tcell; ratatui explicitly not measured
+(Rust, no cross-language numbers invented).
+
+- `run.sh` — the one command: `docker run --rm -v luxbenchmod:/go/pkg/mod
+  -v "$PWD":/src -w /src -e TERM=xterm-256color -e COLORTERM=truecolor
+  -e BENCH_IMAGE=golang:1.26-alpine golang:1.26-alpine sh benchmarks/run.sh`.
+- Rounds: 3 per cell; cells = 14 scenes x 2 sizes x lanes; 168 children
+  total, alternating order per round (stage-5 drift lesson).
+- Metrics per lane: p50/p95/p99 frame gap, CPU us/frame, ms/frame,
+  bytes/frame, alloc B/frame, idle CPU%, latency p50/p95 where the scene
+  defines it. Paints/bursts/draws counted with lane-idiomatic semantics
+  (tea paints = -1, compare bursts instead — noted in the report).
+- tview teardown fixed via O_NONBLOCK F_SETFL before os.NewFile;
+  errors.Is(context.Canceled) filtered from child stderr.
+- Artifacts committed: results/report.md, results/benchstat.txt,
+  results/all-runs.json (168 raw per-child JSONs), results/machine.json.
+
+## The full run
+
+- Command: exactly the docker command above, started clean
+  (results/raw emptied first; earlier quick=28 run discarded and NOT cited).
+- Outcome: `done: 168 runs, 0 failed, total 24.8 min`.
+- Machine (from machine.json): Intel i5-10400F @ 2.90GHz, 10 cores,
+  15.6 GiB, WSL2 kernel 6.6.87.2, go1.26.9, golang:1.26-alpine image.
+- Sanity checks on report.md: every scene table carries the gap
+  p50/p95/p99 column; tea static scenes show "—" with the honest
+  "no frames observed" note; lux notes column is clean (no harness-noise
+  annotations); bench_image and cpu_model fields populated and clean.
+
+## Headline facts (all from the committed report.md)
+
+- Allocations per frame: lux 0.5-55.5 KB vs tea 20 KB-5.4 MB and tview
+  110 KB-2.7 MB across scenes (e.g. full 240x80: lux 55,504 B/frame,
+  tea 5,464,384, tview 2,723,542).
+- Input latency (inputburst 120x40): lux 0.0/2.7 ms (p50/p95) vs tview
+  282.3/310.0; tea produced no frames in the scene.
+- Heavy scene (full 240x80) ms/frame: lux 16.99 vs tea 61.94 vs tview
+  15.79 — tview's wall clock is lower there and its per-frame CPU is
+  18,326 us vs lux 8,581 us.
+- Honest losses: tview ms/frame beats lux in the light scenes (6.18 vs
+  12.67 static 120x40), at the price of ~150x the allocations; tea idle
+  CPU in inputburst 240x80 is 67.97% vs lux 0.96%.
+
+## Verification
+
+- 168/168 children, 0 failed (job output line `done: 168 runs, 0 failed`).
+- Root module untouched: `go build ./...` and `go test ./...` still green
+  after benchmarks/ landed; `go mod tidy` on root shows no new deps
+  (competitor deps live only in the nested module).
+- gofmt clean on the whole tree including benchmarks/.

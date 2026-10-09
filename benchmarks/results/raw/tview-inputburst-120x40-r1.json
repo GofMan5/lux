@@ -1,0 +1,35 @@
+{
+  "adapter": "tview",
+  "scene": "inputburst",
+  "width": 120,
+  "height": 40,
+  "round": 1,
+  "quick": false,
+  "events": 600,
+  "bytes": 14584329,
+  "bursts": 7,
+  "paints": 1402,
+  "draws": 1402,
+  "cpu_us": 2117055,
+  "wall_ms": 2618,
+  "alloc_bytes": 247072624,
+  "mallocs": 14186361,
+  "idle_cpu_us": 219,
+  "settle_ms": 0,
+  "batch_latency_ms": [
+    317.437,
+    291.599,
+    257.658,
+    268.476,
+    271.269,
+    304.054
+  ],
+  "frame_gap_ms": [
+    207.931097,
+    260.638977,
+    442.588849,
+    409.755828,
+    419.901368,
+    421.903954
+  ]
+}

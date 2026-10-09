@@ -1,0 +1,19 @@
+{
+  "adapter": "tea",
+  "scene": "static",
+  "width": 240,
+  "height": 80,
+  "round": 2,
+  "quick": false,
+  "events": 300,
+  "bytes": 0,
+  "bursts": 0,
+  "paints": -1,
+  "draws": 404,
+  "cpu_us": 244353,
+  "wall_ms": 4801,
+  "alloc_bytes": 1612464,
+  "mallocs": 3394,
+  "idle_cpu_us": 18743,
+  "settle_ms": 0
+}

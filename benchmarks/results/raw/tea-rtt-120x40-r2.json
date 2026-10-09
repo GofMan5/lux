@@ -1,0 +1,33 @@
+{
+  "adapter": "tea",
+  "scene": "rtt",
+  "width": 120,
+  "height": 40,
+  "round": 2,
+  "quick": false,
+  "events": 12,
+  "bytes": 22,
+  "bursts": 1,
+  "paints": -1,
+  "draws": 116,
+  "cpu_us": 24070,
+  "wall_ms": 514,
+  "alloc_bytes": 264384,
+  "mallocs": 692,
+  "idle_cpu_us": 24602,
+  "settle_ms": 0,
+  "batch_latency_ms": [
+    12.699,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

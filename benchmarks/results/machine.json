@@ -1,0 +1,12 @@
+{
+  "go_version": "go1.26.9",
+  "goos": "linux",
+  "goarch": "amd64",
+  "cpu_model": "Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz",
+  "cores": 10,
+  "mem_total_bytes": 16699310080,
+  "kernel_release": "6.6.87.2-microsoft-standard-WSL2",
+  "machine": "x86_64",
+  "bench_image": "golang:1.26-alpine",
+  "collected": "2026-10-09T21:07:37.599195434Z"
+}

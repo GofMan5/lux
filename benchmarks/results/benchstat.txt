@@ -1,0 +1,417 @@
+goos: linux
+goarch: amd64
+pkg: github.com/lux-tui/lux/benchmarks
+
+BenchmarkLuxStatic120x40-10
+  cpu_us_per_frame=1977.5
+  bytes_per_frame=0
+  alloc_b_per_frame=986
+  idle_cpu_pct=0.28
+BenchmarkTviewStatic120x40-10
+  cpu_us_per_frame=1729.8
+  bytes_per_frame=9049
+  alloc_b_per_frame=153859
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=16.01
+  frame_gap_ms_p95=17.16
+  frame_gap_ms_p99=17.91
+BenchmarkLuxStatic240x80-10
+  cpu_us_per_frame=5717.7
+  bytes_per_frame=0
+  alloc_b_per_frame=984
+  idle_cpu_pct=0.60
+BenchmarkTviewStatic240x80-10
+  cpu_us_per_frame=6557.7
+  bytes_per_frame=34864
+  alloc_b_per_frame=594555
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=7.90
+  frame_gap_ms_p95=11.89
+  frame_gap_ms_p99=16.33
+BenchmarkLuxOnecell120x40-10
+  cpu_us_per_frame=2323.2
+  bytes_per_frame=20
+  alloc_b_per_frame=1012
+  idle_cpu_pct=0.15
+  frame_gap_ms_p50=16.58
+  frame_gap_ms_p95=18.01
+  frame_gap_ms_p99=33.83
+BenchmarkTeaOnecell120x40-10
+  cpu_us_per_frame=3441.9
+  bytes_per_frame=22
+  alloc_b_per_frame=49453
+  idle_cpu_pct=1.14
+  frame_gap_ms_p50=16.74
+  frame_gap_ms_p95=18.02
+  frame_gap_ms_p99=34.13
+BenchmarkTviewOnecell120x40-10
+  cpu_us_per_frame=1838.9
+  bytes_per_frame=9094
+  alloc_b_per_frame=154103
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=16.01
+  frame_gap_ms_p95=17.08
+  frame_gap_ms_p99=17.52
+BenchmarkLuxOnecell240x80-10
+  cpu_us_per_frame=6483.4
+  bytes_per_frame=20
+  alloc_b_per_frame=1017
+  idle_cpu_pct=0.12
+  frame_gap_ms_p50=16.67
+  frame_gap_ms_p95=23.90
+  frame_gap_ms_p99=34.55
+BenchmarkTeaOnecell240x80-10
+  cpu_us_per_frame=7418.6
+  bytes_per_frame=22
+  alloc_b_per_frame=157511
+  idle_cpu_pct=0.98
+  frame_gap_ms_p50=16.66
+  frame_gap_ms_p95=20.46
+  frame_gap_ms_p99=34.18
+BenchmarkTviewOnecell240x80-10
+  cpu_us_per_frame=6113.2
+  bytes_per_frame=34910
+  alloc_b_per_frame=594813
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=8.21
+  frame_gap_ms_p95=11.80
+  frame_gap_ms_p99=17.03
+BenchmarkLuxDamage120x40-10
+  cpu_us_per_frame=3020.3
+  bytes_per_frame=11335
+  alloc_b_per_frame=2467
+  idle_cpu_pct=0.13
+  frame_gap_ms_p50=16.73
+  frame_gap_ms_p95=17.92
+  frame_gap_ms_p99=18.34
+BenchmarkTeaDamage120x40-10
+  cpu_us_per_frame=6987.1
+  bytes_per_frame=17817
+  alloc_b_per_frame=303415
+  idle_cpu_pct=0.98
+  frame_gap_ms_p50=16.70
+  frame_gap_ms_p95=17.92
+  frame_gap_ms_p99=18.75
+BenchmarkTviewDamage120x40-10
+  cpu_us_per_frame=2413.7
+  bytes_per_frame=27970
+  alloc_b_per_frame=252127
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=15.99
+  frame_gap_ms_p95=17.26
+  frame_gap_ms_p99=17.86
+BenchmarkLuxDamage240x80-10
+  cpu_us_per_frame=7916.0
+  bytes_per_frame=45264
+  alloc_b_per_frame=6865
+  idle_cpu_pct=0.15
+  frame_gap_ms_p50=16.63
+  frame_gap_ms_p95=19.34
+  frame_gap_ms_p99=21.86
+BenchmarkTeaDamage240x80-10
+  cpu_us_per_frame=21624.1
+  bytes_per_frame=71818
+  alloc_b_per_frame=1037185
+  idle_cpu_pct=0.95
+  frame_gap_ms_p50=16.73
+  frame_gap_ms_p95=19.42
+  frame_gap_ms_p99=21.52
+BenchmarkTviewDamage240x80-10
+  cpu_us_per_frame=8567.1
+  bytes_per_frame=110995
+  alloc_b_per_frame=988606
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=8.99
+  frame_gap_ms_p95=12.15
+  frame_gap_ms_p99=16.64
+BenchmarkLuxFull120x40-10
+  cpu_us_per_frame=3353.4
+  bytes_per_frame=66894
+  alloc_b_per_frame=15623
+  idle_cpu_pct=0.11
+  frame_gap_ms_p50=16.69
+  frame_gap_ms_p95=17.80
+  frame_gap_ms_p99=18.34
+BenchmarkTeaFull120x40-10
+  cpu_us_per_frame=23791.5
+  bytes_per_frame=87600
+  alloc_b_per_frame=1401475
+  idle_cpu_pct=1.03
+  frame_gap_ms_p50=16.72
+  frame_gap_ms_p95=19.02
+  frame_gap_ms_p99=33.01
+BenchmarkTviewFull120x40-10
+  cpu_us_per_frame=4900.2
+  bytes_per_frame=112484
+  alloc_b_per_frame=685191
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=13.22
+  frame_gap_ms_p95=17.29
+  frame_gap_ms_p99=18.41
+BenchmarkLuxFull240x80-10
+  cpu_us_per_frame=8581.5
+  bytes_per_frame=245846
+  alloc_b_per_frame=55504
+  idle_cpu_pct=0.13
+  frame_gap_ms_p50=17.39
+  frame_gap_ms_p95=36.23
+  frame_gap_ms_p99=51.46
+BenchmarkTeaFull240x80-10
+  cpu_us_per_frame=88919.9
+  bytes_per_frame=347555
+  alloc_b_per_frame=5464384
+  idle_cpu_pct=1.11
+  frame_gap_ms_p50=62.39
+  frame_gap_ms_p95=80.89
+  frame_gap_ms_p99=95.01
+BenchmarkTviewFull240x80-10
+  cpu_us_per_frame=18326.5
+  bytes_per_frame=448596
+  alloc_b_per_frame=2723542
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=20.22
+  frame_gap_ms_p95=26.32
+  frame_gap_ms_p99=33.69
+BenchmarkLuxList120x40-10
+  cpu_us_per_frame=2330.0
+  bytes_per_frame=132
+  alloc_b_per_frame=1017
+  idle_cpu_pct=0.11
+  frame_gap_ms_p50=16.51
+  frame_gap_ms_p95=17.69
+  frame_gap_ms_p99=18.26
+BenchmarkTeaList120x40-10
+  cpu_us_per_frame=2216.6
+  bytes_per_frame=158
+  alloc_b_per_frame=21024
+  idle_cpu_pct=0.91
+  frame_gap_ms_p50=16.65
+  frame_gap_ms_p95=17.56
+  frame_gap_ms_p99=17.87
+BenchmarkTviewList120x40-10
+  cpu_us_per_frame=1625.4
+  bytes_per_frame=6878
+  alloc_b_per_frame=110686
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=15.89
+  frame_gap_ms_p95=17.23
+  frame_gap_ms_p99=17.88
+BenchmarkLuxList240x80-10
+  cpu_us_per_frame=6022.8
+  bytes_per_frame=227
+  alloc_b_per_frame=1015
+  idle_cpu_pct=0.11
+  frame_gap_ms_p50=16.70
+  frame_gap_ms_p95=18.91
+  frame_gap_ms_p99=21.84
+BenchmarkTeaList240x80-10
+  cpu_us_per_frame=6027.7
+  bytes_per_frame=283
+  alloc_b_per_frame=44849
+  idle_cpu_pct=0.96
+  frame_gap_ms_p50=16.62
+  frame_gap_ms_p95=18.41
+  frame_gap_ms_p99=19.93
+BenchmarkTviewList240x80-10
+  cpu_us_per_frame=4881.7
+  bytes_per_frame=25728
+  alloc_b_per_frame=422016
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=7.71
+  frame_gap_ms_p95=12.02
+  frame_gap_ms_p99=14.47
+BenchmarkLuxResize120x40-10
+  cpu_us_per_frame=711.7
+  bytes_per_frame=1193
+  alloc_b_per_frame=13584
+  idle_cpu_pct=0.10
+  frame_gap_ms_p50=250.79
+  frame_gap_ms_p95=251.77
+  frame_gap_ms_p99=252.20
+BenchmarkTeaResize120x40-10
+  cpu_us_per_frame=5758.3
+  bytes_per_frame=6492
+  alloc_b_per_frame=438440
+  idle_cpu_pct=0.81
+  frame_gap_ms_p50=249.96
+  frame_gap_ms_p95=252.12
+  frame_gap_ms_p99=258.11
+BenchmarkTviewResize120x40-10
+  cpu_us_per_frame=499.4
+  bytes_per_frame=2020
+  alloc_b_per_frame=166407
+  idle_cpu_pct=0.02
+  frame_gap_ms_p50=250.13
+  frame_gap_ms_p95=253.96
+  frame_gap_ms_p99=254.35
+BenchmarkLuxResize240x80-10
+  cpu_us_per_frame=2132.1
+  bytes_per_frame=4407
+  alloc_b_per_frame=52445
+  idle_cpu_pct=0.11
+  frame_gap_ms_p50=250.98
+  frame_gap_ms_p95=253.98
+  frame_gap_ms_p99=256.42
+BenchmarkTeaResize240x80-10
+  cpu_us_per_frame=12372.5
+  bytes_per_frame=24178
+  alloc_b_per_frame=1735048
+  idle_cpu_pct=0.80
+  frame_gap_ms_p50=247.68
+  frame_gap_ms_p95=256.14
+  frame_gap_ms_p99=257.97
+BenchmarkTviewResize240x80-10
+  cpu_us_per_frame=1622.4
+  bytes_per_frame=7587
+  alloc_b_per_frame=659341
+  idle_cpu_pct=0.02
+  frame_gap_ms_p50=13.53
+  frame_gap_ms_p95=251.82
+  frame_gap_ms_p99=254.74
+BenchmarkLuxInputburst120x40-10
+  cpu_us_per_frame=166.9
+  bytes_per_frame=1
+  alloc_b_per_frame=4996
+  idle_cpu_pct=0.17
+  batch_latency_ms_p50=0.00
+  batch_latency_ms_p95=2.68
+  frame_gap_ms_p50=17.38
+  frame_gap_ms_p95=17.56
+  frame_gap_ms_p99=17.58
+BenchmarkTviewInputburst120x40-10
+  cpu_us_per_frame=1491.6
+  bytes_per_frame=10403
+  alloc_b_per_frame=176233
+  idle_cpu_pct=0.01
+  batch_latency_ms_p50=282.29
+  batch_latency_ms_p95=310.01
+  frame_gap_ms_p50=409.76
+  frame_gap_ms_p95=437.07
+  frame_gap_ms_p99=441.49
+BenchmarkLuxInputburst240x80-10
+  cpu_us_per_frame=30.2
+  bytes_per_frame=0
+  alloc_b_per_frame=2832
+  idle_cpu_pct=0.96
+BenchmarkTviewInputburst240x80-10
+  cpu_us_per_frame=5967.8
+  bytes_per_frame=39938
+  alloc_b_per_frame=680450
+  idle_cpu_pct=0.01
+  batch_latency_ms_p50=1173.75
+  batch_latency_ms_p95=1330.40
+  frame_gap_ms_p50=5.71
+  frame_gap_ms_p95=8.05
+  frame_gap_ms_p99=10.17
+BenchmarkLuxEgc120x40-10
+  cpu_us_per_frame=3115.1
+  bytes_per_frame=558
+  alloc_b_per_frame=1016
+  idle_cpu_pct=0.11
+  frame_gap_ms_p50=16.56
+  frame_gap_ms_p95=17.92
+  frame_gap_ms_p99=18.73
+BenchmarkTeaEgc120x40-10
+  cpu_us_per_frame=2564.4
+  bytes_per_frame=12339
+  alloc_b_per_frame=65351
+  idle_cpu_pct=0.95
+  frame_gap_ms_p50=16.77
+  frame_gap_ms_p95=17.61
+  frame_gap_ms_p99=18.17
+BenchmarkTviewEgc120x40-10
+  cpu_us_per_frame=2151.5
+  bytes_per_frame=20905
+  alloc_b_per_frame=281073
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=15.95
+  frame_gap_ms_p95=17.07
+  frame_gap_ms_p99=17.69
+BenchmarkLuxEgc240x80-10
+  cpu_us_per_frame=9469.7
+  bytes_per_frame=1091
+  alloc_b_per_frame=1020
+  idle_cpu_pct=0.13
+  frame_gap_ms_p50=16.63
+  frame_gap_ms_p95=21.05
+  frame_gap_ms_p99=24.96
+BenchmarkTeaEgc240x80-10
+  cpu_us_per_frame=6613.3
+  bytes_per_frame=48041
+  alloc_b_per_frame=175085
+  idle_cpu_pct=1.00
+  frame_gap_ms_p50=16.71
+  frame_gap_ms_p95=18.65
+  frame_gap_ms_p99=19.85
+BenchmarkTviewEgc240x80-10
+  cpu_us_per_frame=7191.8
+  bytes_per_frame=84468
+  alloc_b_per_frame=1116194
+  idle_cpu_pct=0.01
+  frame_gap_ms_p50=7.91
+  frame_gap_ms_p95=10.90
+  frame_gap_ms_p99=13.64
+BenchmarkLuxRtt120x40-10
+  cpu_us_per_frame=273.7
+  bytes_per_frame=0
+  alloc_b_per_frame=122
+  idle_cpu_pct=0.34
+  batch_latency_ms_p50=0.00
+  batch_latency_ms_p95=1.66
+BenchmarkTeaRtt120x40-10
+  cpu_us_per_frame=24070.0
+  bytes_per_frame=22
+  alloc_b_per_frame=264384
+  idle_cpu_pct=1.24
+  batch_latency_ms_p50=0.00
+  batch_latency_ms_p95=12.69
+BenchmarkTviewRtt120x40-10
+  cpu_us_per_frame=1130.1
+  bytes_per_frame=1291
+  alloc_b_per_frame=21895
+  idle_cpu_pct=0.01
+  batch_latency_ms_p50=3.10
+  batch_latency_ms_p95=4.15
+  frame_gap_ms_p50=504.35
+  frame_gap_ms_p95=506.08
+  frame_gap_ms_p99=506.84
+BenchmarkLuxRtt240x80-10
+  cpu_us_per_frame=312.7
+  bytes_per_frame=0
+  alloc_b_per_frame=122
+  idle_cpu_pct=0.77
+  batch_latency_ms_p50=0.00
+  batch_latency_ms_p95=6.04
+BenchmarkTeaRtt240x80-10
+  cpu_us_per_frame=25989.0
+  bytes_per_frame=22
+  alloc_b_per_frame=362640
+  idle_cpu_pct=2.10
+  batch_latency_ms_p50=0.00
+  batch_latency_ms_p95=12.86
+BenchmarkTviewRtt240x80-10
+  cpu_us_per_frame=1691.8
+  bytes_per_frame=4955
+  alloc_b_per_frame=84445
+  idle_cpu_pct=0.01
+  batch_latency_ms_p50=12.07
+  batch_latency_ms_p95=14.47
+  frame_gap_ms_p50=6.87
+  frame_gap_ms_p95=508.78
+  frame_gap_ms_p99=511.51
+BenchmarkLuxSubcell120x40-10
+  cpu_us_per_frame=1669.8
+  bytes_per_frame=2001
+  alloc_b_per_frame=1590
+  idle_cpu_pct=0.12
+  frame_gap_ms_p50=16.70
+  frame_gap_ms_p95=17.65
+  frame_gap_ms_p99=17.91
+BenchmarkLuxSubcell240x80-10
+  cpu_us_per_frame=4196.7
+  bytes_per_frame=5259
+  alloc_b_per_frame=1586
+  idle_cpu_pct=0.15
+  frame_gap_ms_p50=16.60
+  frame_gap_ms_p95=18.41
+  frame_gap_ms_p99=19.80

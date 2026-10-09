@@ -1,0 +1,27 @@
+{
+  "adapter": "tea",
+  "scene": "inputburst",
+  "width": 240,
+  "height": 80,
+  "round": 2,
+  "quick": false,
+  "events": 600,
+  "bytes": 0,
+  "bursts": 0,
+  "paints": -1,
+  "draws": 704,
+  "cpu_us": 4129,
+  "wall_ms": 2,
+  "alloc_bytes": 221288,
+  "mallocs": 923,
+  "idle_cpu_us": 1355850,
+  "settle_ms": 0,
+  "batch_latency_ms": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}

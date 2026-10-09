@@ -1,0 +1,30 @@
+{
+  "adapter": "lux",
+  "scene": "inputburst",
+  "width": 120,
+  "height": 40,
+  "round": 3,
+  "quick": false,
+  "events": 600,
+  "bytes": 104,
+  "bursts": 2,
+  "paints": 93,
+  "draws": 93,
+  "cpu_us": 15525,
+  "wall_ms": 171,
+  "alloc_bytes": 467656,
+  "mallocs": 1073,
+  "idle_cpu_us": 3174,
+  "settle_ms": 169,
+  "batch_latency_ms": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ],
+  "frame_gap_ms": [
+    17.171879
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "adapter": "lux",
+  "scene": "rtt",
+  "width": 120,
+  "height": 40,
+  "round": 2,
+  "quick": false,
+  "events": 12,
+  "bytes": 28,
+  "bursts": 1,
+  "paints": 93,
+  "draws": 93,
+  "cpu_us": 29673,
+  "wall_ms": 504,
+  "alloc_bytes": 11568,
+  "mallocs": 41,
+  "idle_cpu_us": 6736,
+  "settle_ms": 0,
+  "batch_latency_ms": [
+    2.54,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0
+  ]
+}
