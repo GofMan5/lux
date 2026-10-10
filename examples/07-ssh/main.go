@@ -27,8 +27,8 @@ import (
 	"log"
 	"os"
 
-	gssh "github.com/gliderlabs/ssh"
 	lux "github.com/GofMan5/lux"
+	gssh "github.com/gliderlabs/ssh"
 )
 
 func main() {
