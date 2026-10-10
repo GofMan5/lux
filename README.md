@@ -132,7 +132,7 @@ The examples are numbered as a curriculum:
 | `06-showcase` | The adaptive animated 3D showcase with a live Interaction Lab |
 | `07-ssh` | A LUX TUI served over SSH — the engine in a child on a real pty |
 | `08-tour` | The full-capability tour — nine tabs, one live demo per library area |
-| `09-procs` | The async data app — a real process explorer: type-to-search filtering, loading/empty/error/retry phases, master-detail, cancellation |
+| `09-procs` | The async data app — a real process explorer: type-to-search filtering, loading/empty/error/retry phases, master-detail, cancellation, and a confirm-then-kill action with auto-refresh |
 | `annex` | Sideband channels — taskbar progress, a toast, a clipboard write |
 
 ```sh

@@ -1,9 +1,11 @@
 // Command procs is the stage-2 reference application: a task and process
 // explorer. It shows the full asynchronous pattern on real data — loading,
 // empty, error, and retry states; type-to-search filtering with a
-// single-flight load and one deferred replay; a virtualized table; and a
-// master-detail pair — with every operating system call isolated behind
-// the processSource seam.
+// single-flight load and one deferred replay; a virtualized table; a
+// master-detail pair; and a command with a side effect (killing a
+// process) that confirms first, reports its own failure as a notice next
+// to the table, and refreshes the data after it succeeds — with every
+// operating system call isolated behind the processSource seam.
 package main
 
 import (
@@ -25,6 +27,7 @@ var (
 	muted      = render.RGBColor(107, 114, 128)
 	violet     = render.RGBColor(139, 92, 246)
 	cyan       = render.RGBColor(34, 211, 238)
+	red        = render.RGBColor(248, 113, 113) // the destructive ask, never data rows
 	background = render.RGBColor(8, 10, 18)
 )
 
@@ -73,6 +76,16 @@ type procsResult struct {
 	err  error
 }
 
+// actionResult is the application payload a kill Command reports back
+// through the same seam. A failed kill is also data — a notice beside the
+// table, while the rows it was aimed at stay on screen — so the run never
+// ends because of it either. Load failures and action failures render in
+// different places because they are different facts.
+type actionResult struct {
+	pid int
+	err error
+}
+
 type procsApp struct {
 	width, height int
 	ui            ui.Context
@@ -80,15 +93,18 @@ type procsApp struct {
 	source        processSource
 	observe       chan procsState
 
-	started   bool   // the initial resize has issued the first load
-	filter    string // the filter the user has typed
-	refresh   bool   // a replay is deferred behind the in-flight load
-	requestID int    // identity of the in-flight request
-	inflight  bool   // at most one List runs at a time
-	phase     phase
-	rows      []processRow
-	order     []int
-	errText   string
+	started        bool       // the initial resize has issued the first load
+	filter         string     // the filter the user has typed
+	refresh        bool       // a replay is deferred behind the in-flight load
+	requestID      int        // identity of the in-flight request
+	inflight       bool       // at most one List runs at a time
+	confirmRow     processRow // the row pending a kill confirmation; pid 0 means off
+	actionInflight bool       // at most one Kill runs at a time
+	notice         string     // the outcome line for the last action
+	phase          phase
+	rows           []processRow
+	order          []int
+	errText        string
 }
 
 // procsState is what the tests observe from View; the channel is drained
@@ -100,6 +116,8 @@ type procsState struct {
 	errText  string
 	selected int
 	detail   string
+	notice   string
+	confirm  int // pid pending a kill confirmation, 0 when the ask is off
 }
 
 func newProcsApp(source processSource, observe chan procsState) *procsApp {
@@ -126,11 +144,43 @@ func (app *procsApp) load() lux.Command {
 	app.inflight = true
 	app.refresh = false
 	app.phase = phaseLoading
+	// A fresh dataset invalidates a pending confirmation: the selected row
+	// the user was asked about may not exist in the new answer, so the ask
+	// itself is retired rather than kept pointing at stale coordinates.
+	app.confirmRow = processRow{}
 	filter, source := app.filter, app.source
 	return func(ctx context.Context) event.Event {
 		rows, err := source.List(ctx, filter)
 		return event.Event{Kind: event.Message, Data: procsResult{id: id, rows: rows, err: err}}
 	}
+}
+
+// kill returns the Command that runs the confirmed termination. It
+// follows the load pattern exactly: locals captured by value, the worker
+// goroutine never touches the model, and the result crosses the seam as
+// an event.Message payload whose error is data for the UI.
+func (app *procsApp) kill(row processRow) lux.Command {
+	if app.actionInflight {
+		return nil // at most one action in flight; the notice already says so
+	}
+	app.actionInflight = true
+	app.notice = fmt.Sprintf("terminating pid %d (%s)...", row.pid, row.name)
+	source, pid := app.source, row.pid
+	return func(ctx context.Context) event.Event {
+		return event.Event{Kind: event.Message, Data: actionResult{pid: pid, err: source.Kill(ctx, pid)}}
+	}
+}
+
+// applyAction folds one kill result into the model. A failure keeps the
+// data and the selection exactly where they were — the notice carries the
+// reason — because an action failing must not look like the table failing.
+func (app *procsApp) applyAction(result actionResult) {
+	app.actionInflight = false
+	if result.err != nil {
+		app.notice = fmt.Sprintf("kill %d failed: %v", result.pid, result.err)
+		return
+	}
+	app.notice = fmt.Sprintf("terminated pid %d", result.pid)
 }
 
 // applyResult folds one load result into the model. It runs inside
@@ -167,10 +217,28 @@ func (app *procsApp) rebuildOrder() {
 	}
 }
 
+// beginConfirm freezes the selected row as the target of a kill
+// confirmation. It is called from the table's Activate routing — Enter or
+// Space on the focused table — so the ask is about the row the widget
+// itself considers selected, not a re-derivation from app state.
+func (app *procsApp) beginConfirm() {
+	if app.phase != phaseData || len(app.order) == 0 || app.actionInflight {
+		return
+	}
+	app.confirmRow = app.rows[app.order[app.table.Selected]]
+}
+
 // applyTable routes one action into the table state and re-sorts the view
-// when the widget reports a sort request.
+// when the widget reports a sort request. A keyboard activation (Enter or
+// Space) on the focused table is the user asking about the selected row,
+// so it opens the kill confirmation; a pointer press on a row selects, it
+// does not confirm, which keeps the mouse a navigation hand.
 func (app *procsApp) applyTable(action ui.Action) {
-	if _, _, sortRequested := app.table.Apply(action, tableColumns, len(app.order)); sortRequested {
+	_, activated, sortRequested := app.table.Apply(action, tableColumns, len(app.order))
+	if activated && action.Event.Kind == event.Key && app.confirmRow.pid == 0 {
+		app.beginConfirm()
+	}
+	if sortRequested {
 		app.sortRows()
 		app.table.SortRequested = false // request served: keep the state clean
 	}
@@ -264,6 +332,13 @@ func memString(mem int64) string {
 func (app *procsApp) Update(next event.Event) lux.Command {
 	if action, handled := app.ui.Handle(next); handled {
 		if action.Target == "quit" {
+			// Escape while a confirmation is on screen answers the ask —
+			// cancel it — instead of leaving the app, so the destructive
+			// question never turns a reflexive Escape into an exit.
+			if app.confirmRow.pid != 0 {
+				app.confirmRow = processRow{}
+				return nil
+			}
 			return lux.Quit()
 		}
 		if action.Target == "table" {
@@ -290,10 +365,37 @@ func (app *procsApp) Update(next event.Event) lux.Command {
 				return app.issueLoad()
 			}
 		case event.KeyRune:
+			// While the confirmation is on screen, y answers and n or any
+			// other rune is swallowed: the filter must not quietly collect
+			// the keystrokes a modal ask is consuming.
+			if app.confirmRow.pid != 0 {
+				switch next.Key.Rune {
+				case 'y', 'Y':
+					row := app.confirmRow
+					app.confirmRow = processRow{}
+					return app.kill(row)
+				case 'n', 'N':
+					app.confirmRow = processRow{}
+				}
+				return nil
+			}
 			app.filter += string(next.Key.Rune)
 			return app.issueLoad()
 		}
 	case event.Message:
+		// An action result reports its own outcome first: a kill failure is
+		// a notice next to the table, never a load error, and a success
+		// refreshes the data so the gone process disappears on its own.
+		if result, ok := next.Data.(actionResult); ok {
+			if !app.actionInflight {
+				return nil // a late or foreign action result: ignored
+			}
+			app.applyAction(result)
+			if result.err == nil {
+				return app.issueLoad()
+			}
+			return nil
+		}
 		result, ok := next.Data.(procsResult)
 		if !ok {
 			return nil // a foreign payload is not ours to interpret
@@ -328,12 +430,19 @@ func (app *procsApp) View(frame *lux.Frame) {
 	canvas.Border(render.Rect{X: 1, Y: 0, W: area.W - 2, H: area.H - 2}, render.RoundedBorder, render.Style{Foreground: violet, Background: background})
 	canvas.Text(3, 0, " LUX PROCS ", render.Style{Foreground: cyan, Background: background, Attrs: render.AttrBold})
 
-	canvas.Text(2, 1, " filter: ", render.Style{Foreground: muted, Background: background})
-	filterText := app.filter
-	if filterText == "" {
-		filterText = "(type to match names)"
+	// While the kill ask is on screen it replaces the filter line: the same
+	// row carries both questions, and the answer never types into the
+	// filter, because the runes are swallowed above.
+	if app.confirmRow.pid != 0 {
+		canvas.Text(2, 1, fmt.Sprintf(" kill pid %d (%s)?  y confirm  n/esc cancel ", app.confirmRow.pid, app.confirmRow.name), render.Style{Foreground: red, Background: background, Attrs: render.AttrBold})
+	} else {
+		canvas.Text(2, 1, " filter: ", render.Style{Foreground: muted, Background: background})
+		filterText := app.filter
+		if filterText == "" {
+			filterText = "(type to match names)"
+		}
+		canvas.Text(11, 1, filterText, render.Style{Foreground: ink, Background: background})
 	}
-	canvas.Text(11, 1, filterText, render.Style{Foreground: ink, Background: background})
 
 	style := ui.TableStyle{
 		Normal:   render.Style{Foreground: ink, Background: background},
@@ -364,8 +473,11 @@ func (app *procsApp) View(frame *lux.Frame) {
 		sortInfo = fmt.Sprintf("%s %s", tableColumns[app.table.SortColumn].Title, direction)
 	}
 	status := fmt.Sprintf(" %s  %d rows  row %d  sort %s ", app.phase, len(app.order), app.table.Selected+1, sortInfo)
+	if app.notice != "" {
+		status = fmt.Sprintf(" %s  %s  %d rows  row %d  sort %s ", app.phase, app.notice, len(app.order), app.table.Selected+1, sortInfo)
+	}
 	canvas.Text(2, area.H-2, status, render.Style{Foreground: muted, Background: background})
-	footer := " type filter  backspace edit  F5 refresh  up/down select  click header sort  esc quit "
+	footer := " type filter  backspace edit  F5 refresh  up/down select  enter kill  esc quit "
 	if canvas.TextWidth(footer) > area.W-2 {
 		footer = " esc quit "
 	}
@@ -402,6 +514,8 @@ func (app *procsApp) report() {
 		errText:  app.errText,
 		selected: app.table.Selected,
 		detail:   detail,
+		notice:   app.notice,
+		confirm:  app.confirmRow.pid,
 	}:
 	default:
 	}

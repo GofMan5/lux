@@ -24,14 +24,18 @@ type processRow struct {
 	state string  // session name on windows, run state elsewhere
 }
 
-// processSource isolates the operating system behind one call. The app
+// processSource isolates the operating system behind two calls. The app
 // only ever sees this seam: List receives the run's context and the
-// current filter, and returns rows that already match that filter. A
-// source must be safe to call from a Command goroutine and honor context
-// cancellation; a returned error is data for the UI, not a fatal error,
-// because the transport (the terminal) is still healthy.
+// current filter, and returns rows that already match that filter. Kill
+// asks the system to terminate one process gently: taskkill posts
+// WM_CLOSE on Windows and Unix sends SIGTERM, both of which are requests
+// the target may ignore, so a non-zero exit is data for the UI, not a
+// fatal error, because the transport (the terminal) is still healthy.
+// A source must be safe to call from a Command goroutine and honor
+// context cancellation.
 type processSource interface {
 	List(ctx context.Context, filter string) ([]processRow, error)
+	Kill(ctx context.Context, pid int) error
 }
 
 // newProcessSource picks the adapter for the host. The choice is a switch
@@ -102,6 +106,38 @@ func (s *tasklistSource) List(ctx context.Context, filter string) ([]processRow,
 	return rows, nil
 }
 
+// Kill ends one process through taskkill without /F: the graceful
+// WM_CLOSE request, never a forced termination.
+func (s *tasklistSource) Kill(ctx context.Context, pid int) error {
+	return runKillCommand(ctx, "taskkill", "/PID", strconv.Itoa(pid))
+}
+
+// runKillCommand runs one termination command and turns a non-zero exit
+// into an error that carries the tool's own words, so the notice line
+// explains why the process survived instead of a bare exit status.
+func runKillCommand(ctx context.Context, name string, args ...string) error {
+	cmd := exec.CommandContext(ctx, name, args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, firstLine(out))
+	}
+	return nil
+}
+
+// firstLine trims a command's output to its first non-empty line: a
+// notice line has room for one sentence.
+func firstLine(out []byte) string {
+	for _, line := range strings.Split(string(out), "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
 // parseMemUsage reads tasklist's memory field, shaped like "9,216 K": the
 // digits and grouping separators vary by locale, so every non-digit is
 // dropped before the value is scaled from kilobytes to bytes.
@@ -152,6 +188,11 @@ func (s *procfsSource) List(ctx context.Context, filter string) ([]processRow, e
 		rows = append(rows, row)
 	}
 	return rows, nil
+}
+
+// Kill ends one process with SIGTERM, the polite default a shell sends.
+func (s *procfsSource) Kill(ctx context.Context, pid int) error {
+	return runKillCommand(ctx, "kill", "-TERM", strconv.Itoa(pid))
 }
 
 // readProcStat parses /proc/<pid>/stat. The comm field is parenthesized
@@ -256,4 +297,9 @@ func (s *psSource) List(ctx context.Context, filter string) ([]processRow, error
 		})
 	}
 	return rows, nil
+}
+
+// Kill ends one process with SIGTERM, the polite default a shell sends.
+func (s *psSource) Kill(ctx context.Context, pid int) error {
+	return runKillCommand(ctx, "kill", "-TERM", strconv.Itoa(pid))
 }

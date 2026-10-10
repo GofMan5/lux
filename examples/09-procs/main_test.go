@@ -14,6 +14,7 @@ import (
 	"github.com/GofMan5/lux/capability"
 	"github.com/GofMan5/lux/event"
 	"github.com/GofMan5/lux/render"
+	"github.com/GofMan5/lux/ui"
 )
 
 // hangTimeout bounds a test that would otherwise wait forever; a loaded
@@ -51,12 +52,16 @@ type scriptStep struct {
 // scriptedSource is the deterministic stand-in for the operating system:
 // steps are consumed in order (the last one repeats), the filter is
 // applied exactly like the real sources apply it, every call's filter is
-// logged, and cancellation during a delay is counted.
+// logged, and cancellation during a delay is counted. Kill is scripted
+// the same way: a delay, an error, and a log of the pids it saw.
 type scriptedSource struct {
 	mu        sync.Mutex
 	steps     []scriptStep
 	calls     int
 	filterLog []string
+	killDelay time.Duration
+	killErr   error
+	kills     []int
 	cancelled atomic.Int32
 }
 
@@ -96,6 +101,31 @@ func (s *scriptedSource) filters() []string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]string(nil), s.filterLog...)
+}
+
+// Kill mirrors List: it honors the context through the delay, logs the
+// pid, and answers with the configured error.
+func (s *scriptedSource) Kill(ctx context.Context, pid int) error {
+	s.mu.Lock()
+	s.kills = append(s.kills, pid)
+	s.mu.Unlock()
+	if s.killDelay > 0 {
+		timer := time.NewTimer(s.killDelay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			s.cancelled.Add(1)
+			return ctx.Err()
+		}
+	}
+	return s.killErr
+}
+
+func (s *scriptedSource) killList() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int(nil), s.kills...)
 }
 
 func (s *scriptedSource) cancellations() int {
@@ -329,6 +359,208 @@ func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
 	}
 }
 
+func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
+	full := seedProcs(40)
+	after := seedProcs(39)
+	source := newScriptedSource(
+		scriptStep{delay: 40 * time.Millisecond, rows: full},  // initial load, empty filter
+		scriptStep{delay: 30 * time.Millisecond, rows: after}, // post-kill auto-refresh
+	)
+	source.killDelay = 30 * time.Millisecond
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newProcsApp(source, make(chan procsState, 64))
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+
+	waitFrame(t, backend.frames)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
+
+	// The keystroke must land after the table's focus commit: F6 forces a
+	// repaint and the writer is sequential, so a second frame on the wire
+	// proves the first frame's present callbacks ran.
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrame(t, backend.frames)
+
+	// Enter on the focused table asks about the selected row (relay-00,
+	// pid 1000 in the seed).
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	confirmState := waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.confirm == 1000 })
+	if confirmState.phase != phaseData || confirmState.filter != "" {
+		t.Fatalf("confirm state: phase=%v filter=%q", confirmState.phase, confirmState.filter)
+	}
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	if painted := waitFrame(t, backend.frames); !strings.Contains(rowText(painted, 1), "kill pid 1000") || !strings.Contains(rowText(painted, 1), "y confirm") {
+		t.Fatalf("confirm line missing the ask: %q", rowText(painted, 1))
+	} else if strings.Contains(rowText(painted, 1), "filter") {
+		t.Fatalf("confirm line must replace the filter line: %q", rowText(painted, 1))
+	}
+
+	// While the ask is up, an unrelated rune is swallowed: it types
+	// nothing into the filter and does not answer the ask.
+	backend.events <- event.RuneKey('x', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.confirm == 1000 && state.filter == ""
+	})
+
+	// 'n' cancels the ask; the data is untouched.
+	backend.events <- event.RuneKey('n', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.confirm == 0 && state.filter == "" && state.rows == 40
+	})
+
+	// Enter re-asks, and Escape answers the ask — it does not exit the app.
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.confirm == 1000 })
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.confirm == 0 && state.rows == 40
+	})
+
+	// The third ask is answered with 'y': the kill runs, the notice reports
+	// the in-flight state, then the outcome — and a success refreshes the
+	// data, so the gone row disappears from the table on its own.
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.confirm == 1000 })
+	backend.events <- event.RuneKey('y', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.confirm == 0 && strings.Contains(state.notice, "terminating pid 1000")
+	})
+	final := waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.phase == phaseData && state.rows == 39 && strings.Contains(state.notice, "terminated pid 1000")
+	})
+	if final.filter != "" {
+		t.Fatalf("filter = %q; the confirm dialog must leave it untouched", final.filter)
+	}
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	if painted := waitFrame(t, backend.frames); !strings.Contains(rowText(painted, 14), "terminated pid 1000") {
+		t.Fatalf("status line missing the action outcome: %q", rowText(painted, 14))
+	}
+
+	// With no ask on screen, Escape exits the run.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("escape did not quit")
+	}
+
+	// Exactly one kill was issued, for the confirmed pid, despite the
+	// cancel-and-reask dance above.
+	if kills := source.killList(); len(kills) != 1 || kills[0] != 1000 {
+		t.Fatalf("kill log = %v; want one kill of pid 1000", kills)
+	}
+}
+
+func TestProcsActionFailureKeepsDataAndBoundsDoubleFire(t *testing.T) {
+	source := newScriptedSource(scriptStep{rows: seedProcs(8)})
+	source.killErr = errors.New("access denied")
+	source.killDelay = 80 * time.Millisecond
+	app := newProcsApp(source, nil)
+	app.width, app.height = 80, 24
+
+	load := app.Update(event.ResizeTo(80, 24))
+	app.Update(load(context.Background()))
+	if app.phase != phaseData || len(app.order) != 8 {
+		t.Fatalf("setup: phase=%v rows=%d", app.phase, len(app.order))
+	}
+
+	// The activation hook is the routed-Activate seam: a keyboard
+	// activation opens the ask, a pointer activation only selects.
+	app.applyTable(ui.Action{Kind: ui.Activate, Event: event.KeyPress(event.KeyEnter, 0), Bounds: render.Rect{W: 60, H: 10}})
+	if app.confirmRow.pid != 1000 {
+		t.Fatalf("confirm pid = %d; want 1000", app.confirmRow.pid)
+	}
+	// A second activation while the ask is up re-captures nothing.
+	app.applyTable(ui.Action{Kind: ui.Activate, Event: event.RuneKey(' ', 0), Bounds: render.Rect{W: 60, H: 10}})
+	if app.confirmRow.pid != 1000 {
+		t.Fatalf("re-activation changed the target: pid=%d", app.confirmRow.pid)
+	}
+
+	// 'y' executes: single-flight state and the in-flight notice.
+	if kill := app.Update(event.RuneKey('y', 0)); kill == nil {
+		t.Fatal("y on a confirm must issue the kill command")
+	}
+	if !app.actionInflight || app.confirmRow.pid != 0 {
+		t.Fatalf("action state: inflight=%v confirm=%d", app.actionInflight, app.confirmRow.pid)
+	}
+	if !strings.Contains(app.notice, "terminating pid 1000") {
+		t.Fatalf("in-flight notice = %q", app.notice)
+	}
+	// A second kill while one runs is refused outright.
+	if second := app.kill(app.rows[app.order[1]]); second != nil {
+		t.Fatal("double fire: a second kill while one is in flight was issued")
+	}
+
+	// The action result is a Message payload with its own shape.
+	result := app.Update(event.Event{Kind: event.Message, Data: actionResult{pid: 1000, err: errors.New("access denied")}})
+	if result != nil {
+		t.Fatal("a failed kill must not trigger the auto-refresh")
+	}
+	if app.actionInflight {
+		t.Fatal("the action was not marked done")
+	}
+	if app.phase != phaseData || len(app.order) != 8 {
+		t.Fatalf("failure must keep the data: phase=%v rows=%d", app.phase, len(app.order))
+	}
+	if !strings.Contains(app.notice, "failed: access denied") {
+		t.Fatalf("failure notice = %q", app.notice)
+	}
+	// A late or foreign action result cannot overwrite the notice.
+	if foreign := app.Update(event.Event{Kind: event.Message, Data: actionResult{pid: 12345, err: nil}}); foreign != nil {
+		t.Fatal("a foreign action result must be ignored, not acted on")
+	}
+	if !strings.Contains(app.notice, "failed: access denied") {
+		t.Fatalf("foreign action result overwrote the notice: %q", app.notice)
+	}
+
+	// The pointer-activation guard: a mouse Activate on the table selects,
+	// it does not open the kill ask.
+	app.applyTable(ui.Action{Kind: ui.Activate, Event: event.Event{Kind: event.Mouse}, Bounds: render.Rect{W: 60, H: 10}})
+	if app.confirmRow.pid != 0 {
+		t.Fatalf("pointer activation opened the ask: pid=%d", app.confirmRow.pid)
+	}
+	// And the app still serves input after the failure.
+	if retry := app.Update(event.KeyPress(event.KeyF5, 0)); retry == nil {
+		t.Fatal("refresh after an action failure must issue a load")
+	}
+}
+
+func TestProcsViewPaintsConfirmAndNotice(t *testing.T) {
+	app := newProcsApp(nil, nil)
+	app.width, app.height = 80, 24
+	paint := func() *render.Buffer {
+		frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(80, 24)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
+		app.View(frame)
+		return frame.Canvas.Buffer()
+	}
+
+	app.phase = phaseData
+	app.rows = seedProcs(40)
+	app.rebuildOrder()
+	app.confirmRow = app.rows[app.order[0]]
+	painted := paint()
+	if line := rowText(painted, 1); !strings.Contains(line, "kill pid 1000") || !strings.Contains(line, "y confirm") {
+		t.Fatalf("confirm line missing the ask: %q", line)
+	} else if strings.Contains(line, "filter") {
+		t.Fatalf("the ask must replace the filter line: %q", line)
+	}
+
+	app.notice = "terminated pid 1000"
+	painted = paint()
+	found := false
+	for y := 14; y < 24; y++ {
+		found = found || strings.Contains(rowText(painted, y), "terminated pid 1000")
+	}
+	if !found {
+		t.Fatalf("status line missing the notice")
+	}
+}
+
 func TestProcsStaleAndForeignResultsIgnored(t *testing.T) {
 	source := newScriptedSource(
 		scriptStep{rows: seedProcs(8)},
@@ -469,5 +701,29 @@ func TestProcessSourceListsRealProcesses(t *testing.T) {
 	}
 	if len(filtered) == 0 || len(filtered) >= len(rows) {
 		t.Fatalf("filtered rows = %d of %d; the filter must cross the seam and narrow the list", len(filtered), len(rows))
+	}
+}
+
+func TestProcessSourceKillMissingPidFails(t *testing.T) {
+	source, err := newProcessSource()
+	if err != nil {
+		t.Skipf("no source on this system: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	// pid 2147483632 (2^31-16) sits above every supported system's pid
+	// ceiling: linux caps pid_max at 2^22, darwin at 99999, and windows
+	// allocates far below this range, so the pid cannot name a live
+	// process on any host — the adapter is asked to terminate a process
+	// that cannot exist, which must fail without ever touching a real
+	// one. Real targets stay a manual, human-reviewed gate.
+	const missing = 2147483632
+	err = source.Kill(ctx, missing)
+	if err == nil {
+		t.Fatal("killing a nonexistent pid must fail")
+	}
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		t.Fatalf("kill of a missing pid must fail fast, not exhaust the context: %v", err)
 	}
 }

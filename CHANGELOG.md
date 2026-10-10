@@ -45,6 +45,24 @@ semver: breaking changes land only in a new major.
   unblocks without waiting on the worker, and smoke-tests the real
   OS adapters on every CI lane.
 
+- Destructive-action pattern in the process explorer (`examples/09-procs`):
+  Enter on a row now asks for confirmation — a bold red line replaces
+  the filter row — and `y` executes, `n` or Escape cancels, and every
+  other rune is swallowed so the ask cannot leak keystrokes into the
+  filter. The kill itself goes through the same `processSource` seam
+  (`Kill(ctx, pid)`, a polite termination: `WM_CLOSE` via `taskkill`
+  on Windows, `SIGTERM` elsewhere; a non-zero exit is UI data, not a
+  crash), runs at most one at a time, reports its in-flight and
+  outcome states through the `event.Message` seam, and on success
+  triggers an automatic refresh so the terminated process leaves the
+  table without a manual F5. The tests pin the whole journey end to
+  end — confirm, cancel by rune and by Escape, execute, notice,
+  auto-refresh, quit — plus the model-level guards (single flight,
+  failure keeps the data and does not auto-refresh, foreign and late
+  results ignored) and a real-adapter check that killing a pid above
+  every supported system's ceiling fails fast. Live kills against a
+  real target stay a manual, human-reviewed gate.
+
 - Runtime discipline guards (`lux`, `internal/terminal`, `render`): the
   framework's steady-state discipline is now enforced by failing tests
   instead of benchmark observations. `TestRunReturnsToTheGoroutineBaseline`
