@@ -29,6 +29,18 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Compact layout of the widgets tour page (`examples/08-tour`): at 80×24 the
+  fixed two-column layout cut off the checkbox, radio group, table, and
+  virtual log because panel heights never scrolled and controls below the
+  fold stopped registering. The page now switches to a stacked full-width
+  column inside one page viewport (`wscroll`) whenever the terminal is
+  compact or shorter than the natural display panel. Controls draw against
+  their virtual rects so the canvas clips what is out of view while the
+  focus system keeps every control reachable by wheel, Tab, and arrow keys;
+  the footer row survives the scroll, and the nested virtual log composes
+  the page offset so its rows stay glued to the content when its top slides
+  above the viewport.
+
 - Benchmark harness measurement honesty: lane paint/draw counters are now
   zeroed right after warmup (`adapter.resetCounts()`), so they cover the
   same measured phase as the wire bytes and CPU/allocation snapshots

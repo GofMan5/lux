@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -365,5 +366,129 @@ func TestPastePreviewTruncation(t *testing.T) {
 	want := fmt.Sprintf("%s… (%d runes total)", string(long[:48]), len(long))
 	if got != want {
 		t.Fatalf("long paste preview = %q, want %q", got, want)
+	}
+}
+
+// lastFrame drains presented buffers for the window and returns the newest
+// one, so an assertion can judge exactly what the user last saw.
+func (b *probeBackend) lastFrame(window time.Duration) *render.Buffer {
+	var last *render.Buffer
+	deadline := time.After(window)
+	for {
+		select {
+		case frame := <-b.presented:
+			last = frame
+		case <-deadline:
+			return last
+		}
+	}
+}
+
+// bufferRow flattens one buffer row into trimmed text.
+func bufferRow(buffer *render.Buffer, y int) string {
+	if buffer == nil {
+		return ""
+	}
+	width, height := buffer.Size()
+	if y < 0 || y >= height {
+		return ""
+	}
+	runes := make([]rune, 0, width)
+	for x := 0; x < width; x++ {
+		runes = append(runes, []rune(buffer.Cell(x, y).Grapheme)...)
+	}
+	return strings.TrimSpace(string(runes))
+}
+
+// bufferContains reports whether any row carries the needle.
+func bufferContains(buffer *render.Buffer, needle string) bool {
+	if buffer == nil {
+		return false
+	}
+	_, height := buffer.Size()
+	for y := 0; y < height; y++ {
+		if strings.Contains(bufferRow(buffer, y), needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func bufferContainsRow(buffer *render.Buffer, y int, needle string) bool {
+	return strings.Contains(bufferRow(buffer, y), needle)
+}
+
+// TestCompactWidgetsPageKeepsControlsReachable pins the compact widgets page
+// (80x24): the two-column layout does not fit at that height, so the page
+// must stack its panels at full width inside one page viewport. Every
+// control stays reachable: the initial view already shows the form controls
+// the squeezed layout dropped, the wheel scrolls the page down to the table
+// and the virtual log, the arrow keys scroll back up once the viewport owns
+// focus, and the footer row survives the whole trip.
+func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
+	backend := newProbeBackend(80, 24)
+	app := newTour()
+	app.page = 6
+	app.tabs.Selected = 6
+	app.sync.Started = time.Time{} // settled spinner: no continuous repaints
+	done := make(chan error, 1)
+	go func() {
+		done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240))
+	}()
+
+	// Warm-up: the open sequence repaints a few times, then the settled page
+	// goes quiet; the newest buffer is the first thing the user sees.
+	start := backend.lastFrame(150 * time.Millisecond)
+	if start == nil {
+		t.Fatal("no frame presented during warm-up")
+	}
+	if !bufferContains(start, "slow spinner") {
+		t.Fatal("compact view lost the checkbox: the stacked form panel must keep every control on screen")
+	}
+
+	// Wheel over the viewport's left border column: no widget owns column 1,
+	// so every notch goes to the page scroller instead of an inner control.
+	for i := 0; i < 12; i++ {
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
+		}}
+	}
+	bottom := backend.lastFrame(200 * time.Millisecond)
+	if bottom == nil {
+		t.Fatal("no frame presented after the wheel")
+	}
+	if !bufferContains(bottom, "feature table") {
+		t.Fatal("wheel never reached the table: the page scroller must reach the stacked page bottom")
+	}
+	if !bufferContains(bottom, "virtual log (120 rows)") {
+		t.Fatal("wheel never reached the virtual log demo")
+	}
+	if !bufferContainsRow(bottom, 23, "[1-9] tabs") {
+		t.Fatal("footer row was painted over by the scrolling page")
+	}
+
+	// Keyboard: Tab lands focus on the page viewport (right after the tab
+	// strip, before the widgets), and PageUp walks the offset back to the top.
+	backend.events <- event.KeyPress(event.KeyTab, 0)
+	backend.countFrames(100 * time.Millisecond)
+	for i := 0; i < 3; i++ {
+		backend.events <- event.KeyPress(event.KeyPageUp, 0)
+	}
+	top := backend.lastFrame(200 * time.Millisecond)
+	if top == nil {
+		t.Fatal("no frame presented after PageUp")
+	}
+	if !bufferContains(top, "slow spinner") {
+		t.Fatal("keyboard scrolling could not bring the stacked page back to the top")
+	}
+
+	backend.events <- event.RuneKey('q', 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("q never quit the tour")
 	}
 }

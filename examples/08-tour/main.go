@@ -75,16 +75,17 @@ type tour struct {
 	renderer scene3d.Renderer
 	mesh     scene3d.Mesh
 	// Widgets tab.
-	name   ui.TextInput
-	list   ui.ListState
-	scroll ui.ScrollState
-	table  ui.TableState
-	slow   ui.CheckboxState
-	glyph  ui.RadioState
-	gauge  float64
-	target float64
-	trace  []float64
-	sync   ui.SpinnerState
+	name    ui.TextInput
+	list    ui.ListState
+	scroll  ui.ScrollState
+	wscroll ui.ScrollState // page scroller that stacks the widgets tab when the terminal is short
+	table   ui.TableState
+	slow    ui.CheckboxState
+	glyph   ui.RadioState
+	gauge   float64
+	target  float64
+	trace   []float64
+	sync    ui.SpinnerState
 	// Input tab.
 	feed     []feedRow
 	presses  int
@@ -140,6 +141,8 @@ func (app *tour) Update(next event.Event) lux.Command {
 			_, _ = app.list.Apply(action, len(terminalList), max(action.Bounds.H, 1))
 		case "scroll":
 			app.scroll.Apply(action, scrollContent, max(action.Bounds.H, 1))
+		case "wscroll":
+			app.wscroll.Apply(action, widgetsPageContentHeight, max(action.Bounds.H, 1))
 		case "table":
 			app.table.Apply(action, featureColumns, len(featureRows))
 		case "slow":
@@ -877,46 +880,88 @@ var spinners = [][]string{ui.SpinnerBraille, ui.SpinnerArc, ui.SpinnerASCII}
 
 const scrollContent = 120
 
+// Natural sizes of the widgets page. Both layouts draw the panels at these
+// heights so no control is ever squeezed out of the frame: on short
+// terminals the page stacks and scrolls instead of shrinking its panels.
+const (
+	widgetsFormContentHeight    = 20 // input row, button, list, checkbox, radio
+	widgetsDisplayContentHeight = 27 // gauge, two sparklines, spinner, table, log
+	widgetsPageGap              = 1
+	widgetsFormPanelHeight      = widgetsFormContentHeight + 4 // inset plus border
+	widgetsDisplayPanelHeight   = widgetsDisplayContentHeight + 4
+	widgetsPageContentHeight    = widgetsFormPanelHeight + widgetsPageGap + widgetsDisplayPanelHeight
+)
+
+// drawWidgets renders the widgets page. Wide terminals get the classic two
+// columns; anything compact or shorter than the natural display panel
+// (typically 80x24) switches to drawWidgetsStacked so every control stays
+// reachable through one page scroller instead of being cut off.
 func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect, now time.Time) {
+	if layout.Classify(area) <= layout.Compact || area.H < widgetsDisplayPanelHeight {
+		app.drawWidgetsStacked(canvas, area, now)
+		return
+	}
 	columns := layout.Flex(make([]render.Rect, 2), area, layout.Horizontal, 2,
 		layout.Constraint{Basis: area.W / 2, Min: 26, Grow: 1, Shrink: 1},
 		layout.Constraint{Basis: area.W / 2, Min: 26, Grow: 1, Shrink: 1},
 	)
-	left := pagePanel(canvas, columns[0], "FORM CONTROLS")
-	if !left.Empty() {
-		y := left.Y
-		canvas.Text(left.X, y, "editor (undo/redo/paste)", render.Style{Foreground: muted, Background: panel})
-		app.ui.Input("name", canvas, render.Rect{X: left.X, Y: y + 1, W: left.W, H: 1}, &app.name, inputStyle())
-		app.ui.Button("gauge", canvas, render.Rect{X: left.X, Y: y + 3, W: min(left.W, 20), H: 3}, "Retarget gauge", buttonStyle())
-		y = y + 8
-		if y < left.Bottom() {
-			canvas.Text(left.X, y, "terminal list", render.Style{Foreground: muted, Background: panel})
-			listH := min(len(terminalList), max(left.Bottom()-y-1, 0))
-			app.ui.List("list", canvas, render.Rect{X: left.X, Y: y + 1, W: left.W, H: listH}, &app.list, terminalList, listStyle())
-			y = y + 1 + listH + 1
-		}
-		if y < left.Bottom() {
-			app.ui.Checkbox("slow", canvas, render.Rect{X: left.X, Y: y, W: left.W, H: 1}, &app.slow, "slow spinner", checkboxStyle())
-			app.ui.RadioGroup("glyph", canvas, render.Rect{X: left.X, Y: y + 1, W: left.W, H: min(len(spinnerNames), max(left.Bottom()-y-1, 0))}, &app.glyph, spinnerNames, radioStyle())
-		}
-	}
-	right := pagePanel(canvas, columns[1], "DISPLAY + DATA")
-	if right.Empty() {
+	app.drawFormPanel(canvas, columns[0])
+	app.drawDisplayPanel(canvas, columns[1], 0, now)
+}
+
+// drawWidgetsStacked renders the widgets page as one full-width scrolling
+// column: form panel, gap, display panel. Controls keep their virtual rects
+// against the viewport canvas, so the canvas clips whatever is out of view
+// while the focus system still reaches it through the page scroller.
+func (app *tour) drawWidgetsStacked(canvas *render.Canvas, area render.Rect, now time.Time) {
+	// Register the page scroller first: it becomes the first focusable thing
+	// after the tab strip and the enclosing viewport every widget reports to.
+	view := app.ui.ScrollViewport("wscroll", canvas, area, &app.wscroll, widgetsPageContentHeight, ui.ScrollStyle{})
+	if view == nil {
 		return
 	}
-	y := right.Y
-	canvas.Text(right.X, y, "animated gauge (button sets the target)", render.Style{Foreground: muted, Background: panel})
-	app.ui.Gauge(canvas, render.Rect{X: right.X, Y: y + 1, W: right.W, H: 1}, &ui.GaugeState{Value: app.gauge}, gaugeStyle())
-	canvas.Text(right.X, y+3, "gauge value trace", render.Style{Foreground: muted, Background: panel})
+	_, rows := view.Size()
+	first := app.wscroll.Range(widgetsPageContentHeight, rows).First
+	app.drawFormPanel(view, render.Rect{X: 0, Y: -first, W: area.W, H: widgetsFormPanelHeight})
+	app.drawDisplayPanel(view, render.Rect{X: 0, Y: widgetsFormPanelHeight + widgetsPageGap - first, W: area.W, H: widgetsDisplayPanelHeight}, first, now)
+}
+
+// drawFormPanel draws the form panel chrome and its controls at natural
+// sizes. The canvas clips the rects; the controls still register, so focus
+// and scrolling keep working when the panel sits partly off view.
+func (app *tour) drawFormPanel(canvas *render.Canvas, area render.Rect) {
+	content := pagePanel(canvas, area, "FORM CONTROLS")
+	y := content.Y
+	canvas.Text(content.X, y, "editor (undo/redo/paste)", render.Style{Foreground: muted, Background: panel})
+	app.ui.Input("name", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &app.name, inputStyle())
+	app.ui.Button("gauge", canvas, render.Rect{X: content.X, Y: y + 3, W: min(content.W, 20), H: 3}, "Retarget gauge", buttonStyle())
+	y = y + 8
+	canvas.Text(content.X, y, "terminal list", render.Style{Foreground: muted, Background: panel})
+	app.ui.List("list", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(terminalList)}, &app.list, terminalList, listStyle())
+	y = y + 1 + len(terminalList) + 1
+	app.ui.Checkbox("slow", canvas, render.Rect{X: content.X, Y: y, W: content.W, H: 1}, &app.slow, "slow spinner", checkboxStyle())
+	app.ui.RadioGroup("glyph", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(spinnerNames)}, &app.glyph, spinnerNames, radioStyle())
+}
+
+// drawDisplayPanel draws the display panel chrome and its data widgets at
+// natural sizes. pageOffset is the enclosing page scroller's first visible
+// row (0 in the two-column layout); the nested log viewport composes it so
+// its rows stay glued to the content when its top slides above the page.
+func (app *tour) drawDisplayPanel(canvas *render.Canvas, area render.Rect, pageOffset int, now time.Time) {
+	content := pagePanel(canvas, area, "DISPLAY + DATA")
+	y := content.Y
+	canvas.Text(content.X, y, "animated gauge (button sets the target)", render.Style{Foreground: muted, Background: panel})
+	app.ui.Gauge(canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &ui.GaugeState{Value: app.gauge}, gaugeStyle())
+	canvas.Text(content.X, y+3, "gauge value trace", render.Style{Foreground: muted, Background: panel})
 	trace := ui.SparklineState{Values: app.trace}
-	app.ui.Sparkline(canvas, render.Rect{X: right.X, Y: y + 4, W: right.W, H: 2}, &trace, ui.SparklineStyle{Fill: render.Style{Foreground: cyan, Background: panel}})
-	canvas.Text(right.X, y+7, "frame present-time sparkline", render.Style{Foreground: muted, Background: panel})
+	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 4, W: content.W, H: 2}, &trace, ui.SparklineStyle{Fill: render.Style{Foreground: cyan, Background: panel}})
+	canvas.Text(content.X, y+7, "frame present-time sparkline", render.Style{Foreground: muted, Background: panel})
 	frameSpark := ui.SparklineState{Values: app.frameTimes}
-	app.ui.Sparkline(canvas, render.Rect{X: right.X, Y: y + 8, W: right.W, H: 2}, &frameSpark, ui.SparklineStyle{Fill: render.Style{Foreground: violet, Background: panel}})
-	app.ui.Spinner(canvas, render.Rect{X: right.X, Y: y + 11, W: 1, H: 1}, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
-	canvas.Text(right.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: muted, Background: panel})
-	canvas.Text(right.X, y+13, "feature table", render.Style{Foreground: muted, Background: panel})
-	app.ui.Table("table", canvas, render.Rect{X: right.X, Y: y + 14, W: right.W, H: min(6, max(right.Bottom()-y-14, 0))}, &app.table, featureColumns, len(featureRows),
+	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 8, W: content.W, H: 2}, &frameSpark, ui.SparklineStyle{Fill: render.Style{Foreground: violet, Background: panel}})
+	app.ui.Spinner(canvas, render.Rect{X: content.X, Y: y + 11, W: 1, H: 1}, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
+	canvas.Text(content.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: muted, Background: panel})
+	canvas.Text(content.X, y+13, "feature table", render.Style{Foreground: muted, Background: panel})
+	app.ui.Table("table", canvas, render.Rect{X: content.X, Y: y + 14, W: content.W, H: 6}, &app.table, featureColumns, len(featureRows),
 		func(index int) []string { return featureRows[index][:] },
 		ui.TableStyle{
 			Normal:   render.Style{Foreground: ink, Background: panel},
@@ -925,13 +970,16 @@ func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect, now time.T
 			Focused:  render.Style{Foreground: background, Background: cyan},
 		})
 	scrollTop := y + 21
-	if right.Bottom()-scrollTop > 0 {
-		canvas.Text(right.X, scrollTop-1, "virtual log (120 rows)", render.Style{Foreground: muted, Background: panel})
-		view := app.ui.ScrollViewport("scroll", canvas, render.Rect{X: right.X, Y: scrollTop, W: right.W, H: right.Bottom() - scrollTop}, &app.scroll, scrollContent, ui.ScrollStyle{})
-		visible := app.scroll.Range(scrollContent, right.Bottom()-scrollTop)
-		for index := visible.First; index < visible.Last; index++ {
-			view.Text(0, index-visible.First, fmt.Sprintf("%06d scrollable row (arrows or wheel)", index+1), render.Style{Foreground: muted, Background: panel})
-		}
+	scrollH := content.Bottom() - scrollTop
+	canvas.Text(content.X, scrollTop-1, "virtual log (120 rows)", render.Style{Foreground: muted, Background: panel})
+	// Compose the page offset into the log's effective offset: when the log's
+	// top is clipped from above, the first visible row must advance with it.
+	log := app.scroll
+	log.Offset += max(pageOffset-scrollTop, 0)
+	view := app.ui.ScrollViewport("scroll", canvas, render.Rect{X: content.X, Y: scrollTop, W: content.W, H: scrollH}, &log, scrollContent, ui.ScrollStyle{})
+	visible := log.Range(scrollContent, scrollH)
+	for index := visible.First; index < visible.Last; index++ {
+		view.Text(0, index-visible.First, fmt.Sprintf("%06d scrollable row (arrows or wheel)", index+1), render.Style{Foreground: muted, Background: panel})
 	}
 }
 
