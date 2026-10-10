@@ -39,8 +39,8 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit $status
       # Anonymous users cannot read job logs, so on failure we mirror the
-      # verdict and any race reports into step annotations, which the
-      # annotations API does expose.
+      # verdict, any race reports, and the failing tests' own messages
+      # into step annotations, which the annotations API does expose.
       - name: Report failures as annotations
         if: steps.gots.outputs.status != '0'
         shell: bash
@@ -48,6 +48,12 @@ jobs:
           # POSIX grep -E has no \t escape: match the tab with [[:blank:]]
           # so the panic dump's "running tests:" entries surface too.
           grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          # go test prints each t.Fatal/t.Errorf message as an indented
+          # file:line: entry under the failing test; mirroring those tells
+          # anonymous readers WHICH wait fired, not just that one did.
+          grep -E '^[[:blank:]]+[A-Za-z0-9_.-]+\.go:[0-9]+:' test-output.txt | head -8 | while IFS= read -r line; do
             echo "::error::${line:0:500}"
           done
           grep -E '^(running tests:|[[:blank:]]+Test[A-Za-z0-9_]+ \()' test-output.txt | head -8 | while IFS= read -r line; do
@@ -107,14 +113,20 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit $status
       # Anonymous users cannot read job logs, so on failure we mirror the
-      # verdict and any race reports into step annotations, which the
-      # annotations API does expose.
+      # verdict, any race reports, and the failing tests' own messages
+      # into step annotations, which the annotations API does expose.
       - name: Report failures as annotations
         if: steps.gots.outputs.status != '0'
         run: |
           # POSIX grep -E has no \t escape: match the tab with [[:blank:]]
           # so the panic dump's "running tests:" entries surface too.
           grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          # go test prints each t.Fatal/t.Errorf message as an indented
+          # file:line: entry under the failing test; mirroring those tells
+          # anonymous readers WHICH wait fired, not just that one did.
+          grep -E '^[[:blank:]]+[A-Za-z0-9_.-]+\.go:[0-9]+:' test-output.txt | head -8 | while IFS= read -r line; do
             echo "::error::${line:0:500}"
           done
           grep -E '^(running tests:|[[:blank:]]+Test[A-Za-z0-9_]+ \()' test-output.txt | head -8 | while IFS= read -r line; do

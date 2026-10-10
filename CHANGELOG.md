@@ -210,7 +210,22 @@ semver: breaking changes land only in a new major.
   link replacing a valid one closes the region, and legitimate Unicode
   destinations ride unchanged.
 
-### Fixed
+- CI starvation false-failure in the example hang guards (tests): the
+  04-table end-to-end suite failed once on a shared `ubuntu-latest`
+  runner at a 10.01s timeout — exactly its hang guard — while the five
+  other root-matrix lanes passed the same commit and 71 local `-race`
+  iterations (including GOMAXPROCS 1/2 starvation profiles) stayed green
+  with no data race. An audit of the whole reachable path found only
+  deterministic logic and non-blocking sends: the guard fired on a frozen
+  process, not a code hang. Every example hang guard (03-textedit,
+  04-table, 05-widgets, 06-showcase, 08-tour) now uses 45s — generous
+  against a starved runner, still far ahead of go test's package timeout
+  for a real hang. The CI failure-annotation steps (root matrix and
+  07-ssh) additionally mirror the failing tests' own `t.Fatal`/
+  `t.Errorf` message lines (the indented `file:line:` output), so the
+  next anonymously visible failure names the exact wait that fired, not
+  just the FAIL summary. The duplicate `### Fixed` heading the previous
+  slice introduced is merged back into one section.
 
 - Double restore after a trapped termination signal (`internal/terminal`):
   `Close` wrote its leave sequences without consulting the suspend latch,

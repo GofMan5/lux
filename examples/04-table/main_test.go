@@ -14,8 +14,11 @@ import (
 )
 
 // hangTimeout bounds a test that would otherwise wait forever; a loaded
-// machine should never turn a stall into a false failure.
-const hangTimeout = 10 * time.Second
+// machine should never turn a stall into a false failure. A starved shared
+// CI runner can freeze the process for tens of seconds while sibling
+// package binaries run, so the guard absorbs runner starvation and still
+// fails a real hang long before go test's package timeout.
+const hangTimeout = 45 * time.Second
 
 func rowText(buffer *render.Buffer, y int) string {
 	var row strings.Builder

@@ -15,9 +15,12 @@ import (
 	"github.com/GofMan5/lux/render"
 )
 
-// hangTimeout only bounds a test that would otherwise hang forever; a loaded
-// CI machine may be slow, but not ten-seconds slow.
-const hangTimeout = 10 * time.Second
+// hangTimeout only bounds a test that would otherwise hang forever. A loaded
+// CI machine is not merely slow — a starved shared runner can freeze the
+// process for tens of seconds while sibling package binaries run — so the
+// guard absorbs that and still fails a real hang long before go test's
+// package timeout.
+const hangTimeout = 45 * time.Second
 
 // probeBackend is the smallest backend that lets the real Run loop drive the
 // tour: buffered events in, every presented buffer out, fixed size.

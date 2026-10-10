@@ -15,8 +15,11 @@ import (
 
 // hangTimeout only bounds a test that would otherwise wait forever. Making it
 // generous costs a passing run nothing and stops a loaded machine from
-// reporting a stall as a logic failure.
-const hangTimeout = 10 * time.Second
+// reporting a stall as a logic failure: a starved shared CI runner can
+// freeze the process for tens of seconds while sibling package binaries
+// run, so 45s absorbs runner starvation while a real hang still fails
+// long before go test's package timeout.
+const hangTimeout = 45 * time.Second
 
 func TestShowcaseWidgetStateAndShortcuts(t *testing.T) {
 	app := newShowcase()
