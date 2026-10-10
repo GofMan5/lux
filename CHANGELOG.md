@@ -38,6 +38,20 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Data race in the SSH example pty bridge (`examples/07-ssh`): the resize
+  loop called `pty.Setsize` on the master pty whenever a winch arrived,
+  with nothing ever stopping it, so an in-flight `TIOCSWINSZ` ioctl could
+  race the master's `os.File.Close` on the serve exit path (the ioctl and
+  the close touch the same fd internals). `go test -race` flagged this on
+  both Linux and macOS CI since the module got its own lanes, killing
+  `TestServePtySizeTermAndExitStatus`, `TestServeResizeDrivesNewPtySize`,
+  and `TestServeDisconnectKillsChild`. serve now quiesces the resize loop
+  — close a stop channel once (`sync.Once`; both the disconnect killer and
+  the normal exit path can trigger it) and wait for the loop to return —
+  before any `ptmx.Close()`. The same change retires a second defect: the
+  winch goroutine used to leak past the session forever because nothing
+  closed the loop; it now terminates with serve.
+
 - Chronic CI failures: the `Module and formatting` job failed because one
   `examples/08-tour` test file was never gofmt-formatted, and the
   `golangci-lint` job failed on nine standing findings — three embedded-field

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"sync"
 	"syscall"
 
 	"github.com/creack/pty"
@@ -51,9 +52,29 @@ func serve(s ptySession, argv []string) {
 	// Window changes the client asks for become TIOCSWINSZ on the pty. A
 	// zero size (piped `ssh -t`) is forwarded as-is; the engine gates
 	// frames at 0x0 by design. See README.md, "Zero-size ptys".
+	//
+	// The loop is quiesced before the master fd is closed: pty.Setsize
+	// issues an ioctl on that fd, and an ioctl racing os.File.Close is a
+	// data race the race detector (rightly) flags.
+	ioStop := make(chan struct{})
+	resizingDone := make(chan struct{})
+	var quiesce sync.Once
+	stopResizing := func() {
+		quiesce.Do(func() { close(ioStop) })
+		<-resizingDone
+	}
 	go func() {
-		for win := range winch {
-			_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(win.Height), Cols: uint16(win.Width)})
+		defer close(resizingDone)
+		for {
+			select {
+			case <-ioStop:
+				return
+			case win, ok := <-winch:
+				if !ok {
+					return
+				}
+				_ = pty.Setsize(ptmx, &pty.Winsize{Rows: uint16(win.Height), Cols: uint16(win.Width)})
+			}
 		}
 	}()
 
@@ -67,6 +88,7 @@ func serve(s ptySession, argv []string) {
 		select {
 		case <-s.Context().Done():
 			killChild(cmd)
+			stopResizing()
 			_ = ptmx.Close()
 		case <-bridge:
 		}
@@ -75,6 +97,7 @@ func serve(s ptySession, argv []string) {
 	go func() { _, _ = io.Copy(ptmx, s) }() // keystrokes: client -> child
 	_, _ = io.Copy(s, ptmx)                 // frames: child -> client
 
+	stopResizing()
 	_ = ptmx.Close()
 	_ = s.Exit(exitCode(cmd.Wait()))
 }
