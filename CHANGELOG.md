@@ -17,6 +17,15 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- CI lanes for the nested Go modules (`.github/workflows/ci.yml`): the
+  PTY end-to-end suite (`e2e/`) and the SSH example (`examples/07-ssh`)
+  live behind their own `go.mod` files, so the root `go test ./...` job
+  never compiled or ran them. Two new jobs run vet, build, and `go test
+  -race` for both modules on `ubuntu-latest` and `macos-latest`, where the
+  pty-based lanes are tagged to build; the SSH example job also builds the
+  server binary. The `benchmarks/` module stays out for now: it requires
+  Go 1.26, newer than the CI toolchain.
+
 - Tour correctness suite (`examples/08-tour`): the guided tour now drives
   frame requests from `wantsFrame` — static tabs settle to at most two idle
   frames, the motion demos retarget with live position/velocity sampled at

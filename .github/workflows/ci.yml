@@ -31,6 +31,49 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
 
+  e2e:
+    name: E2E PTY (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+          cache-dependency-path: e2e/go.sum
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  ssh-example:
+    name: SSH example (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: examples/07-ssh
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+          cache-dependency-path: examples/07-ssh/go.sum
+      - run: go mod download
+      - run: go vet ./...
+      - run: go build .
+      - run: go test -race ./...
+
   tidy:
     name: Module and formatting
     runs-on: ubuntu-latest
