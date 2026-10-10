@@ -45,8 +45,13 @@ jobs:
         if: steps.gots.outputs.status != '0'
         shell: bash
         run: |
-          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
-            echo "::error::${line}"
+          # POSIX grep -E has no \t escape: match the tab with [[:blank:]]
+          # so the panic dump's "running tests:" entries surface too.
+          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          grep -E '^(running tests:|[[:blank:]]+Test[A-Za-z0-9_]+ \()' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
           done
           exit 1
       - run: go vet ./...
@@ -107,8 +112,13 @@ jobs:
       - name: Report failures as annotations
         if: steps.gots.outputs.status != '0'
         run: |
-          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
-            echo "::error::${line}"
+          # POSIX grep -E has no \t escape: match the tab with [[:blank:]]
+          # so the panic dump's "running tests:" entries surface too.
+          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          grep -E '^(running tests:|[[:blank:]]+Test[A-Za-z0-9_]+ \()' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
           done
           exit 1
 
