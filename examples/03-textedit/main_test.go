@@ -131,6 +131,19 @@ func TestTextEditEndToEndInputAndQuit(t *testing.T) {
 	}
 	waitStateWhere(t, app.observe, done, func(state texteditState) bool { return state.lines == 3 })
 
+	// The state above arrived from inside the first View, before the
+	// writer's present callbacks committed the editor's focus: ui.Context
+	// routes events against the last successfully presented snapshot, so
+	// a rune that beats the first commit is dropped on an empty focus
+	// table — the 2-in-4 CI lottery the table and catalog suites already
+	// lost. The editor paints only when an event arrives, so there is no
+	// fresh frame to wait for; but every event still dirties the model,
+	// so an F5 press (bound nowhere here) forces a repaint, and the
+	// writer is sequential: a second frame on the wire proves the first
+	// frame's commit ran.
+	backend.events <- event.KeyPress(event.KeyF5, 0)
+	waitFrame(t, backend.frames)
+
 	// Committed Unicode reaches the focused editor; Enter splits a line.
 	backend.events <- event.RuneKey(0x754c, 0)
 	backend.events <- event.KeyPress(event.KeyEnter, 0)

@@ -276,22 +276,43 @@ semver: breaking changes land only in a new major.
   link replacing a valid one closes the region, and legitimate Unicode
   destinations ride unchanged.
 
-- CI starvation false-failure in the example hang guards (tests): the
-  04-table end-to-end suite failed once on a shared `ubuntu-latest`
-  runner at a 10.01s timeout — exactly its hang guard — while the five
-  other root-matrix lanes passed the same commit and 71 local `-race`
-  iterations (including GOMAXPROCS 1/2 starvation profiles) stayed green
-  with no data race. An audit of the whole reachable path found only
-  deterministic logic and non-blocking sends: the guard fired on a frozen
-  process, not a code hang. Every example hang guard (03-textedit,
-  04-table, 05-widgets, 06-showcase, 08-tour) now uses 45s — generous
-  against a starved runner, still far ahead of go test's package timeout
-  for a real hang. The CI failure-annotation steps (root matrix and
-  07-ssh) additionally mirror the failing tests' own `t.Fatal`/
-  `t.Errorf` message lines (the indented `file:line:` output), so the
-  next anonymously visible failure names the exact wait that fired, not
-  just the FAIL summary. The duplicate `### Fixed` heading the previous
-  slice introduced is merged back into one section.
+- CI convergence flake in the example end-to-end suites (tests): three CI
+  failures — run #26 and run #32 in `04-table` (the second at 45.04s, on
+  the already-widened guard) plus the scheduled stress lane in
+  `05-widgets` — shared one goroutine-dump shape: the test parked in
+  `waitStateWhere` right after its first keystroke, the run loop parked
+  idle in its select, and the events channel was empty, meaning both
+  keystrokes had been consumed and dropped. Run #26 was first misread as
+  runner starvation and the guards were widened to 45s — which stood and
+  later paid off when run #32 and the scheduled lane both captured full
+  dumps through the evidence-preservation work above. Reading those
+  dumps against the code proved the real cause: a synchronization hole in
+  the tests, not a runner fault and not a framework bug. `ui.Context`
+  routes terminal input against the last successfully presented snapshot
+  — the writer runs a frame's focus commits only after `Present` returns
+  — while the example tests observed the initial state from inside the
+  first `View`, which reports before the first present is even offered.
+  A keystroke sent in that window is routed against an empty focus table
+  and is dropped silently: the model never sees it, nothing repaints, and
+  the state wait hangs to its timeout. Only the first input after launch
+  races this way — once a frame commits, geometry and focus are stable —
+  which is why the same suites pass most pushes and later keystrokes
+  never flake. The suites now synchronize before their first real input:
+  `05-widgets` settles (its spinner keeps painting, and a later frame
+  proves the earlier commit ran), while the quiet `03-textedit` and
+  `04-table` suites inject an inert F5 press — bound nowhere, but every
+  event dirties the model, so the forced repaint proves the first commit
+  ran — and wait for the resulting frame.
+  `TestKeystrokeBeforeFirstCommitIsDropped` (05-widgets) pins the drop
+  itself deterministically with a gated backend that parks the writer
+  inside its first `Present`: the pre-commit keystroke is consumed and
+  must not move the selection after the gate opens, while a second
+  post-commit keystroke must. The CI failure-annotation steps (root
+  matrix and 07-ssh) additionally mirror the failing tests' own
+  `t.Fatal`/`t.Errorf` message lines (the indented `file:line:` output),
+  so a failure names the exact wait that fired, not just the FAIL
+  summary. The duplicate `### Fixed` heading the previous slice
+  introduced is merged back into one section.
 
 - Double restore after a trapped termination signal (`internal/terminal`):
   `Close` wrote its leave sequences without consulting the suspend latch,

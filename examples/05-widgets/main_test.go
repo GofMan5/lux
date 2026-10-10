@@ -175,6 +175,15 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 	waitFrame(t, backend.frames)
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
+	// The state above arrived from inside the first View, before the
+	// writer goroutine ran the present callbacks that commit the table's
+	// focus: ui.Context routes events against the last successfully
+	// presented snapshot, so a keystroke that beats the first commit
+	// finds an empty focus table and is dropped silently. Settling before
+	// the first input — not only before region changes — is what keeps
+	// this suite off the 2-vCPU CI lottery; TestKeystrokeBeforeFirstCommitIsDropped
+	// pins the contract deterministically.
+	settle(t, backend.frames)
 
 	// The focused table takes the arrow keys; each keystroke waits for its
 	// frame so the next input lands on a settled view.
@@ -257,6 +266,100 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	case <-time.After(hangTimeout):
 		t.Fatal("escape did not quit")
 	}
+}
+
+// gatedBackend delays every Present until released. Holding the writer
+// inside its first Present turns the scheduler lottery the CI flakes rode
+// into a deterministic interleaving: a keystroke provably reaches the run
+// loop while no snapshot has been committed yet.
+type gatedBackend struct {
+	interactiveBackend
+	release chan struct{}
+}
+
+func (b *gatedBackend) Present(ctx context.Context, frame *render.Buffer) error {
+	select {
+	case <-b.release:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	return b.interactiveBackend.Present(ctx, frame)
+}
+
+// TestKeystrokeBeforeFirstCommitIsDropped pins the routing contract the E2E
+// suites rely on when they settle before the first input: ui.Context routes
+// a terminal event against the last successfully presented snapshot, not
+// against the View that is mid-flight. A keystroke that beats the first
+// present's commit callbacks finds an empty focus table and is dropped —
+// silently and forever — instead of being queued. That drop is what the
+// 2-in-4 CI failures were (runs #26 and #32 and the scheduled stress lane
+// all lost this lottery): the suites observed the initial state from inside
+// the first View and typed immediately.
+func TestKeystrokeBeforeFirstCommitIsDropped(t *testing.T) {
+	release := make(chan struct{})
+	backend := &gatedBackend{interactiveBackend: interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}, release: release}
+	app := newCatalog()
+	app.observe = make(chan catalogState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	released := false
+	defer func() {
+		// Even after a hard failure the gate must open before Escape: the
+		// writer is parked inside its gated Present, and the quit key is
+		// useless until it can proceed (Run's teardown would unblock it
+		// through ctx.Done anyway).
+		if !released {
+			close(release)
+		}
+		backend.events <- event.KeyPress(event.KeyEscape, 0)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(hangTimeout):
+			t.Error("catalog did not quit after the gate opened")
+		}
+	}()
+
+	// View #1 reports the initial state from inside the View — before the
+	// writer, parked inside its gated first Present, has run any commit
+	// callback at all.
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+
+	// Views #2 and #3 prove the keystroke was consumed while nothing was
+	// committed: after View #1 the run loop arms the frame timer and
+	// selects, the events channel is the only ready case, and the loop
+	// renders two more Views from its remaining surfaces while the writer
+	// stays gated.
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
+
+	// Open the gate: the first Present finishes, its callbacks commit the
+	// table's focus, and repaints resume. The keystroke was routed against
+	// the empty snapshot and dropped — not queued — so the selection must
+	// stay put through the drain.
+	close(release)
+	released = true
+	deadline := time.After(300 * time.Millisecond)
+drain:
+	for {
+		select {
+		case state := <-app.observe:
+			if state.selected != 0 {
+				t.Fatalf("the pre-commit keystroke was delivered late: selection moved to %d", state.selected)
+			}
+		case err := <-done:
+			t.Fatalf("run ended during the drain: %v", err)
+		case <-deadline:
+			break drain
+		}
+	}
+
+	// After the commit a keystroke routes to the focused table again.
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 1 })
 }
 
 func waitStateWhere(t *testing.T, states <-chan catalogState, done <-chan error, match func(catalogState) bool) catalogState {

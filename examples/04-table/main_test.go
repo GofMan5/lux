@@ -163,6 +163,19 @@ func TestTableEndToEndKeysClickAndQuit(t *testing.T) {
 	waitFrame(t, backend.frames)
 	waitStateWhere(t, app.observe, done, func(state tabledemoState) bool { return state.rows == 50 })
 
+	// The state above arrived from inside the first View, before the
+	// writer's present callbacks committed the table's focus: ui.Context
+	// routes events against the last successfully presented snapshot, so a
+	// keystroke that beats the first commit is dropped on an empty focus
+	// table — the 2-in-4 CI lottery this suite already lost twice. Unlike
+	// the catalog, this demo paints only when an event arrives, so there
+	// is no fresh frame to wait for; but every event still dirties the
+	// model, so an F5 press (bound nowhere here) forces a repaint, and
+	// the writer is sequential: a second frame on the wire proves the
+	// first frame's commit ran.
+	backend.events <- event.KeyPress(event.KeyF5, 0)
+	waitFrame(t, backend.frames)
+
 	// The focused table takes the arrow keys.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
 	backend.events <- event.KeyPress(event.KeyDown, 0)
