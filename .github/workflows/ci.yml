@@ -1,4 +1,4 @@
-﻿name: CI
+name: CI
 
 on:
   push:
@@ -93,16 +93,16 @@ jobs:
           grep -E '^(=== RUN|--- FAIL|--- PASS|FAIL|ok |panic)' test-output.txt | head -8 | while IFS= read -r line; do
             echo "::error::${line}"
           done
-      - name: Report race stack part 1
+      - name: Report race stacks part 1
         if: steps.gots.outputs.status != '0'
         run: |
-          grep -A24 'WARNING: DATA RACE' test-output.txt | grep -E 'WARNING|Read at|Write at|Previous|goroutine|/07-ssh/' | head -10 | while IFS= read -r line; do
+          head -c 4200 test-output.txt | fold -s -w 840 | head -5 | while IFS= read -r line; do
             echo "::error::${line}"
           done
-      - name: Report race stack part 2
+      - name: Report race stacks part 2
         if: steps.gots.outputs.status != '0'
         run: |
-          grep -A24 'WARNING: DATA RACE' test-output.txt | grep -E 'WARNING|Read at|Write at|Previous|goroutine|/07-ssh/' | sed -n '11,22p' | while IFS= read -r line; do
+          head -c 8400 test-output.txt | tail -c 4200 | fold -s -w 840 | head -5 | while IFS= read -r line; do
             echo "::error::${line}"
           done
           exit 1
