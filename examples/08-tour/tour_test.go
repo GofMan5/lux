@@ -524,7 +524,7 @@ func TestWidgetsPageSortsFeatureTable(t *testing.T) {
 		done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240))
 	}()
 
-	if backend.lastFrame(150 * time.Millisecond) == nil {
+	if backend.lastFrame(150*time.Millisecond) == nil {
 		t.Fatal("no frame presented during warm-up")
 	}
 	for i := 0; i < 12; i++ {

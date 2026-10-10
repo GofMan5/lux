@@ -39,8 +39,12 @@ func TestTextEditEditsByGraphemeAndView(t *testing.T) {
 	if last := app.editor.Lines[2]; last != "Wrap follows the terminal width; edit anywhere and scroll.!"+"\u0301" {
 		t.Fatalf("combining append = %q", last)
 	}
-	if !app.editor.Undo() || !app.editor.Undo() {
-		t.Fatalf("undo stack did not cover both edits: %q", app.editor.Lines)
+	// Two edits sit on the undo stack: the rune and the combining mark.
+	if !app.editor.Undo() {
+		t.Fatalf("first undo failed: %q", app.editor.Lines)
+	}
+	if !app.editor.Undo() {
+		t.Fatalf("second undo failed: %q", app.editor.Lines)
 	}
 	if last := app.editor.Lines[2]; last != "Wrap follows the terminal width; edit anywhere and scroll." {
 		t.Fatalf("undone line = %q", last)
@@ -53,11 +57,14 @@ func TestTextEditEditsByGraphemeAndView(t *testing.T) {
 		t.Fatalf("title missing: %q", rowText(painted, 0))
 	}
 	foundSeed, foundStatus, foundFooter := false, false, false
-	for y := 1; y < 16 && !(foundSeed && foundStatus && foundFooter); y++ {
+	for y := 1; y < 16; y++ {
 		row := rowText(painted, y)
 		foundSeed = foundSeed || strings.Contains(row, "multiline")
 		foundStatus = foundStatus || strings.Contains(row, "Ln 3/3")
 		foundFooter = foundFooter || strings.Contains(row, "[esc] quit")
+		if foundSeed && foundStatus && foundFooter {
+			break
+		}
 	}
 	if !foundSeed || !foundStatus || !foundFooter {
 		t.Fatalf("paint seed=%v status=%v footer=%v", foundSeed, foundStatus, foundFooter)

@@ -113,22 +113,22 @@ func (app *tabledemo) applyTable(action ui.Action) {
 func (app *tabledemo) sortRows() {
 	column, desc := app.table.SortColumn, app.table.SortDesc
 	compare := func(x, y record) int {
-		switch {
-		case column == 0:
+		switch column {
+		case 0:
 			switch {
 			case x.id < y.id:
 				return -1
 			case x.id > y.id:
 				return 1
 			}
-		case column == 3:
+		case 3:
 			switch {
 			case x.cpu < y.cpu:
 				return -1
 			case x.cpu > y.cpu:
 				return 1
 			}
-		case column == 4:
+		case 4:
 			switch {
 			case x.mem < y.mem:
 				return -1

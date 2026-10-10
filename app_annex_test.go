@@ -72,9 +72,9 @@ func (m *annexModel) View(frame *Frame) {
 
 func runAnnexModel(t *testing.T, backend Backend, model *annexModel, options ...Option) error {
 	t.Helper()
-	// quitOn is set before Run starts: testModel reads it under its own
-	// mutex from Update goroutines, so the write must precede them all.
-	model.testModel.quitOn = event.Key
+	// quitOn is set before Run starts: the embedded testModel reads it under
+	// its own mutex from Update goroutines, so the write must precede them all.
+	model.quitOn = event.Key
 	done := make(chan error, 1)
 	go func() {
 		done <- Run(context.Background(), model, append([]Option{WithBackend(backend), WithMaxFPS(240)}, options...)...)
@@ -195,9 +195,9 @@ func TestAnnexGateOffDropsEveryKind(t *testing.T) {
 // the screen is a lie.
 func TestAnnexDroppedWithFailedFrame(t *testing.T) {
 	backend := newAnnexBackend(40, 4)
-	backend.fakeBackend.presentErr = errors.New("present failed")
+	backend.presentErr = errors.New("present failed")
 	model := &annexModel{progress: true}
-	model.testModel.quitOn = event.Key
+	model.quitOn = event.Key
 	// No present ever succeeds, so there is nothing to wait for: the run
 	// ends on the presentation error itself.
 	err := Run(context.Background(), model, WithBackend(backend), WithMaxFPS(240), WithProgress(true))

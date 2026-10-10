@@ -393,9 +393,10 @@ func applyProbeFeatures(features capability.Set, reply probeReply, sync syncOutp
 	case syncOutputOff:
 		features.SynchronizedOutput = false
 	default:
-		if reply.sync == probeSupported {
+		switch reply.sync {
+		case probeSupported:
 			features.SynchronizedOutput = true
-		} else if reply.sync == probeRejected {
+		case probeRejected:
 			features.SynchronizedOutput = false
 		}
 	}

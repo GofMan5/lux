@@ -30,7 +30,6 @@ var (
 	violet     = render.RGBColor(139, 92, 246)
 	cyan       = render.RGBColor(34, 211, 238)
 	green      = render.RGBColor(52, 211, 153)
-	red        = render.RGBColor(248, 113, 113)
 	amber      = render.RGBColor(251, 191, 36)
 	background = render.RGBColor(8, 10, 18)
 	panel      = render.RGBColor(15, 18, 31)

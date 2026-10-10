@@ -25,3 +25,5 @@ Thumbs.db
 /examples/ssh/ssh
 /examples/ssh/tui-ssh-server
 benchmarks/benchmarks
+coverage.out
+coverage

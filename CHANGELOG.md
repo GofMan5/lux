@@ -38,6 +38,30 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Chronic CI failures: the `Module and formatting` job failed because one
+  `examples/08-tour` test file was never gofmt-formatted, and the
+  `golangci-lint` job failed on nine standing findings — three embedded-field
+  selectors, two redundant boolean shapes, two untagged switches, a
+  side-effecting `||` test condition rewritten as explicit asserts, and one
+  unused color variable. All are fixed with no behavior change; the lint,
+  format, vet, and full root test suite now pass locally exactly as the CI
+  jobs run them.
+
+- Wheel-flake in the showcase end-to-end tests (`examples/06-showcase`):
+  the form and display-widget tests fired three wheel notches at a fixed
+  screen coordinate, but the first notch scrolls the panel nine rows and
+  moves the nested virtual log under that coordinate — once a frame
+  commits in between (legal: the runtime routes events against the last
+  presented frame's hit screen, and the run-loop select may pick the
+  timer before the queued wheels), the remaining notches scrolled the
+  four-row log instead of the panel and the test hung to its timeout.
+  The tests now re-aim each notch at a gap doc row no nested scrollable
+  covers at any offset (and that stays bare even when the hit screen is
+  one step stale), wait for each step's state to commit, and
+  `waitStateWhere` reports the observed state count and last snapshot on
+  timeout instead of a bare "matching state timeout". No library behavior
+  changed.
+
 - Width policy in the scene3d monochrome ramp (`scene3d`): the luminance
   ramp filtered its glyphs with the default width policy while painting
   through the canvas's, so on `AmbiguousWidth: 2` terminals a custom ramp

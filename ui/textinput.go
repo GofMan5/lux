@@ -792,7 +792,7 @@ func previousBoundary(value string, position int) int {
 	// is the LF of a CR LF pair. Both common navigation cases resolve here
 	// without the full grapheme scan.
 	if position < len(value) && value[position] < utf8.RuneSelf && value[position-1] < utf8.RuneSelf &&
-		!(value[position] == '\n' && value[position-1] == '\r') {
+		(value[position] != '\n' || value[position-1] != '\r') {
 		if value[position-1] == '\n' && position >= 2 && value[position-2] == '\r' {
 			return position - 2
 		}

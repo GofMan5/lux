@@ -134,10 +134,22 @@ func TestShowcaseFormControlsEndToEnd(t *testing.T) {
 	settle(t, backend.frames)
 
 	// Three wheel steps over the panel body bring the whole form into view.
+	// The wheel rides a gap row no nested scrollable covers, and each step
+	// re-aims after its state commits: the hit screen only knows what the
+	// last presented frame drew, and the previous scroll moves the nested
+	// widgets under any fixed screen coordinate.
+	scrolled := showcaseState{}
 	for range 3 {
-		backend.events <- wheelAt(5, 8, false)
+		backend.events <- wheelAt(5, wheelGapRow(scrolled.controls), false)
+		scrolled = waitStateWhere(t, app.observe, func(state showcaseState) bool {
+			return state.controls > scrolled.controls
+		})
 	}
-	scrolled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls >= 18 })
+	if scrolled.controls < 18 {
+		t.Fatalf("three wheel steps scrolled the panel to %d, want >= 18", scrolled.controls)
+	}
+	// Give the frame carrying the final offset time to commit its hit screen
+	// before the clicks below aim at doc rows relative to that offset.
 	settle(t, backend.frames)
 
 	// The checkbox toggles on its completed click: press focuses, release
@@ -200,10 +212,13 @@ func TestShowcaseDisplayWidgetsEndToEnd(t *testing.T) {
 	waitFrame(t, backend.frames)
 	settle(t, backend.frames)
 
+	scrolled := showcaseState{}
 	for range 3 {
-		backend.events <- wheelAt(5, 8, false)
+		backend.events <- wheelAt(5, wheelGapRow(scrolled.controls), false)
+		scrolled = waitStateWhere(t, app.observe, func(state showcaseState) bool {
+			return state.controls > scrolled.controls
+		})
 	}
-	scrolled := waitStateWhere(t, app.observe, func(state showcaseState) bool { return state.controls >= 18 })
 	settle(t, backend.frames)
 
 	// Doc row 39 is the strip; panel-local x 13 lands inside "table", the
@@ -448,6 +463,15 @@ func wheelAt(x, y int, up bool) event.Event {
 	return event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{X: x, Y: y, Action: event.MouseWheel, Button: button}}
 }
 
+// wheelGapRow aims the panel wheel at doc row 19: the gap between the pause
+// button block (16-18) and the widget table label (20). No nested scrollable
+// (scenes 4-8, logs 11-14, tasks 21-26) covers that row at any panel offset,
+// so the wheel keeps bubbling to the panel itself even when the hit screen is
+// one step stale: a stale screen tests rows 10 or 28, which are equally bare.
+func wheelGapRow(offset int) int {
+	return controlsBodyTop + 19 - offset
+}
+
 func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
 	t.Helper()
 	select {
@@ -462,14 +486,18 @@ func waitState(t *testing.T, states <-chan showcaseState) showcaseState {
 func waitStateWhere(t *testing.T, states <-chan showcaseState, match func(showcaseState) bool) showcaseState {
 	t.Helper()
 	deadline := time.After(hangTimeout)
+	seen := 0
+	var last showcaseState
 	for {
 		select {
 		case state := <-states:
+			seen++
+			last = state
 			if match(state) {
 				return state
 			}
 		case <-deadline:
-			t.Fatal("matching state timeout")
+			t.Fatalf("matching state timeout after %d states; last: %#v", seen, last)
 			return showcaseState{}
 		}
 	}
