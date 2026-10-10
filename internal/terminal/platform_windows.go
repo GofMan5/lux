@@ -312,8 +312,12 @@ func (b *Backend) watchLifecycle(ctx context.Context) {
 			// sequences and the cooked restore — while the suspended latch
 			// it sets doubles as the present gate: the dying application
 			// stops painting frames onto a console that is closing. The
-			// process exits through the error path either way, and Close's
-			// own restore is idempotent on top of this one.
+			// latch is also Close's receipt that this restore already ran:
+			// the exit path's own leave write is skipped, so the unwind
+			// never double-restores. The process exits through the error
+			// path either way; this is honest best effort — the restore
+			// wins the race more often than an app that starts unwinding
+			// only after the event, but no handler can promise it.
 			b.suspendTerminal()
 			b.deliverLifecycle(event.Event{Kind: event.Error, Err: errConsoleClose})
 			return

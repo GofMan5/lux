@@ -68,9 +68,11 @@ func assertLifecycleEvent(t *testing.T, backend *Backend, want error) {
 
 // TestTerminationSignalRestoresAndReports pins the trap's two halves in
 // one place: the terminal is restored (leave sequences exactly once, the
-// suspend latch set, Close's own restore will be the idempotent no-op on
-// top of it), and the error event carries the signal's sentinel so the
-// application can map it to a conventional exit status.
+// suspend latch set as Close's receipt that this restore already ran),
+// and the error event carries the signal's sentinel so the application
+// can map it to a conventional exit status. The Close call afterwards is
+// the deferred closeBackend Run unwinds through, and the re-count after
+// it is the exactly-once guarantee the e2e lanes assert on a real pty.
 func TestTerminationSignalRestoresAndReports(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -92,16 +94,26 @@ func TestTerminationSignalRestoresAndReports(t *testing.T) {
 			awaitReturn(t, returned)
 
 			if !backend.suspended {
-				t.Fatal("termination signal did not restore the terminal: suspend latch not set")
+				t.Fatalf("%s did not restore the terminal: suspend latch not set", tc.name)
 			}
 			written := writtenBytes(t, output)
 			if !bytes.HasSuffix(written, []byte(leaveTerminal)) {
-				t.Fatalf("termination signal did not write the leave sequences: %q", written)
+				t.Fatalf("%s did not write the leave sequences: %q", tc.name, written)
 			}
 			if bytes.Count(written, []byte(leaveTerminal)) != 1 {
-				t.Fatalf("termination signal wrote the leave sequences more than once: %q", written)
+				t.Fatalf("%s wrote the leave sequences more than once: %q", tc.name, written)
 			}
 			assertLifecycleEvent(t, backend, tc.want)
+
+			// The deferred closeBackend on Run's error unwind runs
+			// exactly this call; it must not double the leave.
+			if err := backend.Close(); err != nil {
+				t.Fatalf("close after %s restore: %v", tc.name, err)
+			}
+			written = writtenBytes(t, output)
+			if bytes.Count(written, []byte(leaveTerminal)) != 1 {
+				t.Fatalf("Close wrote a second leave on top of the %s restore: %q", tc.name, written)
+			}
 		})
 	}
 }

@@ -207,9 +207,9 @@ func (b *Backend) dispatchLifecycle(ctx context.Context, signals <-chan os.Signa
 				// however long the model takes to unwind. A restore that
 				// races a real suspension is safe both ways — the
 				// suspendTerminal/resumeTerminal pair is idempotent under
-				// the mutex — and Close's own restore is idempotent on
-				// top of this one, so the application still exits through
-				// the error event either way.
+				// the mutex — and the latch the restore sets is Close's
+				// receipt that the leave already ran, so the deferred
+				// unwind never writes a second one.
 				b.suspendTerminal()
 				cause := ErrTerminated
 				if sig == syscall.SIGINT {
@@ -250,9 +250,10 @@ func (b *Backend) dispatchLifecycle(ctx context.Context, signals <-chan os.Signa
 // the caller should let the suspend key reach the model as an ordinary key
 // event. An error means the window ended abnormally: a hangup lost the
 // terminal, the context was canceled, or the re-entry failed. Every error
-// path relies on the deferred Close for cleanup: the leave sequences are
-// idempotent, and Close's own leave after a failed resume is the
-// documented belt-and-braces.
+// path relies on the deferred Close for cleanup: the suspend's leave
+// already cooked the terminal, and the latch it set is Close's receipt
+// not to write a second one — what Close adds after a failed resume is
+// the teardown (writer, termios, VT restore), not the leave.
 //
 // SIGCONT and SIGHUP are armed on a private channel before the stop is
 // raised, so a continue that races ahead of the observed stop still wakes

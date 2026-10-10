@@ -210,6 +210,25 @@ semver: breaking changes land only in a new major.
   link replacing a valid one closes the region, and legitimate Unicode
   destinations ride unchanged.
 
+### Fixed
+
+- Double restore after a trapped termination signal (`internal/terminal`):
+  `Close` wrote its leave sequences without consulting the suspend latch,
+  so the exit path that follows the lifecycle watcher's restore (SIGINT,
+  SIGTERM, and the Windows console-close events delivered as SIGTERM)
+  restored the terminal a second time — the kitty and title stacks popped
+  twice and the alternate-screen leave was repainted over a terminal the
+  watcher had already cooked. The pty e2e lanes caught it on both
+  platforms (the exactly-one leave assertion is the contract's uniqueness
+  proof); the unit tests had asserted the watcher's restore but never
+  called `Close` on top of it. The latch is now `Close`'s restore receipt:
+  its own leave write is skipped, while the writer, termios, and VT
+  teardown still run. The regression is pinned from three angles: the
+  suspend unit tests' Close interplay (which had pinned the double-pop
+  as "accepted") now demands exactly one leave, the `!windows`
+  lifecycle tests close the backend after the dispatch before counting,
+  and the e2e lanes assert exactly one leave set on a real pty.
+
 _Unreleased notes: the v0.1.0 cut below is the first tagged release; per the
 v0.x policy above, the next `0.2.0` may break API — watch this file._
 

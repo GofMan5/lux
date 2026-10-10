@@ -762,7 +762,7 @@ func (b *Backend) Close() error {
 	cancel, done := b.cancel, b.readDone
 	b.cancel, b.readDone = nil, nil
 	b.resize.stop()
-	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore, title, progress := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore, b.title, b.progress
+	plain, writer, input, state, restoreVT, kitty, win32, pixel, unicodeCore, title, progress, suspended := b.plain, b.writer, b.input, b.state, b.restoreVT, b.kitty, b.win32, b.pixel, b.unicodeCore, b.title, b.progress, b.suspended
 	b.writer = nil
 	b.state = nil
 	b.restoreVT = nil
@@ -781,12 +781,20 @@ func (b *Backend) Close() error {
 	}
 	var result error
 	if writer != nil {
+		// The suspended latch is the restore receipt: the lifecycle
+		// watcher sets it after writing the leave sequences itself, so
+		// a Close that runs on top of that restore — the ordinary exit
+		// path after Run returns the watcher's error event — must skip
+		// its own leave write. Writing it anyway would pop the kitty
+		// and title stacks twice and repaint the alt-screen leave over
+		// a terminal the watcher already cooked.
+		//
 		// Splicing the restore into a frame another goroutine is still writing
 		// would corrupt the screen, so it is only written once the writer is idle.
 		// Waiting forever is not an option either: a write blocked on a terminal
 		// that stopped draining holds the slot until the descriptor is closed, and
 		// on Windows it may not return even then.
-		if !plain && b.acquireWriteSlot(restoreGrace) {
+		if !plain && !suspended && b.acquireWriteSlot(restoreGrace) {
 			// The kitty pop leads the legacy restore so the stack is unwound
 			// before the modes it was layered on, mirroring the enter order.
 			// The win32 reset rides in front of it — the mode has no stack,

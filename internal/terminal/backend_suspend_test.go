@@ -288,10 +288,12 @@ func TestFailedRawEntryKeepsSuspensionLatchedAndRecovers(t *testing.T) {
 	}
 }
 
-// TestCloseDuringSuspensionClearsTheLatch pins the Close interplay: Close
-// writes its own leave — idempotent on the already-cooked terminal, the
-// accepted double-pop — and clears the latch so a re-opened backend starts
-// from a clean state.
+// TestCloseDuringSuspensionClearsTheLatch pins the Close interplay: the
+// suspend latch is the restore receipt — the suspend's leave already
+// cooked the terminal, and Close must not write a second set on top of
+// it (with kitty or title stacked, a double pop unwinds past the app's
+// own stack into whatever ran before it) — while still clearing the
+// latch so a re-opened backend starts from a clean state.
 func TestCloseDuringSuspensionClearsTheLatch(t *testing.T) {
 	stubMakeRaw(t)
 	backend, output := newSuspendBackend(t)
@@ -308,11 +310,19 @@ func TestCloseDuringSuspensionClearsTheLatch(t *testing.T) {
 		t.Fatal("Close must clear the suspension latch")
 	}
 	written := writtenBytes(t, output)
-	if got := bytes.Count(written, []byte(leaveTerminal)); got != 2 {
-		t.Fatalf("leave written %d times (suspend + close), want 2: %q", got, written)
+	if got := bytes.Count(written, []byte(leaveTerminal)); got != 1 {
+		t.Fatalf("leave written %d times (suspend + close), want exactly 1: %q", got, written)
 	}
 	if !bytes.HasSuffix(written, []byte(leaveTerminal)) {
-		t.Fatalf("Close's leave must be the last bytes: %q", written)
+		t.Fatalf("the suspend's leave must be the last bytes: %q", written)
+	}
+	// The teardown half of Close still ran: a second Close is the
+	// idempotent no-op the contract promises, and it writes nothing.
+	if err := backend.Close(); err != nil {
+		t.Fatalf("second Close during suspension failed: %v", err)
+	}
+	if got := len(writtenBytes(t, output)); got != len(written) {
+		t.Fatalf("second Close wrote %d extra bytes", got-len(written))
 	}
 	if err := backend.Present(context.Background(), testFrame("late")); err == nil {
 		t.Fatal("Present after Close must fail")
