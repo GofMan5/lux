@@ -1,0 +1,47 @@
+Stage 10 slice 3 — release v0.1.0 (closed 2026-10-10)
+
+Commits: 70f5612/4c63972 (module path rename + issue templates),
+f6e1992 (release: CHANGELOG cut, README banners, ROADMAP closure),
+tag v0.1.0 (annotated, a8f83ff).
+
+What shipped
+- Repository: https://github.com/GofMan5/lux — public, topics
+  go/tui/terminal/console, description set via gh CLI.
+- Module path: github.com/GofMan5/lux. The planned github.com/lux-tui
+  org was NOT created: GitHub exposes no org-creation API (web UI
+  only), and the browser session cannot authenticate headlessly —
+  sign-in with the gh PAT as password was attempted once and rejected
+  with "Incorrect username or password" (expected: PATs are for
+  git/API, not web sign-in). Recorded honestly in ROADMAP and
+  CHANGELOG; moving to an org later is a normal GitHub rename with
+  redirect, flagged as a possible 0.2.0 break.
+- Push: remote main = f6e1992 (full history: 093aaab..f6e1992),
+  annotated tag v0.1.0 pushed (refs/tags/v0.1.0 = a8f83ff).
+- Issue templates: bug_report.yml, feature_request.yml,
+  question.yml (ROADMAP section 376).
+- Semver policy for v0.x in CHANGELOG header (minor may break, patch
+  never, conventional semver from 1.0.0). CHANGELOG has
+  [0.1.0] - 2026-10-10.
+
+Evidence
+- proxy.golang.org: GET
+  https://proxy.golang.org/github.com/!gof!man5/lux/@v/v0.1.0.info
+  returns {"Version":"v0.1.0","Time":"2026-10-10T00:58:47Z",
+  "Hash":"f6e1992f...","Ref":"refs/tags/v0.1.0"} — tag fetchable via
+  the proxy, so `go get github.com/GofMan5/lux@v0.1.0` resolves.
+- pkg.go.dev: requested via the "Request" button; page
+  https://pkg.go.dev/github.com/GofMan5/lux now serves
+  "Version: v0.1.0 Latest, Published: Oct 10, 2026, License:
+  Apache-2.0, MIT", with "Valid go.mod file / Redistributable
+  license / Tagged version / Stable version" badges, README rendered
+  (including the facts-only benchmark paragraph), and subpackage
+  directories (layout, motion, render, scene3d, ui).
+- go doc readability: `go doc lux.Run`, `go doc lux.Model`,
+  `go doc render.Canvas`, `go doc ui.Context`, `go doc motion.Tween`
+  all print clean package-qualified output with doc comments.
+- git remote origin set; `go mod verify` — all modules verified.
+- LICENSE-APACHE and LICENSE-MIT tracked (dual license intact).
+
+Deferred (honest)
+- None for this slice: tag, indexing, and one-command reproducibility
+  all landed. The vhs GIF deferral is recorded in slice 4's file.

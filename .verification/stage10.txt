@@ -1,0 +1,54 @@
+Stage 10 — «Prove it» CLOSED (2026-10-10)
+
+Acceptance (ROADMAP §384-386) — every criterion met with evidence:
+
+1. Tag v0.1.0 — annotated tag created on f6e1992, pushed to
+   origin (refs/tags/v0.1.0 = a8f83ff, ls-remote verified).
+2. pkg.go.dev indexes — https://pkg.go.dev/github.com/GofMan5/lux
+   serves "Version: v0.1.0 Latest, Published: Oct 10, 2026", dual
+   license Apache-2.0/MIT, all four repository badges (valid go.mod,
+   redistributable, tagged, stable), rendered README with the
+   facts-only benchmark paragraph, and subpackage directories
+   (layout, motion, render, scene3d, ui).
+   proxy.golang.org has the version cached:
+   github.com/!gof!man5/lux/@v/v0.1.0.info -> Hash f6e1992f...,
+   Ref refs/tags/v0.1.0, Time 2026-10-10T00:58:47Z.
+3. Benchmark report reproducible by one command from benchmarks/ —
+   the committed run.sh wraps everything (build, 3 interleaved
+   rounds, medians, JSON, benchstat, report): the exact host docker
+   invocation is recorded in benchmarks/README.md; report.md itself
+   annotates the 168-run/0-failed campaign and the pinned machine.
+4. README has no non-reproducible comparison — the facts paragraph
+   cites only rows from the committed report.md; losses included;
+   PERFORMANCE.md pins the 2026-10-10 snapshot and links the raw
+   data.
+
+Slices (one commit each, verification files committed):
+- slice 1 feebb49 — benchmarks module + example catalog renames
+  (renames disclosed in the amended message).
+- slice 2 b0912f6 — README facts-only pass (stage10-slice2.txt).
+- slice 3 70f5612->4c63972, f6e1992, tag a8f83ff — module rename
+  (org impossible headlessly), repo, push, tag, CHANGELOG, issue
+  templates, semver policy, pkg.go.dev (stage10-slice3.txt).
+- slice 4 3902867 — tutorials, catalog docs, godoc examples
+  (stage10-slice4.txt); vhs GIF deferred honestly (tape committed).
+
+DoD (ROADMAP §8) final state:
+- deps: 0 external in root module (go.mod requires only stdlib).
+- steady-state allocs: benchmarks show 0-1 allocs/frame typical,
+  55,504 B/frame worst scene vs 2.7-5.5 MB competitors.
+- 16 Example* funcs (>= 15 required).
+- fuzz: 1h clean (stage 7 record, .verification/stage7.txt).
+- tag v0.1.0: pushed, pkg.go.dev live.
+
+Known honest deviations (all recorded in ROADMAP §384-387 closure):
+- org lux-tui not created (no API, headless auth impossible) ->
+  user repo GofMan5/lux + module path rename; migration path noted.
+- vhs screencast GIF deferred (sandbox package mirrors unreachable);
+  docs/assets/demo-counter.tape committed for later rendering.
+- ROADMAP stays Russian/internal by decision.
+
+Full gate sweep at close: go build ./... OK, go test ./... 13/13
+packages OK, go vet ./... clean, gofmt -l . empty, go mod verify all
+modules verified, working tree clean after this chore commit, remote
+main == local main.
