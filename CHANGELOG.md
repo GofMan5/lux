@@ -29,6 +29,14 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Width policy in the scene3d monochrome ramp (`scene3d`): the luminance
+  ramp filtered its glyphs with the default width policy while painting
+  through the canvas's, so on `AmbiguousWidth: 2` terminals a custom ramp
+  built from ambiguous glyphs (°, ±, Greek) kept glyphs that render two
+  cells wide there — each painted cell smeared into its neighbor and skewed
+  the scene. The filter now measures with the canvas policy and the ramp
+  cache is keyed by policy too. The default ASCII ramp is unchanged.
+
 - Width policy in Tabs and Checkbox measurement (`ui`): two layout paths
   bypassed the canvas width policy — tab strips sized, hit-tested, and
   scrolled their labels with the default policy while clipping the drawn

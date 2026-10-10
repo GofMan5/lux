@@ -274,6 +274,7 @@ type Renderer struct {
 	world      []Vec3
 	view       []Vec3
 	rampSource string
+	rampPolicy render.WidthPolicy
 	ramp       []string
 }
 
@@ -572,7 +573,7 @@ func (renderer *Renderer) paint(canvas *render.Canvas, cellHeight int) {
 }
 
 func (renderer *Renderer) paintMonochrome(canvas *render.Canvas, cellHeight int, background render.Color) {
-	ramp := renderer.luminanceRamp()
+	ramp := renderer.luminanceRamp(canvas.WidthPolicy())
 	foreground := renderer.DefaultColor
 	if foreground&colorSet == 0 {
 		foreground = RGB(225, 230, 240)
@@ -598,19 +599,20 @@ func (renderer *Renderer) paintMonochrome(canvas *render.Canvas, cellHeight int,
 	}
 }
 
-func (renderer *Renderer) luminanceRamp() []string {
+func (renderer *Renderer) luminanceRamp(policy render.WidthPolicy) []string {
 	source := renderer.Ramp
 	if source == "" {
 		source = defaultRamp
 	}
-	if source == renderer.rampSource && len(renderer.ramp) > 1 {
+	if source == renderer.rampSource && len(renderer.ramp) > 1 && policy == renderer.rampPolicy {
 		return renderer.ramp
 	}
 	renderer.rampSource = source
+	renderer.rampPolicy = policy
 	renderer.ramp = renderer.ramp[:0]
 	for _, character := range source {
 		grapheme := string(character)
-		if render.GraphemeWidth(grapheme) == 1 {
+		if render.GraphemeWidthWith(grapheme, policy) == 1 {
 			renderer.ramp = append(renderer.ramp, grapheme)
 		}
 	}

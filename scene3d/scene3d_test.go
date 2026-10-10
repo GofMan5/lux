@@ -7,6 +7,23 @@ import (
 	"github.com/GofMan5/lux/render"
 )
 
+// ° (U+00B0) is East Asian Ambiguous: one cell under the default policy, two
+// under AmbiguousWidth 2. The monochrome ramp keeps only single-cell glyphs,
+// measured with the canvas policy the scene is painted on, so a wide glyph
+// never smears its cell into a neighbor.
+func TestLuminanceRampFiltersPerPolicy(t *testing.T) {
+	renderer := NewRenderer()
+	renderer.Ramp = "°x#"
+	if ramp := renderer.luminanceRamp(render.WidthPolicy{}); len(ramp) != 3 || ramp[0] != "°" || ramp[1] != "x" || ramp[2] != "#" {
+		t.Fatalf("default-policy ramp = %q; want °, x, #", ramp)
+	}
+	renderer = NewRenderer()
+	renderer.Ramp = "°x#"
+	if ramp := renderer.luminanceRamp(render.WidthPolicy{AmbiguousWidth: 2}); len(ramp) != 2 || ramp[0] != "x" || ramp[1] != "#" {
+		t.Fatalf("policy ramp = %q; want x, # only", ramp)
+	}
+}
+
 func TestNearTriangleWinsRegardlessOfDrawOrder(t *testing.T) {
 	near := triangleMesh(0, RGB(255, 0, 0))
 	far := triangleMesh(-1, RGB(0, 0, 255))
