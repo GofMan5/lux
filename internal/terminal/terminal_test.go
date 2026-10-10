@@ -32,6 +32,50 @@ func TestParserStreamingKeysUTF8AndModifiers(t *testing.T) {
 	}
 }
 
+// TestParserNonBMPRunesWholeSplitAndDangling pins the UTF-8 shapes a real
+// input stream can carry for a non-BMP rune (𝄞 U+1D11E, the four bytes
+// f0 9d 84 9e) and the three-byte 界. On a Windows console the surrogate
+// halves of a non-BMP key are paired by the console driver itself and
+// arrive as one combined UTF-8 rune (pinned by the CONIN$ surrogate test
+// in platform_windows_test.go), but every other transport — pipes, SSH,
+// kitty — is free to split at any byte boundary, so the parser must hold
+// a partial rune back rather than decode it as garbage. At end of stream
+// a truncated rune surfaces as replacement Text events, one per
+// undecodable byte, never as a half-rune RuneKey.
+func TestParserNonBMPRunesWholeSplitAndDangling(t *testing.T) {
+	whole := newParser()
+	got := whole.feed([]byte("\U0001D11E界"), false)
+	want := []event.Event{event.RuneKey(0x1D11E, 0), event.RuneKey('界', 0)}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("whole-rune events = %#v, want %#v", got, want)
+	}
+
+	split4 := newParser()
+	if got := split4.feed([]byte{0xf0, 0x9d}, false); len(got) != 0 {
+		t.Fatalf("partial 4-byte rune emitted %#v before completion", got)
+	}
+	got = split4.feed([]byte{0x84, 0x9e}, false)
+	if !reflect.DeepEqual(got, []event.Event{event.RuneKey(0x1D11E, 0)}) {
+		t.Fatalf("split 4-byte events = %#v, want one completed rune", got)
+	}
+
+	split3 := newParser()
+	if got := split3.feed([]byte{0xe7, 0x95}, false); len(got) != 0 {
+		t.Fatalf("partial 3-byte rune emitted %#v before completion", got)
+	}
+	got = split3.feed([]byte{0x8c}, false)
+	if !reflect.DeepEqual(got, []event.Event{event.RuneKey('界', 0)}) {
+		t.Fatalf("split 3-byte events = %#v, want one completed rune", got)
+	}
+
+	dangling := newParser()
+	got = dangling.feed([]byte{0xf0, 0x9d}, true)
+	replacement := event.Event{Kind: event.Text, Text: "\ufffd"}
+	if !reflect.DeepEqual(got, []event.Event{replacement, replacement}) {
+		t.Fatalf("truncated rune at EOF = %#v, want one replacement Text per undecodable byte", got)
+	}
+}
+
 func TestParserMousePasteFocusAndFunctions(t *testing.T) {
 	input := "\x1b[<20;7;9M\x1b[<64;2;3M\x1b[I\x1b[O\x1b[15~\x1b[200~hello\x1b[31m界\x1b[201~"
 	got := newParser().feed([]byte(input), false)

@@ -55,6 +55,21 @@ semver: breaking changes land only in a new major.
   from View on the presented frame, and the paste feed caps its preview
   instead of dumping whole pastes.
 
+- Non-BMP input fixtures (`internal/terminal`): the parser now has pinned
+  coverage for the UTF-8 shapes a non-BMP rune can arrive in — whole
+  four-byte and three-byte runes, the same runes split across feed
+  boundaries (held back until complete, never decoded as garbage), and a
+  truncated rune at end of stream (replacement Text per undecodable
+  byte). A measured Windows fixture backs the transport half of the
+  story: injecting U+1D11E as its two surrogate KEY_EVENT halves through
+  `WriteConsoleInputW` and reading the console back delivers exactly the
+  combined UTF-8 bytes `f0 9d 84 9e`, in legacy raw mode and under
+  `ENABLE_VIRTUAL_TERMINAL_INPUT` alike — the console driver pairs the
+  halves, so the parser's byte stream never carries raw UTF-16. A
+  dangling high surrogate delivers nothing (the console holds it pending
+  until a low surrogate completes the pair), which is console behavior,
+  not framework behavior, and is documented rather than worked around.
+
 ### Fixed
 
 - Blind and uncancellable pipe reads on Windows (`internal/terminal`):
