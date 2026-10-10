@@ -28,7 +28,27 @@ jobs:
           go-version: ${{ matrix.go }}
           cache: true
       - run: go mod download
-      - run: go test -race ./...
+      - name: Run go test -race ./...
+        id: gots
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          go test -race -count=1 ./... > test-output.txt 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      # Anonymous users cannot read job logs, so on failure we mirror the
+      # verdict and any race reports into step annotations, which the
+      # annotations API does expose.
+      - name: Report failures as annotations
+        if: steps.gots.outputs.status != '0'
+        shell: bash
+        run: |
+          grep -E '^(--- FAIL|FAIL|ok |panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+          exit 1
       - run: go vet ./...
 
   e2e:
@@ -77,32 +97,17 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          go test -race -v -count=1 ./... > test-output.txt 2>&1
+          go test -race -count=1 ./... > test-output.txt 2>&1
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
-          {
-            echo '## SSH example test output'
-            echo '```'
-            cat test-output.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
           exit $status
-      - name: Report test outcome
+      # Anonymous users cannot read job logs, so on failure we mirror the
+      # verdict and any race reports into step annotations, which the
+      # annotations API does expose.
+      - name: Report failures as annotations
         if: steps.gots.outputs.status != '0'
         run: |
-          grep -E '^(=== RUN|--- FAIL|--- PASS|FAIL|ok |panic)' test-output.txt | head -8 | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Report race stacks part 1
-        if: steps.gots.outputs.status != '0'
-        run: |
-          head -c 4200 test-output.txt | fold -s -w 840 | head -5 | while IFS= read -r line; do
-            echo "::error::${line}"
-          done
-      - name: Report race stacks part 2
-        if: steps.gots.outputs.status != '0'
-        run: |
-          head -c 8400 test-output.txt | tail -c 4200 | fold -s -w 840 | head -5 | while IFS= read -r line; do
+          grep -E '^(--- FAIL|FAIL|ok |panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
             echo "::error::${line}"
           done
           exit 1
