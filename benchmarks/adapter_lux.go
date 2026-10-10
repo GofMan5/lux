@@ -81,6 +81,11 @@ func (l *luxLane) counts() (paints int64, draws int64) {
 	return l.paints.Load(), l.draws.Load()
 }
 
+func (l *luxLane) resetCounts() {
+	l.paints.Store(0)
+	l.draws.Store(0)
+}
+
 func (l *luxLane) stop() error {
 	l.cancel()
 	select {

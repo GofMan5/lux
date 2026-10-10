@@ -43,16 +43,34 @@ docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
 A full run is ~25-35 minutes on one core-set and should be run on an
 otherwise idle machine.
 
+Rebuild only the derived artifacts (report.md, benchstat.txt) from an
+existing `all-runs.json` without measuring anything:
+
+```sh
+docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
+  golang:1.26-alpine sh -c "cd benchmarks; go build -o /tmp/bench .; \
+  /tmp/bench -out /src/benchmarks/results -report-only"
+```
+
+The raw measurements in `all-runs.json`/`raw/*.json` are the truth; use
+this when the report renderer changed after a run (it never rewrites the
+raw files).
+
 ## What is measured
 
 One child process per (lane, scene, size, round), spawned as a session
 leader with a fresh pty pair. The framework renders to the pty slave; the
 harness writes identical key-byte streams and resizes to the pty master;
 SIGWINCH is real. Per run: wire bytes and burst count (output groups
-separated by >=4 ms of silence), the lane's own paint/draw counters, CPU
-time and allocations via rusage + MemStats around the measured phase only,
-2 s idle-window CPU, input-to-last-output latency where the scene defines
-it, and burst-to-burst frame gaps.
+separated by >=4 ms of silence), the lane's own paint/draw counters
+(zeroed right after warmup, so they cover the measured phase only, like
+the wire and CPU counters), CPU time and allocations via rusage +
+MemStats around the measured phase only, 2 s idle-window CPU,
+input-to-last-output latency where the scene defines it — the settle
+wait requires output causally after the input, so silence from stale
+output can never fake a settled action, and units without output are
+counted separately instead of entering the latency distribution as 0 —
+and burst-to-burst frame gaps.
 
 Scenes (identical cell content in every lane):
 
@@ -102,3 +120,6 @@ Terminal sizes 120x40 and 240x80; three rounds per cell; medians reported.
 - `scene.go` — scene definitions, content, drive modes, pacing constants
 - `pty.go` — pty sessions, master reader, burst counting, usage snapshots
 - `metrics.go` — RunResult, aggregation, report and benchstat rendering
+- `calibrate_test.go` — harness calibration tests: causal settle wait,
+  phase-aligned counters, latency semantics, no-output accounting,
+  `-report-only` regeneration

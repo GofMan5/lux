@@ -88,6 +88,10 @@ func (l *teaLane) counts() (paints int64, draws int64) {
 	return -1, l.draws.Load()
 }
 
+func (l *teaLane) resetCounts() {
+	l.draws.Store(0)
+}
+
 func (l *teaLane) stop() error {
 	if l.prog != nil {
 		l.prog.Quit()

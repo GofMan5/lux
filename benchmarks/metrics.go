@@ -38,8 +38,13 @@ type RunResult struct {
 
 	BatchLatMs []float64 `json:"batch_latency_ms,omitempty"`
 	FrameGapMs []float64 `json:"frame_gap_ms,omitempty"`
-	Notes      []string  `json:"notes,omitempty"`
-	Error      string    `json:"error,omitempty"`
+
+	// NoOutput counts drive units (bursts, resizes, rtt steps) that
+	// produced no output at all after the input — a distinct outcome,
+	// never a 0 ms latency.
+	NoOutput int      `json:"no_output,omitempty"`
+	Notes    []string `json:"notes,omitempty"`
+	Error    string   `json:"error,omitempty"`
 }
 
 func (r *RunResult) label() string {
@@ -158,6 +163,7 @@ type laneAgg struct {
 	GapP50        float64
 	GapP95        float64
 	GapP99        float64
+	NoOutput      int64
 	Notes         []string
 	ErrCount      int
 }
@@ -290,7 +296,7 @@ func aggregate(runs []*RunResult) []cellAgg {
 func aggregateLane(laneName string, runs []*RunResult) laneAgg {
 	l := laneAgg{Lane: laneName, Runs: len(runs)}
 
-	var events, bytes, bursts, paints, draws, cpu, wall, idle []int64
+	var events, bytes, bursts, paints, draws, cpu, wall, idle, noout []int64
 	var allocs, mallocs []uint64
 	var lats, gaps []float64
 	notes := make(map[string]bool)
@@ -304,6 +310,7 @@ func aggregateLane(laneName string, runs []*RunResult) laneAgg {
 		cpu = append(cpu, r.CPUUs)
 		wall = append(wall, r.WallMs)
 		idle = append(idle, r.IdleCPUUs)
+		noout = append(noout, int64(r.NoOutput))
 		allocs = append(allocs, r.AllocB)
 		mallocs = append(mallocs, r.Mallocs)
 		lats = append(lats, r.BatchLatMs...)
@@ -326,6 +333,10 @@ func aggregateLane(laneName string, runs []*RunResult) laneAgg {
 	l.WallMs = medianInt64(wall)
 	l.Mallocs = medianUint64(mallocs)
 	medianAlloc := medianUint64(allocs)
+	l.NoOutput = medianInt64(noout)
+	if l.NoOutput > 0 {
+		notes[fmt.Sprintf("no-output units (latency omitted): %d", l.NoOutput)] = true
+	}
 
 	l.MsPerFrame = 0
 	l.LatP50 = medianFloat(lats)
@@ -395,7 +406,7 @@ func renderReport(spec machineSpec, aggs []cellAgg, quick bool) string {
 	b.WriteString("- **draws** = lane view/draw invocations (lux `View`, tea `View`, tview `Draw`).\n")
 	b.WriteString("- **CPU us/frame**, **ms/frame**, **bytes/frame**, **alloc B/frame** are divided by the median frame count (paints, or bursts when paints are `-1`); ms/frame includes pacing sleeps. A `—` means the lane produced no measurable frames (no paints, no wire output), so per-frame division has no honest denominator.\n")
 	b.WriteString("- **idle CPU%** = CPU during a 2 s quiet window after the run, as % of one core.\n")
-	b.WriteString("- **lat p50/p95** = input-burst-to-last-output latency, ms, where the scene defines it.\n")
+	b.WriteString("- **lat p50/p95** = input-to-last-output latency, ms, where the scene defines it; the wait requires output causally after the input, and units with no output are counted in notes (`no-output units`), never as 0 ms.\n")
 	b.WriteString("- **gap p50/p95/p99** = burst-to-burst gap distribution, ms.\n")
 	b.WriteString("- Each lane renders through its own idiomatic API (lux row strings + cell puts, tea lipgloss styled lines, tview per-cell `SetContent`), so this measures frameworks, not applications. All tuning is defaults-only.\n")
 	b.WriteString("- **ratatui is not measured**: it is a Rust crate, not a Go dependency; no cross-language numbers are invented.\n")
@@ -452,6 +463,9 @@ func renderBenchstat(spec machineSpec, aggs []cellAgg) string {
 			fmt.Fprintf(&b, "  bytes_per_frame=%.0f\n", l.BytesPerFrame)
 			fmt.Fprintf(&b, "  alloc_b_per_frame=%.0f\n", l.AllocPerFrame)
 			fmt.Fprintf(&b, "  idle_cpu_pct=%.2f\n", l.IdleCPUPct)
+			if l.NoOutput > 0 {
+				fmt.Fprintf(&b, "  no_output_units=%d\n", l.NoOutput)
+			}
 			if l.LatP50 > 0 || l.LatP95 > 0 {
 				fmt.Fprintf(&b, "  batch_latency_ms_p50=%.2f\n", l.LatP50)
 				fmt.Fprintf(&b, "  batch_latency_ms_p95=%.2f\n", l.LatP95)

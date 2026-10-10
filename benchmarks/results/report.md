@@ -9,7 +9,7 @@ Mode: full (3 rounds per cell, 120x40 and 240x80)
 - Kernel: 6.6.87.2-microsoft-standard-WSL2 x86_64
 - Go: go1.26.9 (linux/amd64)
 - Image: golang:1.26-alpine
-- Collected: 2026-10-09T21:07:37Z
+- Collected: 2026-10-10T04:16:11Z
 
 ## Reproduce
 
@@ -32,7 +32,7 @@ docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
 - **draws** = lane view/draw invocations (lux `View`, tea `View`, tview `Draw`).
 - **CPU us/frame**, **ms/frame**, **bytes/frame**, **alloc B/frame** are divided by the median frame count (paints, or bursts when paints are `-1`); ms/frame includes pacing sleeps. A `—` means the lane produced no measurable frames (no paints, no wire output), so per-frame division has no honest denominator.
 - **idle CPU%** = CPU during a 2 s quiet window after the run, as % of one core.
-- **lat p50/p95** = input-burst-to-last-output latency, ms, where the scene defines it.
+- **lat p50/p95** = input-to-last-output latency, ms, where the scene defines it; the wait requires output causally after the input, and units with no output are counted in notes (`no-output units`), never as 0 ms.
 - **gap p50/p95/p99** = burst-to-burst gap distribution, ms.
 - Each lane renders through its own idiomatic API (lux row strings + cell puts, tea lipgloss styled lines, tview per-cell `SetContent`), so this measures frameworks, not applications. All tuning is defaults-only.
 - **ratatui is not measured**: it is a Rust crate, not a Go dependency; no cross-language numbers are invented.
@@ -42,155 +42,155 @@ docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 0 | 379 | 379 | 1977.5 | 12.67 | 0 | 986 | 0.28 | — | — | — |
-| tea | 300 | 0 | -1 | 404 | — | — | — | — | 1.13 | — | — | no frames observed: lane produced no paint count and no wire output in this scene |
-| tview | 300 | 300 | 802 | 802 | 1729.8 | 6.18 | 9049 | 153859 | 0.01 | — | 16.0 / 17.2 / 17.9 | — |
+| lux | 300 | 0 | 289 | 289 | 5967.4 | 103.12 | 0 | 1294 | 0.10 | — | — | no output observed after the drive phase (expected tail frames) |
+| tea | 300 | 0 | -1 | 300 | — | — | — | — | 0.79 | — | — | no frames observed: lane produced no paint count and no wire output in this scene; no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 300 | 600 | 600 | 2037.3 | 8.26 | 12095 | 205652 | 0.01 | — | 16.0 / 17.1 / 17.5 | — |
 
 ## Scene static 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 0 | 379 | 379 | 5717.7 | 12.67 | 0 | 984 | 0.60 | — | — | — |
-| tea | 300 | 0 | -1 | 404 | — | — | — | — | 1.21 | — | — | no frames observed: lane produced no paint count and no wire output in this scene |
-| tview | 300 | 602 | 802 | 802 | 6557.7 | 6.34 | 34864 | 594555 | 0.01 | — | 7.9 / 11.9 / 16.3 | — |
+| lux | 300 | 0 | 289 | 289 | 10086.7 | 103.12 | 0 | 1295 | 0.10 | — | — | no output observed after the drive phase (expected tail frames) |
+| tea | 300 | 0 | -1 | 300 | — | — | — | — | 0.84 | — | — | no frames observed: lane produced no paint count and no wire output in this scene; no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 600 | 600 | 600 | 7864.1 | 8.62 | 46602 | 794723 | 0.01 | — | 9.2 / 17.9 / 24.1 | — |
 
 ## Scene onecell 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 278 | 380 | 380 | 2323.2 | 13.08 | 20 | 1012 | 0.15 | — | 16.6 / 18.0 / 33.8 | — |
-| tea | 300 | 274 | -1 | 404 | 3441.9 | 18.12 | 22 | 49453 | 1.14 | — | 16.7 / 18.0 / 34.1 | — |
-| tview | 300 | 300 | 802 | 802 | 1838.9 | 6.18 | 9094 | 154103 | 0.01 | — | 16.0 / 17.1 / 17.5 | — |
+| lux | 300 | 278 | 289 | 289 | 2992.1 | 17.20 | 27 | 1331 | 0.12 | — | 16.6 / 18.1 / 34.0 | no output observed after the drive phase (expected tail frames) |
+| tea | 300 | 276 | -1 | 300 | 2790.0 | 17.99 | 22 | 50923 | 0.72 | — | 16.7 / 17.9 / 33.6 | no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 300 | 600 | 600 | 2053.0 | 8.26 | 12156 | 205989 | 0.01 | — | 16.0 / 17.0 / 17.6 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene onecell 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 276 | 378 | 378 | 6483.4 | 13.16 | 20 | 1017 | 0.12 | — | 16.7 / 23.9 / 34.5 | — |
-| tea | 300 | 274 | -1 | 404 | 7418.6 | 18.11 | 22 | 157511 | 0.98 | — | 16.7 / 20.5 / 34.2 | — |
-| tview | 300 | 601 | 802 | 802 | 6113.2 | 6.21 | 34910 | 594813 | 0.01 | — | 8.2 / 11.8 / 17.0 | — |
+| lux | 300 | 278 | 289 | 289 | 7191.8 | 17.21 | 27 | 1326 | 0.13 | — | 16.9 / 33.6 / 48.2 | no output observed after the drive phase (expected tail frames) |
+| tea | 300 | 276 | -1 | 300 | 6725.4 | 17.99 | 22 | 155733 | 0.76 | — | 16.8 / 33.6 / 48.9 | no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 600 | 600 | 600 | 7459.0 | 49.69 | 46663 | 795069 | 0.01 | — | 9.8 / 20.4 / 30.9 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene damage 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 288 | 379 | 379 | 3020.3 | 13.08 | 11335 | 2467 | 0.13 | — | 16.7 / 17.9 / 18.3 | — |
-| tea | 300 | 286 | -1 | 404 | 6987.1 | 17.36 | 17817 | 303415 | 0.98 | — | 16.7 / 17.9 / 18.8 | — |
-| tview | 300 | 300 | 802 | 802 | 2413.7 | 6.18 | 27970 | 252127 | 0.01 | — | 16.0 / 17.3 / 17.9 | — |
+| lux | 300 | 288 | 288 | 288 | 3239.7 | 17.26 | 14926 | 3247 | 0.09 | — | 16.7 / 17.6 / 17.8 | no output observed after the drive phase (expected tail frames) |
+| tea | 300 | 286 | -1 | 300 | 6229.0 | 17.36 | 17806 | 304392 | 0.76 | — | 16.7 / 17.7 / 33.2 | no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 300 | 600 | 600 | 2789.6 | 8.26 | 37379 | 336968 | 0.02 | — | 16.0 / 17.2 / 19.7 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene damage 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 288 | 378 | 378 | 7916.0 | 13.13 | 45264 | 6865 | 0.15 | — | 16.6 / 19.3 / 21.9 | — |
-| tea | 300 | 299 | -1 | 404 | 21624.1 | 17.32 | 71818 | 1037185 | 0.95 | — | 16.7 / 19.4 / 21.5 | — |
-| tview | 300 | 602 | 802 | 802 | 8567.1 | 7.44 | 110995 | 988606 | 0.01 | — | 9.0 / 12.1 / 16.6 | — |
+| lux | 300 | 289 | 289 | 289 | 9294.3 | 17.22 | 59389 | 9004 | 0.13 | — | 16.8 / 44.1 / 59.0 | — |
+| tea | 300 | 288 | -1 | 300 | 19629.8 | 17.30 | 71830 | 1072816 | 0.76 | — | 17.1 / 51.4 / 66.1 | — |
+| tview | 300 | 600 | 600 | 600 | 9031.4 | 8.36 | 148387 | 1321563 | 0.01 | — | 8.5 / 31.4 / 35.5 | — |
 
 ## Scene full 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 289 | 380 | 380 | 3353.4 | 13.08 | 66894 | 15623 | 0.11 | — | 16.7 / 17.8 / 18.3 | — |
-| tea | 300 | 296 | -1 | 404 | 23791.5 | 17.66 | 87600 | 1401475 | 1.03 | — | 16.7 / 19.0 / 33.0 | — |
-| tview | 300 | 373 | 802 | 802 | 4900.2 | 6.19 | 112484 | 685191 | 0.01 | — | 13.2 / 17.3 / 18.4 | — |
+| lux | 300 | 288 | 288 | 288 | 3888.8 | 17.26 | 87947 | 20561 | 0.10 | — | 16.8 / 33.3 / 34.1 | — |
+| tea | 300 | 286 | -1 | 300 | 19828.2 | 17.41 | 87890 | 1442083 | 0.72 | — | 16.7 / 32.7 / 48.9 | — |
+| tview | 300 | 309 | 600 | 600 | 5758.2 | 8.27 | 150354 | 915873 | 0.01 | — | 15.9 / 17.0 / 17.7 | — |
 
 ## Scene full 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 207 | 293 | 293 | 8581.5 | 16.99 | 245846 | 55504 | 0.13 | — | 17.4 / 36.2 / 51.5 | — |
-| tea | 300 | 302 | -1 | 404 | 88919.9 | 61.94 | 347555 | 5464384 | 1.11 | — | 62.4 / 80.9 / 95.0 | — |
-| tview | 300 | 600 | 802 | 802 | 18326.5 | 15.79 | 448596 | 2723542 | 0.01 | — | 20.2 / 26.3 / 33.7 | — |
+| lux | 300 | 288 | 288 | 288 | 11062.8 | 17.29 | 350016 | 78145 | 0.14 | — | 16.7 / 71.3 / 101.1 | — |
+| tea | 300 | 303 | -1 | 300 | 73707.6 | 52.00 | 346408 | 5443787 | 0.67 | — | 50.1 / 66.5 / 72.7 | — |
+| tview | 300 | 600 | 600 | 600 | 22231.9 | 60.09 | 599624 | 3640472 | 0.01 | — | 18.5 / 22.4 / 28.0 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene list 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 289 | 379 | 379 | 2330.0 | 13.11 | 132 | 1017 | 0.11 | — | 16.5 / 17.7 / 18.3 | — |
-| tea | 300 | 288 | -1 | 404 | 2216.6 | 17.24 | 158 | 21024 | 0.91 | — | 16.6 / 17.6 / 17.9 | — |
-| tview | 300 | 300 | 802 | 802 | 1625.4 | 6.18 | 6878 | 110686 | 0.01 | — | 15.9 / 17.2 / 17.9 | — |
+| lux | 300 | 289 | 289 | 289 | 2896.0 | 17.20 | 174 | 1335 | 0.11 | — | 16.5 / 17.7 / 18.3 | — |
+| tea | 300 | 288 | -1 | 300 | 2174.0 | 17.24 | 158 | 21731 | 0.70 | — | 16.6 / 17.6 / 17.7 | — |
+| tview | 300 | 300 | 600 | 600 | 1718.6 | 8.26 | 9194 | 147939 | 0.01 | — | 15.8 / 16.8 / 17.0 | — |
 
 ## Scene list 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 288 | 379 | 379 | 6022.8 | 13.10 | 227 | 1015 | 0.11 | — | 16.7 / 18.9 / 21.8 | — |
-| tea | 300 | 288 | -1 | 404 | 6027.7 | 17.23 | 283 | 44849 | 0.96 | — | 16.6 / 18.4 / 19.9 | — |
-| tview | 300 | 599 | 802 | 802 | 4881.7 | 6.19 | 25728 | 422016 | 0.01 | — | 7.7 / 12.0 / 14.5 | — |
+| lux | 300 | 289 | 289 | 289 | 7339.9 | 17.21 | 298 | 1333 | 0.10 | — | 16.6 / 17.7 / 18.8 | — |
+| tea | 300 | 288 | -1 | 300 | 4899.2 | 17.23 | 283 | 44874 | 0.73 | — | 16.7 / 17.6 / 18.6 | — |
+| tview | 300 | 591 | 600 | 600 | 5999.2 | 8.27 | 34390 | 564085 | 0.01 | — | 7.7 / 12.3 / 15.6 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene resize 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 20 | 20 | 111 | 111 | 711.7 | 45.18 | 1193 | 13584 | 0.10 | — | 250.8 / 251.8 / 252.2 | — |
-| tea | 20 | 20 | -1 | 124 | 5758.3 | 250.60 | 6492 | 438440 | 0.81 | — | 250.0 / 252.1 / 258.1 | — |
-| tview | 20 | 20 | 222 | 222 | 499.4 | 22.58 | 2020 | 166407 | 0.02 | — | 250.1 / 254.0 / 254.4 | — |
+| lux | 20 | 20 | 20 | 20 | 59532.8 | 1500.80 | 6621 | 75390 | 0.10 | 2.4 / 3.7 | 250.6 / 251.6 / 252.3 | no output observed after the drive phase (expected tail frames) |
+| tea | 20 | 20 | -1 | 20 | 50739.4 | 1500.70 | 6492 | 432784 | 0.75 | 11.5 / 18.0 | 249.7 / 251.7 / 252.2 | no output observed after the drive phase (expected tail frames) |
+| tview | 20 | 20 | 20 | 20 | 48220.8 | 1500.70 | 22419 | 1847197 | 0.01 | 3.6 / 6.0 | 250.2 / 253.6 / 253.8 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene resize 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 20 | 20 | 111 | 111 | 2132.1 | 45.16 | 4407 | 52445 | 0.11 | — | 251.0 / 254.0 / 256.4 | — |
-| tea | 20 | 20 | -1 | 124 | 12372.5 | 250.65 | 24178 | 1735048 | 0.80 | — | 247.7 / 256.1 / 258.0 | — |
-| tview | 20 | 40 | 222 | 222 | 1622.4 | 22.58 | 7587 | 659341 | 0.02 | — | 13.5 / 251.8 / 254.7 | — |
+| lux | 20 | 20 | 20 | 20 | 65483.1 | 1500.65 | 24456 | 291007 | 0.09 | 8.6 / 11.6 | 250.5 / 252.5 / 255.5 | no output observed after the drive phase (expected tail frames) |
+| tea | 20 | 20 | -1 | 20 | 56524.4 | 1500.75 | 24178 | 1740495 | 0.71 | 16.8 / 24.2 | 247.3 / 254.7 / 262.2 | no output observed after the drive phase (expected tail frames) |
+| tview | 20 | 40 | 20 | 20 | 58100.1 | 1500.65 | 84211 | 7318979 | 0.01 | 13.2 / 21.8 | 9.5 / 250.2 / 255.5 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene inputburst 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 600 | 2 | 93 | 93 | 166.9 | 1.84 | 1 | 4996 | 0.17 | 0.0 / 2.7 | 17.4 / 17.6 / 17.6 | — |
-| tea | 600 | 0 | -1 | 704 | — | — | — | — | 18.75 | — | — | no frames observed: lane produced no paint count and no wire output in this scene |
-| tview | 600 | 8 | 1402 | 1402 | 1491.6 | 1.86 | 10403 | 176233 | 0.01 | 282.3 / 310.0 | 409.8 / 437.1 / 441.5 | — |
+| lux | 600 | 12 | 12 | 12 | 87898.9 | 2168.33 | 52 | 40010 | 0.10 | 19.3 / 19.6 | 17.6 / 153.9 / 154.1 | no output observed after the drive phase (expected tail frames) |
+| tea | 600 | 23 | -1 | 600 | 54284.4 | 1142.65 | 84 | 785445 | 0.83 | 65.7 / 160.5 | 16.8 / 166.5 / 166.7 | no output observed after the drive phase (expected tail frames) |
+| tview | 600 | 110 | 1200 | 1200 | 5529.2 | 24.69 | 12153 | 205906 | 0.02 | 676.1 / 816.1 | 22.0 / 132.8 / 417.8 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene inputburst 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 600 | 0 | 92 | 92 | 30.2 | 0.01 | 0 | 2832 | 0.96 | — | — | — |
-| tea | 600 | 0 | -1 | 704 | — | — | — | — | 67.97 | — | — | no frames observed: lane produced no paint count and no wire output in this scene |
-| tview | 600 | 1201 | 1402 | 1402 | 5967.8 | 5.84 | 39938 | 680450 | 0.01 | 1173.8 / 1330.4 | 5.7 / 8.1 / 10.2 | — |
+| lux | 600 | 12 | 12 | 12 | 93100.6 | 2170.58 | 53 | 41578 | 0.10 | 23.0 / 24.0 | 17.7 / 158.5 / 159.3 | no output observed after the drive phase (expected tail frames) |
+| tea | 600 | 74 | -1 | 600 | 33289.2 | 366.68 | 129 | 1006797 | 1.46 | 205.9 / 708.9 | 16.7 / 29.9 / 167.2 | no output observed after the drive phase (expected tail frames) |
+| tview | 600 | 1290 | 1200 | 1200 | 17980.9 | 35.16 | 46661 | 795009 | 0.02 | 3094.2 / 3632.7 | 9.4 / 27.6 / 33.9 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene egc 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 288 | 379 | 379 | 3115.1 | 13.07 | 558 | 1016 | 0.11 | — | 16.6 / 17.9 / 18.7 | — |
-| tea | 300 | 288 | -1 | 404 | 2564.4 | 17.24 | 12339 | 65351 | 0.95 | — | 16.8 / 17.6 / 18.2 | — |
-| tview | 300 | 300 | 802 | 802 | 2151.5 | 6.18 | 20905 | 281073 | 0.01 | — | 16.0 / 17.1 / 17.7 | — |
+| lux | 300 | 288 | 288 | 288 | 12753.5 | 103.80 | 735 | 1339 | 0.14 | — | 16.7 / 17.6 / 19.5 | no output observed after the drive phase (expected tail frames) |
+| tea | 300 | 287 | -1 | 300 | 9687.6 | 104.08 | 12339 | 66875 | 1.42 | — | 16.7 / 17.4 / 17.9 | no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 301 | 600 | 600 | 7457.6 | 49.78 | 27943 | 375691 | 0.01 | — | 16.0 / 17.4 / 23.4 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene egc 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 287 | 378 | 378 | 9469.7 | 13.15 | 1091 | 1020 | 0.13 | — | 16.6 / 21.0 / 25.0 | — |
-| tea | 300 | 288 | -1 | 404 | 6613.3 | 17.23 | 48041 | 175085 | 1.00 | — | 16.7 / 18.6 / 19.9 | — |
-| tview | 300 | 602 | 802 | 802 | 7191.8 | 6.37 | 84468 | 1116194 | 0.01 | — | 7.9 / 10.9 / 13.6 | — |
+| lux | 300 | 149 | 149 | 149 | 37407.1 | 35.60 | 1437 | 2325 | 0.14 | — | 17.9 / 49.0 / 60.2 | — |
+| tea | 300 | 263 | -1 | 300 | 12880.4 | 18.98 | 46214 | 181931 | 1.26 | — | 16.8 / 27.5 / 32.5 | no output observed after the drive phase (expected tail frames) |
+| tview | 300 | 674 | 600 | 600 | 31543.0 | 65.39 | 112906 | 1491975 | 0.02 | — | 15.3 / 32.6 / 38.7 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene rtt 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 12 | 1 | 93 | 93 | 273.7 | 5.42 | 0 | 122 | 0.34 | 0.0 / 1.7 | — | — |
-| tea | 12 | 1 | -1 | 116 | 24070.0 | 514.00 | 22 | 264384 | 1.24 | 0.0 / 12.7 | — | — |
-| tview | 12 | 12 | 226 | 226 | 1130.1 | 26.77 | 1291 | 21895 | 0.01 | 3.1 / 4.1 | 504.3 / 506.1 / 506.8 | — |
+| lux | 12 | 12 | 12 | 12 | 201967.2 | 2589.08 | 28 | 1389 | 0.14 | 2.9 / 3.1 | 503.7 / 504.9 / 505.2 | no output observed after the drive phase (expected tail frames) |
+| tea | 12 | 12 | -1 | 12 | 94747.6 | 2600.08 | 22 | 80822 | 0.71 | 15.7 / 16.9 | 516.7 / 517.3 / 517.6 | no output observed after the drive phase (expected tail frames) |
+| tview | 12 | 12 | 24 | 24 | 40580.3 | 1293.96 | 12156 | 206121 | 0.01 | 3.0 / 3.6 | 504.2 / 505.5 / 505.5 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene rtt 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 12 | 1 | 93 | 93 | 312.7 | 5.46 | 0 | 122 | 0.77 | 0.0 / 6.0 | — | — |
-| tea | 12 | 1 | -1 | 116 | 25989.0 | 516.00 | 22 | 362640 | 2.10 | 0.0 / 12.9 | — | — |
-| tview | 12 | 24 | 226 | 226 | 1691.8 | 27.25 | 4955 | 84445 | 0.01 | 12.1 / 14.5 | 6.9 / 508.8 / 511.5 | — |
+| lux | 12 | 12 | 12 | 12 | 119639.0 | 2591.58 | 28 | 1386 | 0.10 | 6.3 / 15.4 | 507.8 / 517.4 / 520.1 | no output observed after the drive phase (expected tail frames) |
+| tea | 12 | 12 | -1 | 12 | 103364.9 | 2600.00 | 22 | 177826 | 0.71 | 15.2 / 16.7 | 516.7 / 517.8 / 518.1 | no output observed after the drive phase (expected tail frames) |
+| tview | 12 | 24 | 24 | 24 | 45056.2 | 1298.17 | 46663 | 795271 | 0.01 | 11.4 / 13.5 | 7.7 / 508.6 / 510.6 | no output observed after the drive phase (expected tail frames) |
 
 ## Scene subcell 120x40
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 289 | 380 | 380 | 1669.8 | 13.08 | 2001 | 1590 | 0.12 | — | 16.7 / 17.6 / 17.9 | — |
+| lux | 300 | 289 | 289 | 289 | 2061.8 | 17.20 | 2635 | 2087 | 0.10 | — | 16.7 / 17.6 / 17.8 | — |
 
 ## Scene subcell 240x80
 
 | lane | events | bursts | paints | draws | CPU us/frame | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
-| lux | 300 | 289 | 379 | 379 | 4196.7 | 13.12 | 5259 | 1586 | 0.15 | — | 16.6 / 18.4 / 19.8 | — |
+| lux | 300 | 289 | 289 | 289 | 4764.1 | 17.20 | 6888 | 2084 | 0.12 | — | 16.7 / 17.5 / 18.1 | — |
 

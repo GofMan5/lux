@@ -6,25 +6,38 @@
   "round": 1,
   "quick": false,
   "events": 600,
-  "bytes": 104,
-  "bursts": 2,
-  "paints": 93,
-  "draws": 93,
-  "cpu_us": 17414,
-  "wall_ms": 171,
-  "alloc_bytes": 464592,
-  "mallocs": 1066,
-  "idle_cpu_us": 3324,
-  "settle_ms": 0,
+  "bytes": 619,
+  "bursts": 12,
+  "paints": 12,
+  "draws": 12,
+  "cpu_us": 1194744,
+  "wall_ms": 26020,
+  "alloc_bytes": 480120,
+  "mallocs": 1108,
+  "idle_cpu_us": 2849,
+  "settle_ms": 25000,
   "batch_latency_ms": [
-    0,
-    0,
-    0,
-    0,
-    0,
-    17.836
+    19.577,
+    19.182,
+    19.299,
+    19.246,
+    19.649,
+    19.425
   ],
   "frame_gap_ms": [
-    17.581269
+    17.475703,
+    152.62632,
+    17.231697,
+    152.634321,
+    17.286098,
+    153.821248,
+    16.119372,
+    152.657421,
+    17.538504,
+    152.142309,
+    17.3552
+  ],
+  "notes": [
+    "no output observed after the drive phase (expected tail frames)"
   ]
 }

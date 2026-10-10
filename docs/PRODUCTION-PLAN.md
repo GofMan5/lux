@@ -201,6 +201,14 @@ Border не используется по умолчанию для каждог
 
 Порог уточняется после нового baseline и выбранного host. PR CI ловит детерминированные properties; timing сравнивается на стабильном benchmark host.
 
+**Измеренный baseline (2026-10-10, калиброванный harness, полный прогон 168 runs / 0 failed, benchmarks/results/report.md; i5-10400F, golang:1.26-alpine, Docker/WSL2):**
+
+- Статичный UI: lux — 0 bytes/frame при 289 paints (unchanged frame реально не попадает в wire); idle lux 0.09–0.14% core (tea 0.67–1.46%, tview ~0.01%).
+- Причинная input→output latency (p95, 120×40 / 240×80): lux resize 3.7 / 11.6 ms; rtt 3.1 / 15.4 ms; inputburst 19.6 / 24.0 ms — в бюджете ≤50 ms. tea inputburst 160 / 709 ms, tview inputburst 676 / 3633 ms (сериализация QueueUpdateDraw — их реальное поведение, не наш blocker).
+- Mean CPU us/frame на paced-сценах 120×40 (lux): onecell 3.0, list 2.9, subcell 2.1, damage 3.2, full 3.9, static 6.0, egc 12.8 ms — egc и resize (59.5 ms CPU/repaint, отдельный budget сложных сцен) остаются кандидатами на profile-этап (§5). Замечание честности: harness сейчас даёт mean CPU на кадр, а не p95; per-frame p95-тайминги — часть этапа 5, не фиктивная приёмка по mean.
+- Carriage для сравнения A/B: benchstat.txt + raw/*.json закоммичены; повторяемость подтверждена 3 rounds на ячейку.
+
+
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.
 
 ## 10. Этап 6 — дизайн-workbench и reference applications

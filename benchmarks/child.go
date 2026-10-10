@@ -107,9 +107,11 @@ func childMeasurePhase(adapterName string, sc sceneID, w, h, round int, quick bo
 	}
 	reader.waitQuiet(settleQuiet, settleTimeout)
 
-	// Measured phase.
+	// Measured phase: wire, counters, and usage all start at zero here,
+	// so paints/draws and bytes/bursts/CPU/alloc cover the same window.
 	phase("reset")
 	reader.reset()
+	adapter.resetCounts()
 	runtime.GC()
 	runtime.GC()
 	base := snapshotUsage()
@@ -139,10 +141,16 @@ func childMeasurePhase(adapterName string, sc sceneID, w, h, round int, quick bo
 				adapter.inputTick()
 				events++
 			}
-			if !reader.waitQuiet(settleQuiet, settleTimeout) {
+			ok, gotNew := reader.waitQuietSince(t0, settleQuiet, settleTimeout)
+			if !gotNew {
+				res.NoOutput++
+				failNote("batch %d produced no output after input", b+1)
+			} else if !ok {
 				failNote("batch %d did not settle within %s", b+1, settleTimeout)
 			}
-			lats = append(lats, latMs(reader.lastReadTime(), t0))
+			if gotNew {
+				lats = append(lats, latMs(reader.lastReadTime(), t0))
+			}
 		}
 		res.BatchLatMs = lats
 
@@ -159,10 +167,16 @@ func childMeasurePhase(adapterName string, sc sceneID, w, h, round int, quick bo
 				failNote("resize %d failed: %v", n+1, err)
 			}
 			events++
-			if !reader.waitQuiet(resizeQuiet, settleTimeout) {
+			ok, gotNew := reader.waitQuietSince(t0, resizeQuiet, settleTimeout)
+			if !gotNew {
+				res.NoOutput++
+				failNote("resize %d produced no output", n+1)
+			} else if !ok {
 				failNote("resize %d did not settle within %s", n+1, settleTimeout)
 			}
-			lats = append(lats, latMs(reader.lastReadTime(), t0))
+			if gotNew {
+				lats = append(lats, latMs(reader.lastReadTime(), t0))
+			}
 			if elapsed := time.Since(t0); elapsed < resizeEvery {
 				time.Sleep(resizeEvery - elapsed)
 			}
@@ -177,19 +191,27 @@ func childMeasurePhase(adapterName string, sc sceneID, w, h, round int, quick bo
 			sess.write(burstKey(i))
 			adapter.inputTick()
 			events++
-			if !reader.waitQuiet(rttQuiet, settleTimeout) {
+			ok, gotNew := reader.waitQuietSince(t0, rttQuiet, settleTimeout)
+			if !gotNew {
+				res.NoOutput++
+				failNote("rtt step %d produced no output after input", i+1)
+			} else if !ok {
 				failNote("rtt step %d did not settle within %s", i+1, settleTimeout)
 			}
-			lats = append(lats, latMs(reader.lastReadTime(), t0))
+			if gotNew {
+				lats = append(lats, latMs(reader.lastReadTime(), t0))
+			}
 		}
 		res.BatchLatMs = lats
 	}
 
 	phase("final-settle")
 	settleStart := time.Now()
-	settled := reader.waitQuiet(quietFor(sc), settleTimeout)
+	settled, gotNew := reader.waitQuietSince(settleStart, quietFor(sc), settleTimeout)
 	res.SettleMs = time.Since(settleStart).Milliseconds()
-	if !settled {
+	if !gotNew {
+		failNote("no output observed after the drive phase (expected tail frames)")
+	} else if !settled {
 		failNote("final settle timed out after %s", settleTimeout)
 	}
 
@@ -227,8 +249,11 @@ func childMeasurePhase(adapterName string, sc sceneID, w, h, round int, quick bo
 	return res
 }
 
-// latMs is the input-to-last-output latency of one unit, or 0 when no
-// output was observed.
+// latMs is the input-to-last-output latency of one unit. A stale last
+// read maps to 0, but callers only invoke it after waitQuietSince
+// reported a read at or after t0 (gotNew), so the 0 arm is a guard, not
+// a reported result — units without output are counted in NoOutput
+// instead of entering the latency distribution.
 func latMs(lastRead, t0 time.Time) float64 {
 	if lastRead.IsZero() || lastRead.Before(t0) {
 		return 0

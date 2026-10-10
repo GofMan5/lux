@@ -29,6 +29,18 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Benchmark harness measurement honesty: lane paint/draw counters are now
+  zeroed right after warmup (`adapter.resetCounts()`), so they cover the
+  same measured phase as the wire bytes and CPU/allocation snapshots
+  instead of silently including warmup traffic; and the settle waits are
+  causal (`masterReader.waitQuietSince`): silence only proves an action
+  finished when output from *after* that action was observed first. Drive
+  units that produce no output at all are counted in a new
+  `no_output` result field and surfaced in the report notes instead of
+  entering the latency distribution as a fabricated 0 ms. Unit tests in
+  `benchmarks/calibrate_test.go` pin both behaviors without a pty, and
+  `benchmarks/results` was regenerated with the recalibrated counters.
+
 - Hardened the OSC 8 output seam: a `render.Link` whose URI or ID carries
   control characters, malformed UTF-8, id field separators, or fields beyond
   the size caps now degrades to plain text at the encoder instead of

@@ -163,6 +163,30 @@ func (r *masterReader) waitQuiet(quiet, timeout time.Duration) bool {
 	}
 }
 
+// waitQuietSince is the causal form of waitQuiet: the silence only counts
+// when it follows a read that happened at or after t0, the moment the
+// caller started the action whose acknowledgement is being awaited. A
+// stale last read (output from a previous action) never satisfies the
+// condition, so silence can no longer masquerade as a completed action.
+//
+// ok reports the full condition: output newer than t0 followed by at
+// least quiet of silence. gotNew reports whether any read at or after
+// t0 was observed at all. A (false, false) result means the action
+// produced no output — a distinct outcome, never a zero latency.
+func (r *masterReader) waitQuietSince(t0 time.Time, quiet, timeout time.Duration) (ok, gotNew bool) {
+	deadline := time.Now().Add(timeout)
+	for {
+		last := r.lastReadTime()
+		if !last.IsZero() && !last.Before(t0) && time.Since(last) >= quiet {
+			return true, true
+		}
+		if !time.Now().Before(deadline) {
+			return false, !last.IsZero() && !last.Before(t0)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // frameGaps returns millisecond gaps between consecutive burst starts.
 func (r *masterReader) frameGaps() []float64 {
 	r.mu.Lock()

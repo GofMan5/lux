@@ -5,9 +5,9 @@ go 1.26.0
 require (
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/lipgloss/v2 v2.0.6
+	github.com/GofMan5/lux v0.0.0
 	github.com/creack/pty v1.1.24
 	github.com/gdamore/tcell/v2 v2.8.1
-	github.com/GofMan5/lux v0.0.0
 	github.com/rivo/tview v0.42.0
 	github.com/rivo/uniseg v0.4.7
 	golang.org/x/sys v0.47.0

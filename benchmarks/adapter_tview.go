@@ -279,6 +279,11 @@ func (l *tviewLane) counts() (paints int64, draws int64) {
 	return l.paints.Load(), l.draws.Load()
 }
 
+func (l *tviewLane) resetCounts() {
+	l.paints.Store(0)
+	l.draws.Store(0)
+}
+
 func (l *tviewLane) stop() error {
 	l.stopped.Store(true)
 	if l.app != nil {

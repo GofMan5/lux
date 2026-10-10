@@ -25,6 +25,11 @@ type adapter interface {
 	// them) and view/draw invocations.
 	counts() (paints int64, draws int64)
 
+	// resetCounts zeroes the paint/draw counters after the warmup phase
+	// so they cover the same window as the wire and usage counters,
+	// which are also reset right after warmup.
+	resetCounts()
+
 	stop() error
 }
 

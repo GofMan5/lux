@@ -36,12 +36,18 @@ func run() int {
 
 	quick := flag.Bool("quick", false, "smoke mode: 1 round, 120x40 only, shrunken pacing")
 	outDir := flag.String("out", "results", "output directory")
+	reportOnly := flag.Bool("report-only", false, "rebuild report.md and benchstat.txt from existing all-runs.json and machine.json without measuring")
 	flag.Usage = func() {
 		fmt.Fprintln(os.Stderr, "usage: bench [-quick] [-out DIR]")
 		fmt.Fprintln(os.Stderr, "       bench --child LANE SCENE W H ROUND QUICK OUT")
+		fmt.Fprintln(os.Stderr, "       bench -report-only [-out DIR]")
 		flag.PrintDefaults()
 	}
 	flag.Parse()
+
+	if *reportOnly {
+		return rebuildOutputs(*outDir)
+	}
 
 	self, err := os.Executable()
 	if err != nil {
@@ -105,6 +111,55 @@ func run() int {
 	if failed > 0 {
 		return 1
 	}
+	return 0
+}
+
+// rebuildOutputs regenerates the derived artifacts (report.md,
+// benchstat.txt) from the recorded all-runs.json and machine.json. The raw
+// measurements stay untouched, so report-formatting changes never require
+// re-running the measurement phase.
+func rebuildOutputs(outDir string) int {
+	var results []*RunResult
+	raw, err := os.ReadFile(filepath.Join(outDir, "all-runs.json"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read all-runs.json: %v\n", err)
+		return 2
+	}
+	if err := json.Unmarshal(raw, &results); err != nil {
+		fmt.Fprintf(os.Stderr, "parse all-runs.json: %v\n", err)
+		return 2
+	}
+	quick := false
+	for _, r := range results {
+		if r.Quick {
+			quick = true
+			break
+		}
+	}
+
+	specRaw, err := os.ReadFile(filepath.Join(outDir, "machine.json"))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "read machine.json: %v\n", err)
+		return 2
+	}
+	var spec machineSpec
+	if err := json.Unmarshal(specRaw, &spec); err != nil {
+		fmt.Fprintf(os.Stderr, "parse machine.json: %v\n", err)
+		return 2
+	}
+
+	aggs := aggregate(results)
+	report := renderReport(spec, aggs, quick)
+	if err := os.WriteFile(filepath.Join(outDir, "report.md"), []byte(report), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "write report: %v\n", err)
+		return 2
+	}
+	bench := renderBenchstat(spec, aggs)
+	if err := os.WriteFile(filepath.Join(outDir, "benchstat.txt"), []byte(bench), 0o644); err != nil {
+		fmt.Fprintf(os.Stderr, "write benchstat: %v\n", err)
+		return 2
+	}
+	fmt.Printf("rebuilt report.md and benchstat.txt from %d runs\n", len(results))
 	return 0
 }
 
