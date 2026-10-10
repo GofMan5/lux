@@ -38,6 +38,21 @@ jobs:
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit $status
+      # The redirected output never reaches the job log on its own. Mirror
+      # the whole file into this step's log (goroutine dumps included) and
+      # attach it as an artifact, so authenticated `gh run view --log-failed`
+      # and artifact download both expose the full evidence.
+      - name: Mirror full test output into the log
+        if: steps.gots.outputs.status != '0'
+        shell: bash
+        run: cat test-output.txt
+      - name: Upload test output artifact
+        if: steps.gots.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-output-${{ matrix.os }}-${{ matrix.go }}
+          path: test-output.txt
+          retention-days: 14
       # Anonymous users cannot read job logs, so on failure we mirror the
       # verdict, any race reports, and the failing tests' own messages
       # into step annotations, which the annotations API does expose.
@@ -112,6 +127,19 @@ jobs:
           status=$?
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit $status
+      # Same evidence net as the test matrix: full output into the log plus
+      # an artifact, before the annotation step marks the job failed.
+      - name: Mirror full test output into the log
+        if: steps.gots.outputs.status != '0'
+        shell: bash
+        run: cat test-output.txt
+      - name: Upload test output artifact
+        if: steps.gots.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ssh-test-output-${{ matrix.os }}
+          path: test-output.txt
+          retention-days: 14
       # Anonymous users cannot read job logs, so on failure we mirror the
       # verdict, any race reports, and the failing tests' own messages
       # into step annotations, which the annotations API does expose.

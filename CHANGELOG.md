@@ -17,6 +17,26 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Race-instrumented e2e child (`e2e`): when the PTY suite itself runs under
+  `go test -race`, `TestMain` now builds `childapp` with `-race` too
+  (a build-tag const, `childRaceFlag`, mirrors the suite's own
+  instrumentation). The application under the pty — keystrokes, resizes,
+  paste, suspend/resume — is race-checked for real, not just the test code
+  that drives it; a detected race makes the child exit 66 after printing
+  the report to the pty, where the drain snapshots and wait-status
+  assertions turn it into a RED failure instead of silence. Plain local
+  runs without `-race` build the child without the flag and keep needing
+  no C toolchain.
+
+- CI failure evidence preservation (`.github/workflows/ci.yml`): the test
+  matrix and SSH-example jobs now mirror the complete `test-output.txt`
+  into the job log and upload it as an artifact whenever `go test` fails.
+  The redirected output previously existed only as grep'd annotation
+  lines (head -8, no dump frames), so a goroutine dump captured by the
+  example tests' hang instrumentation was discarded with the runner. Now
+  `gh run view --log-failed` and the artifact carry the full dump, which
+  is the evidence the remaining CI-only convergence flake needs.
+
 - Unix termination contract (`internal/terminal`, `lux`): `SIGINT` and
   `SIGTERM` are now trapped by the runtime's lifecycle watcher, which owns
   the cleanup half of the contract — the terminal is restored immediately
