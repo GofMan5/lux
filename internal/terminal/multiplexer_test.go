@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"reflect"
-	"runtime"
 	"testing"
 	"time"
 
@@ -270,9 +269,6 @@ func TestTmuxKeepsUnicodeCoreClaim(t *testing.T) {
 // follow the reports survive as leftover, exactly as Open would replay
 // them into the read loop.
 func TestNegotiateTmuxStream(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
-	}
 	reader, writer := negotiatePipe(t)
 	done := make(chan error, 1)
 	go func() {

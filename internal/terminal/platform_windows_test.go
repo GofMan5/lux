@@ -3,8 +3,12 @@
 package terminal
 
 import (
+	"context"
+	"errors"
+	"io"
 	"os"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/term"
@@ -91,5 +95,126 @@ func TestMakeRawTermRestoresAfterRoundTrip(t *testing.T) {
 	}
 	if mode&enableVirtualTerminalInput == 0 {
 		t.Fatalf("mode %#x after re-entry lacks ENABLE_VIRTUAL_TERMINAL_INPUT", mode)
+	}
+}
+
+// readInput must serve two handle kinds whose readiness semantics differ:
+// console input handles (the documented wait object) and the anonymous
+// pipes of os.Pipe (whose WaitForSingleObject behavior is kernel-flavor
+// dependent — never signaled on client Windows, always signaled when idle
+// on server releases). The pipe contracts below hold on every flavor:
+// bytes are delivered, deadlines are honored, cancellation returns, and a
+// closed write end surfaces as EOF instead of an endless poll.
+
+func TestReadInputReadsBytesFromPipeInput(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	if _, err := writer.Write([]byte("AB")); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 8)
+	count, err := readInput(context.Background(), reader, buffer, time.Second)
+	if err != nil {
+		t.Fatalf("readInput: %v", err)
+	}
+	if count != 2 || string(buffer[:count]) != "AB" {
+		t.Fatalf("readInput read %d bytes %q, want 2 bytes \"AB\"", count, buffer[:count])
+	}
+}
+
+func TestReadInputWakesForBytesThatArriveLate(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		if _, err := writer.Write([]byte("xy")); err != nil {
+			t.Errorf("write: %v", err)
+		}
+	}()
+	buffer := make([]byte, 8)
+	count, err := readInput(context.Background(), reader, buffer, 2*time.Second)
+	if err != nil {
+		t.Fatalf("readInput: %v", err)
+	}
+	if count != 2 || string(buffer[:count]) != "xy" {
+		t.Fatalf("readInput read %d bytes %q, want 2 bytes \"xy\"", count, buffer[:count])
+	}
+}
+
+func TestReadInputReturnsEOFWhenPipeWriterCloses(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 8)
+	count, err := readInput(context.Background(), reader, buffer, time.Second)
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("readInput error = %v, want io.EOF", err)
+	}
+	if count != 0 {
+		t.Fatalf("readInput count = %d, want 0", count)
+	}
+}
+
+func TestReadInputHonorsContextCancellationOnIdlePipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	buffer := make([]byte, 8)
+	start := time.Now()
+	count, err := readInput(ctx, reader, buffer, 10*time.Second)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("readInput error = %v, want context.Canceled", err)
+	}
+	if count != 0 {
+		t.Fatalf("readInput count = %d, want 0", count)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("readInput took %v to notice cancellation", elapsed)
+	}
+}
+
+func TestReadInputWaitsUntilDeadlineOnIdlePipe(t *testing.T) {
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	defer writer.Close()
+	buffer := make([]byte, 8)
+	start := time.Now()
+	count, err := readInput(context.Background(), reader, buffer, 300*time.Millisecond)
+	if !errors.Is(err, errReadTimeout) {
+		t.Fatalf("readInput error = %v, want errReadTimeout", err)
+	}
+	if count != 0 {
+		t.Fatalf("readInput count = %d, want 0", count)
+	}
+	if elapsed := time.Since(start); elapsed < 280*time.Millisecond {
+		t.Fatalf("readInput gave up after %v, before the 300ms deadline", elapsed)
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("readInput took %v to reach its deadline", elapsed)
 	}
 }

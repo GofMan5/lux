@@ -38,6 +38,32 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Blind and uncancellable pipe reads on Windows (`internal/terminal`):
+  `readInput` waited on the input handle with `WaitForSingleObject`
+  before every read, but that wait is only contractual for console
+  input handles. Go's `os.Pipe` creates synchronous pipe handles whose
+  signaling is kernel-flavor dependent: on client Windows they never
+  signal (bytes written to a pipe stdin never reached the backend —
+  the probe, the multiplexer reply path, and replayed prefills were
+  blind), while on Windows Server the handle reads as signaled when
+  idle, so the subsequent `Read` parked on an empty pipe and no context
+  could cancel it — the Windows CI lanes died in
+  `TestReadLoopReplaysLargePrefillWithoutDeadlock` on both Go versions,
+  twice, deterministically. `readInput` now branches once per call:
+  console input keeps the exact wait-then-read it always had (sliced
+  into 100ms waits so cancellation is noticed inside a slice), while
+  pipes poll `PeekNamedPipe` for queued bytes and read only when the
+  kernel guarantees data — `ERROR_BROKEN_PIPE` maps to `io.EOF` (a
+  closed write end now ends the read loop), `ERROR_INVALID_FUNCTION`
+  (a regular file) falls through to a direct read, and deadlines are
+  honored by sleeping in 10ms slices. Five pipe-contract tests pin the
+  behavior, and the negotiate, multiplexer, and read-loop-done tests
+  that Windows used to skip (with exactly this wait limitation) now
+  run and pass there too. A second defect fell out of the fix: a
+  caller's one-shot wait spanning the whole timeout (probe timeouts,
+  read waits with large values) ignored context cancellation for the
+  full window — cancellation is now noticed within one wait slice.
+
 - Data race in the SSH example pty bridge (`examples/07-ssh`): the resize
   loop called `pty.Setsize` on the master pty whenever a winch arrived,
   with nothing ever stopping it, so an in-flight `TIOCSWINSZ` ioctl could

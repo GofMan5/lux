@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -610,9 +609,9 @@ func TestParserLegacyFunctionKeysAndC0Splits(t *testing.T) {
 }
 
 func TestReadLoopClosesCapturedDoneChannel(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("anonymous pipes are not console input handles on Windows")
-	}
+	// readInput detects last-writer close on Windows pipes through
+	// PeekNamedPipe's ERROR_BROKEN_PIPE, so the loop exits with an EOF
+	// everywhere instead of polling a dead handle forever.
 	input, writer, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)

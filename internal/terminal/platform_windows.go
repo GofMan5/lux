@@ -5,10 +5,12 @@ package terminal
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"github.com/GofMan5/lux/capability"
 	"github.com/GofMan5/lux/event"
@@ -110,25 +112,108 @@ func terminalSize(file *os.File) (int, int, error) {
 
 var errReadTimeout = errors.New("terminal: read timeout")
 
+// peekNamedPipe wraps kernel32's PeekNamedPipe: it never consumes, it
+// reports how many bytes the read end holds and whether the write end is
+// still attached. x/sys does not export the entry point, so it comes
+// through the lazy loader like any other raw call.
+var (
+	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")
+	procPeekNamedPipe = modkernel32.NewProc("PeekNamedPipe")
+)
+
+func peekNamedPipe(handle windows.Handle, available *uint32) error {
+	r1, _, errno := procPeekNamedPipe.Call(
+		uintptr(handle), 0, 0, 0,
+		uintptr(unsafe.Pointer(available)), 0,
+	)
+	if r1 == 0 {
+		return errno
+	}
+	return nil
+}
+
+// waitSlice bounds every WaitForSingleObject and pipe-poll sleep so a
+// context cancellation or a deadline is noticed within one slice no
+// matter how long the caller's timeout is. Windows waits are not
+// interruptible, so responsiveness is bought by slicing, not by the
+// kernel.
+const waitSlice = 100 * time.Millisecond
+
+// readInput reads one chunk from file while honoring ctx and timeout.
+// Console input handles are the one object type whose wait contract is
+// documented: WaitForSingleObject signals exactly when input records are
+// queued. Everything else the backend reads — the anonymous pipes of
+// os.Pipe above all — carries no such contract: Go creates pipes with
+// CreatePipe, and a synchronous pipe handle signals by kernel-flavor
+// rules (never on client Windows, "signaled when idle" on server
+// releases, the mismatch that parked the Windows CI read loop inside a
+// Read no context could cancel). Pipes therefore poll their byte count
+// through PeekNamedPipe, whose answer is contractual, and non-pipe
+// non-console files fall back to a direct read.
 func readInput(ctx context.Context, file *os.File, buffer []byte, timeout time.Duration) (int, error) {
 	handle := windows.Handle(file.Fd())
-	milliseconds := uint32(100)
+	var consoleMode uint32
+	console := windows.GetConsoleMode(handle, &consoleMode) == nil
+	var deadline time.Time
 	if timeout >= 0 {
-		milliseconds = uint32(max(1, int(timeout/time.Millisecond)))
+		deadline = time.Now().Add(timeout)
 	}
 	for {
-		result, err := windows.WaitForSingleObject(handle, milliseconds)
-		if err != nil {
-			return 0, err
+		if console {
+			slice := waitSlice
+			if timeout >= 0 && timeout < waitSlice {
+				slice = max(time.Millisecond, timeout)
+			}
+			result, err := windows.WaitForSingleObject(handle, uint32(slice.Milliseconds()))
+			if err != nil {
+				return 0, err
+			}
+			if ctx.Err() != nil {
+				return 0, ctx.Err()
+			}
+			if result == windows.WAIT_OBJECT_0 {
+				return file.Read(buffer)
+			}
+		} else {
+			var available uint32
+			if err := peekNamedPipe(handle, &available); err != nil {
+				if errors.Is(err, windows.ERROR_BROKEN_PIPE) {
+					// The write end is gone: surface the same EOF a
+					// blocking read would, so a read loop left on the
+					// pipe exits on last-writer close instead of
+					// polling forever.
+					return 0, io.EOF
+				}
+				if errors.Is(err, windows.ERROR_INVALID_FUNCTION) {
+					// Not a pipe and not a console — a regular file.
+					// Those reads complete on their own; there is no
+					// wait contract to honor, so read directly.
+					return file.Read(buffer)
+				}
+				return 0, err
+			}
+			if available > 0 {
+				// Reading only when bytes are queued keeps the Read
+				// short: the kernel returns at most what the pipe
+				// holds, never parking the goroutine on an empty
+				// handle.
+				return file.Read(buffer)
+			}
+			if ctx.Err() != nil {
+				return 0, ctx.Err()
+			}
 		}
-		if ctx.Err() != nil {
-			return 0, ctx.Err()
-		}
-		if result == windows.WAIT_OBJECT_0 {
-			return file.Read(buffer)
-		}
-		if timeout >= 0 {
+		if !deadline.IsZero() && !time.Now().Before(deadline) {
 			return 0, errReadTimeout
+		}
+		if !console {
+			sleep := waitSlice / 10
+			if !deadline.IsZero() {
+				if remaining := time.Until(deadline); remaining < sleep {
+					sleep = remaining
+				}
+			}
+			time.Sleep(sleep)
 		}
 	}
 }

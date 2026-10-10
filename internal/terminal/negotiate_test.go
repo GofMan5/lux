@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +17,11 @@ import (
 // Tests for the capability negotiation probe: the reply parser, the probe
 // loop, feature downgrades, and the LUX_TUI_PROBE_TIMEOUT configuration.
 //
-// The probe reads replies through readInput, which on Windows waits on the
-// input handle. Anonymous pipe handles never satisfy that wait (see the
-// console-input skip in terminal_test.go for the same limitation), so tests
-// that need bytes to arrive over a pipe run everywhere but Windows. The write
-// error, silence, and EOF paths are platform independent and run everywhere.
+// The probe reads replies through readInput. On Windows that read polls
+// anonymous pipes through PeekNamedPipe, so reply bytes delivered over a
+// pipe arrive on every platform and every kernel flavor; these tests run
+// everywhere. (Earlier revisions skipped the pipe-reply tests on Windows
+// because WaitForSingleObject does not signal os.Pipe handles uniformly.)
 
 // negotiatePipe hands the test a pipe whose ends are closed on cleanup.
 func negotiatePipe(t *testing.T) (*os.File, *os.File) {
@@ -311,9 +310,6 @@ func TestNegotiateSilentTerminalBounded(t *testing.T) {
 }
 
 func TestNegotiateDetectsSupports(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
-	}
 	reader, writer := negotiatePipe(t)
 	done := make(chan error, 1)
 	go func() {
@@ -349,9 +345,6 @@ func TestNegotiateDetectsSupports(t *testing.T) {
 // early, while a terminal with no kitty answer costs only the grace, never
 // the full deadline.
 func TestNegotiateKittyGrace(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
-	}
 	t.Run("fragmented late replies land within the grace", func(t *testing.T) {
 		reader, writer := negotiatePipe(t)
 		done := make(chan error, 1)
@@ -420,9 +413,6 @@ func TestNegotiateKittyGrace(t *testing.T) {
 }
 
 func TestNegotiatePreservesUserBytes(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("readInput's WaitForSingleObject never signals for anonymous pipe handles on Windows, so this pipe cannot deliver the reply")
-	}
 	reader, writer := negotiatePipe(t)
 	done := make(chan error, 1)
 	go func() {
@@ -449,9 +439,6 @@ func TestNegotiatePreservesUserBytes(t *testing.T) {
 }
 
 func TestNegotiateCapsRunawayStream(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("the cap needs bytes flowing through readInput, and WaitForSingleObject never signals for anonymous pipe handles on Windows")
-	}
 	reader, writer := negotiatePipe(t)
 	payload := strings.Repeat("x", maxProbeStream+1)
 	done := make(chan error, 1)
