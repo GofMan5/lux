@@ -1,4 +1,4 @@
-name: CI
+﻿name: CI
 
 on:
   push:
@@ -73,22 +73,39 @@ jobs:
       - run: go vet ./...
       - run: go build .
       - name: Run go test -race ./...
+        id: gots
+        continue-on-error: true
         run: |
           set +e
           go test -race -v -count=1 ./... > test-output.txt 2>&1
           status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
           {
             echo '## SSH example test output'
             echo '```'
             cat test-output.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
-          if [ $status -ne 0 ]; then
-            grep -E 'RUN|PASS|FAIL|panic|\.go:[0-9]+:|exit status' test-output.txt | head -30 | while IFS= read -r line; do
-              echo "::error::${line}"
-            done
-          fi
           exit $status
+      - name: Report test outcome
+        if: steps.gots.outputs.status != '0'
+        run: |
+          grep -E '^(=== RUN|--- FAIL|--- PASS|FAIL|ok |panic)' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Report race stack part 1
+        if: steps.gots.outputs.status != '0'
+        run: |
+          grep -A24 'WARNING: DATA RACE' test-output.txt | grep -E 'WARNING|Read at|Write at|Previous|goroutine|/07-ssh/' | head -10 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+      - name: Report race stack part 2
+        if: steps.gots.outputs.status != '0'
+        run: |
+          grep -A24 'WARNING: DATA RACE' test-output.txt | grep -E 'WARNING|Read at|Write at|Previous|goroutine|/07-ssh/' | sed -n '11,22p' | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
+          exit 1
 
   tidy:
     name: Module and formatting
