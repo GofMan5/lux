@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -173,37 +174,37 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.selected == 0 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
 
 	// The focused table takes the arrow keys; each keystroke waits for its
 	// frame so the next input lands on a settled view.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.selected == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 1 })
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.selected == 2 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 2 })
 
 	// A body click selects the row under the pointer: the header takes local
 	// row 0, so absolute Y 3 is body row 1.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 12, Y: 3}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.selected == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 1 })
 
 	// The form widgets live on the tabs' second page: slot 2 ("form")
 	// spans panel-local X 7-12, so absolute X 48 with the strip at X 40
 	// lands inside it. The page switch changes the panel's regions, so
 	// settle proves the form controls committed before they are clicked.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.tab == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
 	settle(t, backend.frames)
 
 	// The checkbox toggles on the mouse release: press focuses, release
 	// activates.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 3}}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 3}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.checked })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.checked })
 
 	// A radio press picks the row under the pointer: local row 1 is violet.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 6}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.station == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.station == 1 })
 
 	// The closed select opens on its release, popup over the panel. The
 	// state is reported inside View, before Present commits the grown
@@ -211,7 +212,7 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	// commit already ran.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 10}}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 10}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.open })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.open })
 	settle(t, backend.frames)
 
 	// Pressing a popup option picks it (row 11 is option index 0 under
@@ -219,32 +220,32 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	// geometry never moves, so the release lands on the same committed
 	// region without another settle.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 11}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.choice == 0 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.choice == 0 })
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 11}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return !state.open && state.choice == 0 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return !state.open && state.choice == 0 })
 
 	// The select kept focus through its own activation, so the strip takes
 	// a press to hand focus back before the arrow keys page again. Pressing
 	// the already-selected form tab keeps the page and moves focus.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.tab == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
 	backend.events <- event.KeyPress(event.KeyRight, 0)
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.tab == 2 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 2 })
 	backend.events <- event.KeyPress(event.KeyRight, 0)
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.tab == 3 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 3 })
 
 	// The tree page registers its own region geometry, so settle proves the
 	// tree committed before the press. A press on panel row 1 selects the
 	// second visible row ("examples", Y 4 with the tree at Y 3).
 	settle(t, backend.frames)
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 4}}
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.treeSel == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.treeSel == 1 })
 
 	// The press focused the tree, so Enter activates the selected row:
 	// "examples" has children, so its expansion set entry flips and the
 	// next view flattens one more level.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, func(state catalogState) bool { return state.treeSel == 1 && state.treeOpen == 1 })
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.treeSel == 1 && state.treeOpen == 1 })
 
 	// The priority Escape shortcut quits even while a widget holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
@@ -258,7 +259,7 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	}
 }
 
-func waitStateWhere(t *testing.T, states <-chan catalogState, match func(catalogState) bool) catalogState {
+func waitStateWhere(t *testing.T, states <-chan catalogState, done <-chan error, match func(catalogState) bool) catalogState {
 	t.Helper()
 	deadline := time.After(hangTimeout)
 	for {
@@ -267,9 +268,12 @@ func waitStateWhere(t *testing.T, states <-chan catalogState, match func(catalog
 			if match(state) {
 				return state
 			}
+		case err := <-done:
+			t.Fatalf("run ended before the state arrived: %v", err)
 		case <-deadline:
-			t.Fatal("matching state timeout")
-			return catalogState{}
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching state timeout; goroutine dump follows\n%s", stack)
 		}
 	}
 }

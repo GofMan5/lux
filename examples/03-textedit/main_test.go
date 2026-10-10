@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -128,21 +129,21 @@ func TestTextEditEndToEndInputAndQuit(t *testing.T) {
 	} else if x, y := waitCaret(t, backend.frames); x < 2 || x >= 62 || y < 1 || y >= 14 {
 		t.Fatalf("caret outside editor body: x=%d y=%d", x, y)
 	}
-	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 3 })
+	waitStateWhere(t, app.observe, done, func(state texteditState) bool { return state.lines == 3 })
 
 	// Committed Unicode reaches the focused editor; Enter splits a line.
 	backend.events <- event.RuneKey(0x754c, 0)
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 4 })
+	waitStateWhere(t, app.observe, done, func(state texteditState) bool { return state.lines == 4 })
 	// Ctrl+Z undoes the line split as one edit.
 	backend.events <- event.RuneKey('z', event.ModCtrl)
-	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 3 })
+	waitStateWhere(t, app.observe, done, func(state texteditState) bool { return state.lines == 3 })
 	// Alt+U is the same undo when the runtime's suspend handshake owns
 	// Ctrl+Z in a live terminal, which is why the example documents both.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 4 })
+	waitStateWhere(t, app.observe, done, func(state texteditState) bool { return state.lines == 4 })
 	backend.events <- event.RuneKey('u', event.ModAlt)
-	waitStateWhere(t, app.observe, func(state texteditState) bool { return state.lines == 3 })
+	waitStateWhere(t, app.observe, done, func(state texteditState) bool { return state.lines == 3 })
 	// The priority Escape shortcut quits even while the editor holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	select {
@@ -155,7 +156,7 @@ func TestTextEditEndToEndInputAndQuit(t *testing.T) {
 	}
 }
 
-func waitStateWhere(t *testing.T, states <-chan texteditState, match func(texteditState) bool) texteditState {
+func waitStateWhere(t *testing.T, states <-chan texteditState, done <-chan error, match func(texteditState) bool) texteditState {
 	t.Helper()
 	deadline := time.After(hangTimeout)
 	for {
@@ -164,9 +165,12 @@ func waitStateWhere(t *testing.T, states <-chan texteditState, match func(texted
 			if match(state) {
 				return state
 			}
+		case err := <-done:
+			t.Fatalf("run ended before the state arrived: %v", err)
 		case <-deadline:
-			t.Fatal("matching state timeout")
-			return texteditState{}
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching state timeout; goroutine dump follows\n%s", stack)
 		}
 	}
 }

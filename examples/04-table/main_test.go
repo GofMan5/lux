@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -160,24 +161,24 @@ func TestTableEndToEndKeysClickAndQuit(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, func(state tabledemoState) bool { return state.rows == 50 })
+	waitStateWhere(t, app.observe, done, func(state tabledemoState) bool { return state.rows == 50 })
 
 	// The focused table takes the arrow keys.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, func(state tabledemoState) bool { return state.selected == 2 })
+	waitStateWhere(t, app.observe, done, func(state tabledemoState) bool { return state.selected == 2 })
 
 	// A header click on NAME (absolute x 10 = body x 8) sorts ascending.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 10, Y: 1}}
-	waitStateWhere(t, app.observe, func(state tabledemoState) bool { return state.sortActive && state.sortColumn == 1 && !state.sortDesc })
+	waitStateWhere(t, app.observe, done, func(state tabledemoState) bool { return state.sortActive && state.sortColumn == 1 && !state.sortDesc })
 
 	// The same header flips to descending.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 10, Y: 1}}
-	waitStateWhere(t, app.observe, func(state tabledemoState) bool { return state.sortDesc })
+	waitStateWhere(t, app.observe, done, func(state tabledemoState) bool { return state.sortDesc })
 
 	// A body click selects the row under the pointer.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 12, Y: 3}}
-	waitStateWhere(t, app.observe, func(state tabledemoState) bool { return state.selected == 1 })
+	waitStateWhere(t, app.observe, done, func(state tabledemoState) bool { return state.selected == 1 })
 
 	// The priority Escape shortcut quits even while the table holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
@@ -191,7 +192,7 @@ func TestTableEndToEndKeysClickAndQuit(t *testing.T) {
 	}
 }
 
-func waitStateWhere(t *testing.T, states <-chan tabledemoState, match func(tabledemoState) bool) tabledemoState {
+func waitStateWhere(t *testing.T, states <-chan tabledemoState, done <-chan error, match func(tabledemoState) bool) tabledemoState {
 	t.Helper()
 	deadline := time.After(hangTimeout)
 	for {
@@ -200,9 +201,12 @@ func waitStateWhere(t *testing.T, states <-chan tabledemoState, match func(table
 			if match(state) {
 				return state
 			}
+		case err := <-done:
+			t.Fatalf("run ended before the state arrived: %v", err)
 		case <-deadline:
-			t.Fatal("matching state timeout")
-			return tabledemoState{}
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching state timeout; goroutine dump follows\n%s", stack)
 		}
 	}
 }
