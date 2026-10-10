@@ -1,6 +1,8 @@
-// Command tour is the full-capability playground: nine tabs, each one a
-// live, interactive stand for one area of the library. Resize the terminal,
-// click the tab strip, or press 1-9 to walk every feature by eye.
+// Command tour is the guided playground: nine tabs, each one a live,
+// interactive stand for one area of the library. Resize the terminal, click
+// the tab strip, or press 1-9 to walk every feature by eye. Static tabs go
+// idle between input; each animated tab asks for frames only while its
+// demos actually move.
 package main
 
 import (
@@ -62,7 +64,6 @@ type tour struct {
 
 	// Motion tab.
 	tween   motion.Tween
-	eased   float64 // tween's last sample, kept so retargets start where the eye is
 	ease    int
 	spring  motion.Spring
 	retimer int
@@ -96,6 +97,7 @@ type tour struct {
 	// Telemetry.
 	frameTimes []float64
 	showHelp   bool
+	reduced    bool // latched from Frame.ReducedMotion every View
 }
 
 // feedRow is one recorded input-tab line: a decoded key or another event
@@ -118,7 +120,16 @@ func newTour() *tour {
 }
 
 func (app *tour) Update(next event.Event) lux.Command {
-	if action, handled := app.ui.Handle(next); handled {
+	// The input inspector logs every decoded event before routing: what the
+	// terminal delivered, unfiltered. If a widget then claims a key, the
+	// feed row gains an arrow naming the consumer, so the tab doubles as a
+	// routing debugger. Resize and Frame are lifecycle traffic, not input.
+	app.recordEvent(next)
+	action, handled := app.ui.Handle(next)
+	if handled {
+		if next.Kind == event.Key {
+			app.annotateConsumed(action)
+		}
 		switch action.Target {
 		case "tabs":
 			_, _ = app.tabs.Apply(action, tabLabels)
@@ -152,6 +163,28 @@ func (app *tour) Update(next event.Event) lux.Command {
 			}
 		case "quit":
 			return lux.Quit()
+		case "demo-retarget":
+			if action.Kind == ui.Activate {
+				app.retarget(action.Event.At)
+			}
+		case "demo-ease":
+			if action.Kind == ui.Activate {
+				app.ease = (app.ease + 1) % len(easings)
+				app.retarget(action.Event.At)
+			}
+		case "demo-spring":
+			if action.Kind == ui.Activate {
+				app.retimer = (app.retimer + 1) % len(responses)
+				app.spring.Response = responses[app.retimer]
+			}
+		case "demo-pause":
+			if action.Kind == ui.Activate {
+				app.paused = !app.paused
+			}
+		case "demo-speed":
+			if action.Kind == ui.Activate {
+				app.speedIdx = (app.speedIdx + 1) % len(speeds)
+			}
 		case "annex-run":
 			if action.Kind == ui.Activate {
 				app.progressMode, app.progress, app.annexNote = 1, 0, "OSC 9;4: determinate bar, 3s loop"
@@ -170,11 +203,11 @@ func (app *tour) Update(next event.Event) lux.Command {
 			}
 		case "annex-notify":
 			if action.Kind == ui.Activate {
-				app.annexNote, app.pendingFire = "OSC 9;777: notification sent (support varies)", 1
+				app.annexNote, app.pendingFire = "OSC 9;777: notification sent (support varies; fires on next presented frame)", 1
 			}
 		case "annex-copy":
 			if action.Kind == ui.Activate {
-				app.annexNote, app.pendingFire = "OSC 52: clipboard write sent (support varies)", 2
+				app.annexNote, app.pendingFire = "OSC 52: clipboard write sent (support varies; fires on next presented frame)", 2
 			}
 		}
 		return nil
@@ -184,26 +217,61 @@ func (app *tour) Update(next event.Event) lux.Command {
 		app.width, app.height = next.Width, next.Height
 	case event.Frame:
 		app.tick(next.Delta, next.At)
-	case event.Focus:
-		app.record(next.Kind.String(), focusName(next.Focused), "")
-	case event.Paste:
-		app.record(next.Kind.String(), next.Text, "")
-	case event.Suspend:
-		app.record("suspend", "terminal handed away (ctrl+z)", "")
-	case event.Resume:
-		app.record("resume", "raw mode back, full repaint", "")
-	case event.Mouse:
-		app.recordMouse(next.Mouse)
 	case event.Key:
-		app.recordKey(next.Key)
 		return app.keyPress(next)
 	}
 	return nil
 }
 
-// keyPress handles the raw keys that no widget claimed: digits jump between
-// tabs, page-local demo keys, q quits. While an editor owns focus its runes
-// never reach this path, so typing "q9" into the input is safe.
+// recordEvent logs one decoded input event before routing. Paste gets a
+// bounded preview: the feed shows what arrived, not a wall of pasted text.
+func (app *tour) recordEvent(next event.Event) {
+	switch next.Kind {
+	case event.Key:
+		app.recordKey(next.Key)
+	case event.Mouse:
+		app.recordMouse(next.Mouse)
+	case event.Focus:
+		app.record(next.Kind.String(), focusName(next.Focused), "")
+	case event.Paste:
+		app.record(next.Kind.String(), pastePreview(next.Text), "")
+	case event.Suspend:
+		app.record("suspend", "terminal handed away (ctrl+z)", "")
+	case event.Resume:
+		app.record("resume", "raw mode back, full repaint", "")
+	}
+}
+
+// pastePreview caps a paste for the feed row: at most the first runes, then
+// the total count so a 10 KB dump stays a one-line fact.
+func pastePreview(text string) string {
+	const limit = 48
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return fmt.Sprintf("%s… (%d runes total)", string(runes[:limit]), len(runes))
+}
+
+// annotateConsumed marks the last feed row with the region that claimed the
+// key, turning the input tab into a routing trace.
+func (app *tour) annotateConsumed(action ui.Action) {
+	index := len(app.feed) - 1
+	if index < 0 {
+		return
+	}
+	row := &app.feed[index]
+	if row.extra != "" {
+		row.extra += " "
+	}
+	row.extra += "→ " + string(action.Target)
+}
+
+// keyPress handles the raw keys that no widget or shortcut claimed: plain q
+// quits and digits jump between tabs. Page-local demo keys are registered
+// as priority shortcuts during View instead, so they keep working while the
+// tab strip holds focus. While an editor owns focus its runes never reach
+// this path either, so typing "q9" into the input is safe.
 func (app *tour) keyPress(next event.Event) lux.Command {
 	key := next.Key
 	if key.Action != event.ActionPress && key.Action != event.ActionRepeat {
@@ -216,39 +284,31 @@ func (app *tour) keyPress(next event.Event) lux.Command {
 		app.page = int(key.Rune - '1')
 		app.tabs.Selected = app.page
 		app.tabs.Offset = 0
-	case app.page == 4 && key.Rune == ' ':
-		app.retarget(next.At)
-	case app.page == 4 && (key.Rune == 'e' || key.Rune == 'E'):
-		app.ease = (app.ease + 1) % len(easings)
-		app.retarget(next.At)
-	case app.page == 4 && (key.Rune == 'v' || key.Rune == 'V'):
-		app.retimer = (app.retimer + 1) % len(responses)
-		app.spring.Response = responses[app.retimer]
-	case app.page == 5 && key.Rune == ' ':
-		app.paused = !app.paused
-	case app.page == 5 && (key.Rune == 's' || key.Rune == 'S'):
-		app.speedIdx = (app.speedIdx + 1) % len(speeds)
 	}
 	return nil
 }
 
 // tick advances every time-based demo with the frame's delta, clamped so a
-// debugger pause cannot teleport the animations.
+// debugger pause cannot teleport the animations. Under ReducedMotion the
+// decorative demos freeze in place (the gauge snaps, the cube stops) while
+// the progress sideband keeps reporting — progress is work state, not
+// decoration.
 func (app *tour) tick(delta time.Duration, now time.Time) {
 	if delta > 250*time.Millisecond {
 		delta = 250 * time.Millisecond
 	}
-	if !app.paused {
+	if !app.paused && !app.reduced {
 		app.angle += float32(delta.Seconds()) * speeds[app.speedIdx]
 	}
-	if value, done := app.tween.Value(now); done {
-		app.eased = value
+	if _, done := app.tween.Value(now); done && !app.reduced {
 		app.retarget(now)
-	} else {
-		app.eased = value
+	} else if app.reduced {
+		app.tween.Start = now // hold the sample still: tween keeps its place
 	}
-	if _, done := app.back.Value(now); done {
+	if _, done := app.back.Value(now); done && !app.reduced {
 		app.back = motion.Tween{From: app.back.To, To: 1 - app.back.To, Start: now, Duration: 1400 * time.Millisecond, Ease: motion.OutBack}
+	} else if app.reduced {
+		app.back.Start = now
 	}
 	if app.progressMode == 1 {
 		app.progress += delta.Seconds() / 3
@@ -256,15 +316,19 @@ func (app *tour) tick(delta time.Duration, now time.Time) {
 			app.progress -= 1
 		}
 	}
-	// The gauge eases toward its target at its own pace, so the bar and the
-	// sparkline under it keep moving even when nothing else does.
-	step := delta.Seconds() * .8
-	if math.Abs(app.target-app.gauge) < step {
+	if app.reduced {
 		app.gauge = app.target
-	} else if app.gauge < app.target {
-		app.gauge += step
 	} else {
-		app.gauge -= step
+		// The gauge eases toward its target at its own pace, so the bar and
+		// the sparkline under it keep moving even when nothing else does.
+		step := delta.Seconds() * .8
+		if math.Abs(app.target-app.gauge) < step {
+			app.gauge = app.target
+		} else if app.gauge < app.target {
+			app.gauge += step
+		} else {
+			app.gauge -= step
+		}
 	}
 	app.trace = append(app.trace, app.gauge)
 	if len(app.trace) > 96 {
@@ -272,12 +336,14 @@ func (app *tour) tick(delta time.Duration, now time.Time) {
 	}
 }
 
-// retarget flips both motions mid-flight: the tween restarts from its last
-// sample under the current easing, the spring keeps its velocity.
+// retarget flips both motions mid-flight from where the eye actually is:
+// the spring samples its live position (not its old target) and carries its
+// velocity; the tween restarts from its live sample under the new easing.
 func (app *tour) retarget(now time.Time) {
-	_, velocity := app.spring.Value(now)
-	app.spring = motion.Spring{From: app.spring.To, To: 1 - app.spring.To, Velocity: velocity, Start: now, Response: app.spring.Response}
-	app.tween = motion.Tween{From: app.eased, To: 1 - app.tween.To, Start: now, Duration: 900 * time.Millisecond, Ease: easings[app.ease].fn}
+	position, velocity := app.spring.Value(now)
+	app.spring = motion.Spring{From: position, To: 1 - app.spring.To, Velocity: velocity, Start: now, Response: app.spring.Response}
+	tweenFrom, _ := app.tween.Value(now)
+	app.tween = motion.Tween{From: tweenFrom, To: 1 - app.tween.To, Start: now, Duration: 900 * time.Millisecond, Ease: easings[app.ease].fn}
 }
 
 func (app *tour) record(kind, desc, extra string) {
@@ -314,18 +380,44 @@ func (app *tour) View(frame *lux.Frame) {
 	canvas := frame.Canvas
 	area := canvas.Bounds()
 	app.width, app.height = area.W, area.H
+	app.reduced = frame.ReducedMotion
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
 	defer app.ui.End(frame)
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "help", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
-	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'q', Mod: event.ModCtrl}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	// Ctrl+Q covers three terminal spellings: legacy C0 0x11 decodes to
+	// lowercase q+Ctrl, while enhanced kitty keys report Q+Ctrl (shifted
+	// capital) or Q+Ctrl+Shift.
+	for _, key := range []event.KeyEvent{
+		{Code: event.KeyRune, Rune: 'q', Mod: event.ModCtrl},
+		{Code: event.KeyRune, Rune: 'Q', Mod: event.ModCtrl},
+		{Code: event.KeyRune, Rune: 'Q', Mod: event.ModCtrl | event.ModShift},
+	} {
+		app.ui.Shortcut(ui.Shortcut{Key: key, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	}
+	// Page-local demo keys are priority shortcuts registered only while
+	// their page is showing, so they beat the tab strip's Space activation
+	// even when the strip holds focus. digits still switch tabs from the
+	// fallback path.
+	if app.page == 4 {
+		app.pageShortcut(' ', "demo-retarget")
+		app.pageShortcut('e', "demo-ease")
+		app.pageShortcut('E', "demo-ease")
+		app.pageShortcut('v', "demo-spring")
+		app.pageShortcut('V', "demo-spring")
+	}
+	if app.page == 5 {
+		app.pageShortcut(' ', "demo-pause")
+		app.pageShortcut('s', "demo-speed")
+		app.pageShortcut('S', "demo-speed")
+	}
 
 	if layout.Classify(area) == layout.Tiny {
 		canvas.Text(0, 0, "LUX tour - enlarge the terminal", render.Style{Foreground: violet, Attrs: render.AttrBold})
 		return
 	}
 	app.ui.Tabs("tabs", canvas, render.Rect{X: 1, Y: 1, W: max(area.W-2, 1), H: 1}, &app.tabs, tabLabels, tabsStyle())
-	header := fmt.Sprintf("lux-tui full-capability tour   %dx%d   %s", area.W, area.H, colorName(frame.Capabilities.Color))
+	header := fmt.Sprintf("lux-tui tour   %dx%d   %s", area.W, area.H, colorName(frame.Capabilities.Color))
 	canvas.Text(max(area.W-canvas.TextWidth(header)-1, 0), 0, header, render.Style{Foreground: muted, Background: background})
 	app.frameTimes = append(app.frameTimes, frame.Metrics.PresentTime.Seconds())
 	if len(app.frameTimes) > 64 {
@@ -346,7 +438,7 @@ func (app *tour) View(frame *lux.Frame) {
 	case 5:
 		app.drawScene(canvas, body, frame)
 	case 6:
-		app.drawWidgets(canvas, body)
+		app.drawWidgets(canvas, body, frame.Now)
 	case 7:
 		app.drawInput(canvas, body, frame.Capabilities)
 	case 8:
@@ -356,9 +448,97 @@ func (app *tour) View(frame *lux.Frame) {
 	if app.showHelp {
 		app.drawHelp(canvas, area)
 	}
-	if frame.Capabilities.Interactive {
-		frame.RequestFrame()
+	// Sidebands are app state, not annex-page state: a progress loop keeps
+	// its terminal indicator fresh from any tab, and a queued one-shot
+	// (notify/copy) fires from the first presented frame after the click.
+	// One-shot semantics: a frame dropped before present loses the request,
+	// so nothing fires — click again.
+	app.applySidebands(frame)
+	if delay, moving := app.wantsFrame(frame.Now); moving && frame.Capabilities.Interactive {
+		if delay <= 0 {
+			frame.RequestFrame()
+		} else {
+			frame.RequestFrameAfter(delay)
+		}
 	}
+}
+
+// pageShortcut registers one page-local demo key as a priority shortcut.
+func (app *tour) pageShortcut(r rune, target ui.ID) {
+	app.ui.Shortcut(ui.Shortcut{
+		Key:      event.KeyEvent{Code: event.KeyRune, Rune: r},
+		Target:   target,
+		Kind:     ui.Activate,
+		Scope:    ui.ScopeApp,
+		Priority: true,
+	})
+}
+
+// applySidebands drives the terminal progress indicator and fires queued
+// one-shot sidebands. Determinate progress (mode 1) is work state: it keeps
+// flowing under ReducedMotion and from every tab.
+func (app *tour) applySidebands(frame *lux.Frame) {
+	switch app.progressMode {
+	case 1:
+		frame.SetProgress(lux.ProgressNormal, int(app.progress*100))
+	case 2:
+		frame.SetProgress(lux.ProgressIndeterminate, 0)
+	case 3:
+		frame.SetProgress(lux.ProgressError, 66)
+	default:
+		frame.SetProgress(lux.ProgressNone, 0)
+	}
+	switch app.pendingFire {
+	case 1:
+		frame.Notify("LUX tour", "sideband notification from the tour's annex tab")
+		app.pendingFire = 0
+	case 2:
+		frame.CopyToClipboard("copied from the LUX tour")
+		app.pendingFire = 0
+	}
+}
+
+// wantsFrame reports whether anything visible still moves and when the
+// next frame is due (zero delay = as soon as the cap allows). Static tabs
+// report false so the app sleeps between input. ReducedMotion freezes every
+// decorative demo; the progress sideband alone keeps asking, because a
+// determinate progress bar is work state, not decoration.
+func (app *tour) wantsFrame(now time.Time) (time.Duration, bool) {
+	if app.progressMode == 1 {
+		return 0, true
+	}
+	switch app.page {
+	case 4:
+		// The motion page retargets forever, so it animates continuously.
+		return 0, !app.reduced
+	case 5:
+		return 0, !app.paused && !app.reduced
+	case 6:
+		if app.reduced {
+			return 0, false
+		}
+		if math.Abs(app.target-app.gauge) > 1e-4 {
+			return 0, true
+		}
+		if app.sync.Started.IsZero() {
+			return 0, false
+		}
+		// The spinner glyph is a pure function of absolute time: ask for a
+		// frame exactly when the next glyph flip is due, not every tick.
+		duration := app.spinnerDuration()
+		age := app.sync.Age(now)
+		return duration - age%duration, true
+	}
+	return 0, false
+}
+
+// spinnerDuration matches the widget tab's spinner cadence: the slow
+// checkbox triples the frame step.
+func (app *tour) spinnerDuration() time.Duration {
+	if app.slow.Checked {
+		return 240 * time.Millisecond
+	}
+	return 80 * time.Millisecond
 }
 
 func (app *tour) drawFooter(frame *lux.Frame, area render.Rect) {
@@ -697,7 +877,7 @@ var spinners = [][]string{ui.SpinnerBraille, ui.SpinnerArc, ui.SpinnerASCII}
 
 const scrollContent = 120
 
-func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect) {
+func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect, now time.Time) {
 	columns := layout.Flex(make([]render.Rect, 2), area, layout.Horizontal, 2,
 		layout.Constraint{Basis: area.W / 2, Min: 26, Grow: 1, Shrink: 1},
 		layout.Constraint{Basis: area.W / 2, Min: 26, Grow: 1, Shrink: 1},
@@ -733,11 +913,7 @@ func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect) {
 	canvas.Text(right.X, y+7, "frame present-time sparkline", render.Style{Foreground: muted, Background: panel})
 	frameSpark := ui.SparklineState{Values: app.frameTimes}
 	app.ui.Sparkline(canvas, render.Rect{X: right.X, Y: y + 8, W: right.W, H: 2}, &frameSpark, ui.SparklineStyle{Fill: render.Style{Foreground: violet, Background: panel}})
-	duration := 80 * time.Millisecond
-	if app.slow.Checked {
-		duration = 240 * time.Millisecond
-	}
-	app.ui.Spinner(canvas, render.Rect{X: right.X, Y: y + 11, W: 1, H: 1}, &app.sync, time.Now(), ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: duration, Style: render.Style{Foreground: cyan, Background: panel}})
+	app.ui.Spinner(canvas, render.Rect{X: right.X, Y: y + 11, W: 1, H: 1}, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
 	canvas.Text(right.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: muted, Background: panel})
 	canvas.Text(right.X, y+13, "feature table", render.Style{Foreground: muted, Background: panel})
 	app.ui.Table("table", canvas, render.Rect{X: right.X, Y: y + 14, W: right.W, H: min(6, max(right.Bottom()-y-14, 0))}, &app.table, featureColumns, len(featureRows),
@@ -853,24 +1029,8 @@ func (app *tour) drawAnnex(canvas *render.Canvas, area render.Rect, frame *lux.F
 		}
 		app.ui.Button(button.id, canvas, render.Rect{X: bx, Y: by, W: buttonW, H: 3}, button.label, buttonStyle())
 	}
-	switch app.progressMode {
-	case 1:
-		frame.SetProgress(lux.ProgressNormal, int(app.progress*100))
-	case 2:
-		frame.SetProgress(lux.ProgressIndeterminate, 0)
-	case 3:
-		frame.SetProgress(lux.ProgressError, 66)
-	default:
-		frame.SetProgress(lux.ProgressNone, 0)
-	}
-	// One-shot sidebands: Update sets pendingFire, this frame consumes it.
-	if app.pendingFire == 1 {
-		frame.Notify("LUX tour", "sideband notification from the tour's annex tab")
-		app.pendingFire = 0
-	} else if app.pendingFire == 2 {
-		frame.CopyToClipboard("copied from the LUX tour")
-		app.pendingFire = 0
-	}
+	// Terminal sidebands (SetProgress/Notify/CopyToClipboard) are driven by
+	// View itself, not this page: see applySidebands.
 	statusY := right.Bottom() - 2
 	if statusY > y+2 {
 		canvas.Text(right.X, statusY, app.annexNote, render.Style{Foreground: amber, Background: panel})
@@ -1079,7 +1239,7 @@ func gaugeStyle() ui.GaugeStyle {
 
 func main() {
 	if err := lux.Run(context.Background(), newTour(),
-		lux.WithTitle("lux-tui — full-capability tour"),
+		lux.WithTitle("lux-tui — guided tour"),
 		lux.WithKeyReleases(true),
 		lux.WithProgress(true),
 		lux.WithNotifications(true),

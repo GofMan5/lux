@@ -15,6 +15,18 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+### Added
+
+- Tour correctness suite (`examples/08-tour`): the guided tour now drives
+  frame requests from `wantsFrame` — static tabs settle to at most two idle
+  frames, the motion demos retarget with live position/velocity sampled at
+  the press instant, page-local Space shortcuts stay reachable while the
+  tab strip owns focus, and ReducedMotion freezes decoration while the
+  determinate progress sideband (work state, not decoration) keeps
+  ticking. Terminal sidebands (OSC 9;4 / OSC 9;777 / OSC 52) are issued
+  from View on the presented frame, and the paste feed caps its preview
+  instead of dumping whole pastes.
+
 ### Fixed
 
 - Hardened the OSC 8 output seam: a `render.Link` whose URI or ID carries
