@@ -1,0 +1,153 @@
+name: Scheduled verification
+
+on:
+  schedule:
+    # Monday 03:30 UTC, off the top of the hour to dodge cron congestion.
+    - cron: "30 3 * * MON"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scheduled-${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Long fuzz (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: parser
+            package: ./internal/terminal
+            pattern: "^FuzzParserNeverPanics$"
+          - target: textinput
+            package: ./ui
+            pattern: "^FuzzTextInputInvariants$"
+          - target: textarea
+            package: ./ui
+            pattern: "^FuzzTextAreaInvariants$"
+          - target: wrap
+            package: ./render
+            pattern: "^FuzzWrapLinesNeverPanicsOrInvents$"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - run: go mod download
+      # A fuzz target must run alone in its test binary, so each matrix leg
+      # fuzzes exactly one pattern in exactly one package. -run '^$' skips
+      # the package's unit tests: their verdicts belong to the push lanes.
+      - name: Fuzz one target for 10 minutes
+        id: gofuzz
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          go test -run '^$' -fuzz '${{ matrix.pattern }}' -fuzztime 10m ${{ matrix.package }} > fuzz-output.txt 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Mirror full fuzz output into the log
+        if: steps.gofuzz.outputs.status != '0'
+        shell: bash
+        run: cat fuzz-output.txt
+      # A failing target writes a minimizing corpus seed under the
+      # package's testdata directory; uploading it keeps the reproducer.
+      - name: Upload fuzz output and corpus seed artifact
+        if: steps.gofuzz.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-${{ matrix.target }}
+          path: |
+            fuzz-output.txt
+            ${{ matrix.package }}/testdata
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: Report failure
+        if: steps.gofuzz.outputs.status != '0'
+        shell: bash
+        run: |
+          grep -E '^(--- FAIL|FAIL|panic)|Failing input|elapsed' fuzz-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          exit 1
+
+  terminal-lanes:
+    name: Terminal lane (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+          cache-dependency-path: |
+            e2e/go.sum
+            examples/07-ssh/go.sum
+      # Five passes over the pty suite re-rolls the real-terminal races the
+      # single push pass can miss: negotiation, resize, suspend/resume, and
+      # the keystroke-after-raw-mode window.
+      - name: e2e pty suite, five passes
+        working-directory: e2e
+        run: go test -race -count=5 ./...
+      - name: ssh example, five passes
+        working-directory: examples/07-ssh
+        run: go test -race -count=5 ./...
+
+  stress:
+    name: Interactive stress (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          cache: true
+      - run: go mod download
+      # Twenty-five consecutive race-instrumented passes over the example
+      # interaction suites is the convergence lane: the push lanes roll the
+      # two-VM dice once, this lane rolls them twenty-five times, and the
+      # hang instrumentation in the example tests dumps parked goroutines
+      # into test-output.txt on any 45s wait timeout.
+      - name: Stress example suites
+        id: gostress
+        continue-on-error: true
+        shell: bash
+        run: |
+          set +e
+          go test -race -count=25 ./examples/... > test-output.txt 2>&1
+          status=$?
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit $status
+      - name: Mirror full test output into the log
+        if: steps.gostress.outputs.status != '0'
+        shell: bash
+        run: cat test-output.txt
+      - name: Upload test output artifact
+        if: steps.gostress.outputs.status != '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: stress-test-output
+          path: test-output.txt
+          retention-days: 14
+      - name: Report failures as annotations
+        if: steps.gostress.outputs.status != '0'
+        shell: bash
+        run: |
+          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          grep -E '^[[:blank:]]+[A-Za-z0-9_.-]+\.go:[0-9]+:' test-output.txt | head -8 | while IFS= read -r line; do
+            echo "::error::${line:0:500}"
+          done
+          exit 1

@@ -831,6 +831,24 @@ run at least:
 Compatibility evidence belongs in reproducible scripts or CI artifacts, not in
 an anecdotal "works on my terminal" table.
 
+### Scheduled lanes
+
+The push-triggered CI rolls each lane once per commit. The
+`scheduled` workflow (`.github/workflows/scheduled.yml`, weekly Monday
+03:30 UTC plus manual `workflow_dispatch`) re-rolls the slow lanes many
+times in one runner, because single-pass verdicts miss interleavings
+that only repetition exposes:
+
+| Lane | Cadence | What it proves | Evidence on failure |
+|---|---|---|---|
+| Long fuzz: parser, TextInput, TextArea, wrap — 10 min per target | weekly | the seed corpora keep growing; panics, invariant breaks, and invented-width regressions surface as minimized seeds | `fuzz-<target>` artifact: full output + `testdata` reproducer (14 days) |
+| Terminal lanes: `e2e` pty suite and the 07-ssh example, `-race -count=5` on ubuntu and macOS | weekly | real-terminal races in negotiation, resize, suspend/resume, keystroke-after-raw-mode; macOS lane is pty-only (no ConPTY) | in the job log |
+| Interactive stress: example suites, `-race -count=25` on ubuntu | weekly | the convergence flake lane — twenty-five consecutive race-instrumented rolls of the interaction suites; a 45s wait timeout dumps all parked goroutines via the hang instrumentation | `stress-test-output` artifact and `gh run view --log-failed` (14 days) |
+
+A GREEN push run plus a RED scheduled run means the verdict came from
+repetition, not from a broken commit; the artifacts above are the
+reproducers, not the annotations.
+
 The stage 9 run of this matrix lives in `.verification/matrix/` with
 self-asserting lane scripts and captured evidence. Two integration
 findings from that run apply to anyone driving a LUX TUI app through

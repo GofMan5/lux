@@ -17,6 +17,21 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Scheduled verification workflow (`.github/workflows/scheduled.yml`,
+  weekly Monday 03:30 UTC plus manual `workflow_dispatch`): single-pass
+  CI verdicts miss interleavings that only repetition exposes, so the
+  slow lanes now re-roll weekly. Four long-fuzz legs run the parser,
+  TextInput, TextArea, and wrap targets for 10 minutes each
+  (`-run '^$' -fuzz` — one target per test binary), uploading the full
+  output and the minimized `testdata` reproducer as an artifact on
+  failure. A terminal-lanes job runs the PTY e2e suite and the SSH
+  example with `-race -count=5` on ubuntu and macOS. An interactive
+  stress job runs the example suites with `-race -count=25` on ubuntu —
+  the convergence-flake lane — with the same mirror-to-log plus
+  artifact evidence handling as the push matrix, so a hang fires the
+  goroutine dump into preserved output. The lane-to-evidence mapping is
+  documented in `docs/COMPATIBILITY.md` under "Scheduled lanes".
+
 - Race-instrumented e2e child (`e2e`): when the PTY suite itself runs under
   `go test -race`, `TestMain` now builds `childapp` with `-race` too
   (a build-tag const, `childRaceFlag`, mirrors the suite's own
