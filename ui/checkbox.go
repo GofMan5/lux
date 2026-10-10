@@ -12,11 +12,12 @@ type CheckboxState struct {
 }
 
 // CheckboxStyle defines checkbox visual states. Zero values resolve through
-// the context theme: Normal reads Text, and the marker run (the "[x]" glyph
-// pair) reads Accent when the row style is still zero, so the control's glyph
-// pops while the label stays body text; DisabledStyle reads Danger. Explicit
-// styles always win. Marker pair: Checked/Unchecked, ASCII by default so a
-// CJK-locale terminal cannot widen the control; restyle to taste.
+// the context theme: Normal reads Text, Focused reads Focus, and the marker
+// run (the "[x]" glyph pair) reads Accent when the row style is still zero,
+// so the control's glyph pops while the label stays body text; DisabledStyle
+// reads Danger. Explicit styles always win. Marker pair: Checked/Unchecked,
+// ASCII by default so a CJK-locale terminal cannot widen the control;
+// restyle to taste.
 type CheckboxStyle struct {
 	Normal        render.Style
 	Focused       render.Style
@@ -68,7 +69,7 @@ func (c *Context) Checkbox(id ID, canvas *render.Canvas, bounds render.Rect, sta
 	case c.Pressed(id):
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
-		visual = fallbackStyle(style.Focused, visual)
+		visual = themedStyle(style.Focused, theme.Focus, visual)
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}
@@ -107,8 +108,8 @@ type RadioState struct {
 }
 
 // RadioStyle defines radio row states. Zero values resolve through the
-// context theme: Normal reads Text, Selected reads Accent, DisabledStyle
-// reads Danger; explicit styles always win. Marker
+// context theme: Normal reads Text, Selected reads Accent, Focused reads
+// Focus, DisabledStyle reads Danger; explicit styles always win. Marker
 // pair: Selected/Empty, ASCII by default ("(*)"/"( )").
 type RadioStyle struct {
 	Normal        render.Style
@@ -226,7 +227,7 @@ func (c *Context) RadioGroup(id ID, canvas *render.Canvas, bounds render.Rect, s
 		} else if row == state.Selected {
 			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
-				visual = fallbackStyle(style.Focused, visual)
+				visual = themedStyle(style.Focused, theme.Focus, visual)
 			} else if c.Hovered(id) {
 				visual = fallbackStyle(style.Hovered, visual)
 			}

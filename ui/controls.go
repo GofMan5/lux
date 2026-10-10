@@ -8,8 +8,10 @@ import (
 	"github.com/rivo/uniseg"
 )
 
-// ButtonStyle defines the four visual states of a button. Zero values inherit
-// Normal; Disabled also disables interaction.
+// ButtonStyle defines the four visual states of a button. Zero values
+// resolve through the context theme: Normal reads Text, Focused reads
+// Focus, DisabledStyle reads Danger; explicit styles always win. Disabled
+// also disables interaction.
 type ButtonStyle struct {
 	Normal        render.Style
 	Focused       render.Style
@@ -37,14 +39,15 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
 	if bounds.Intersect(canvas.Bounds()).Empty() {
 		return
 	}
-	visual := style.Normal
+	theme := c.Theme()
+	visual := themedStyle(style.Normal, theme.Text, style.Normal)
 	switch {
 	case style.Disabled:
-		visual = fallbackStyle(style.DisabledStyle, visual)
+		visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 	case c.Pressed(id):
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
-		visual = fallbackStyle(style.Focused, visual)
+		visual = themedStyle(style.Focused, theme.Focus, visual)
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}
@@ -145,7 +148,9 @@ func (s *ListState) ensureVisible(count, rows int) {
 	s.Offset = min(max(s.Offset, 0), max(count-rows, 0))
 }
 
-// ListStyle defines list row states. Zero values inherit Normal.
+// ListStyle defines list row states. Zero values resolve through the
+// context theme: Normal reads Text, Selected reads Accent, Focused reads
+// Focus, DisabledStyle reads Danger; explicit styles always win.
 type ListStyle struct {
 	Normal        render.Style
 	Selected      render.Style
@@ -179,7 +184,9 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		return
 	}
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", style.Normal)
+	theme := c.Theme()
+	body := themedStyle(style.Normal, theme.Text, style.Normal)
+	canvas.Fill(bounds, " ", body)
 	marker := style.Marker
 	if marker == "" {
 		marker = "> "
@@ -189,13 +196,13 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		if index >= len(items) {
 			break
 		}
-		visual := style.Normal
+		visual := body
 		if style.Disabled {
-			visual = fallbackStyle(style.DisabledStyle, visual)
+			visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 		} else if index == state.Selected {
-			visual = fallbackStyle(style.Selected, visual)
+			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
-				visual = fallbackStyle(style.Focused, visual)
+				visual = themedStyle(style.Focused, theme.Focus, visual)
 			} else if c.Hovered(id) {
 				visual = fallbackStyle(style.Hovered, visual)
 			}

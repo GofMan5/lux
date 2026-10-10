@@ -13,6 +13,9 @@ import "github.com/GofMan5/lux/render"
 //	Muted  structure: headers, unselected tabs, popup frames, empty tracks
 //	Accent selection and markers: selected rows and tabs, gauge and
 //	       sparkline fills, spinner glyphs
+//	Focus  keyboard focus: the focused row, tab, option, or control — a
+//	       distinct role so focus stays visible next to a selection
+//	       (Accent) even in one color, via attributes
 //	Danger disabled rows: the zero-value DisabledStyle of any widget
 //
 // Only zero-value style fields resolve through the theme; an explicit
@@ -22,19 +25,24 @@ type Theme struct {
 	Text   render.Style
 	Muted  render.Style
 	Accent render.Style
+	Focus  render.Style
 	Danger render.Style
 }
 
 // DefaultTheme returns the built-in palette: terminal-default text, dim
-// structure, bold accents, reverse-video disabled. Attributes only — no
-// colors — so the default survives monochrome terminals and redirected
-// output. It is a function, not a variable: restyling means passing your
-// own Theme, never mutating a shared one.
+// structure, bold accents, bold+underlined focus, reverse-video disabled.
+// Attributes only — no colors — so the default survives monochrome
+// terminals and redirected output. Focus is a full style like every role:
+// it repeats Accent's bold and adds an underline, so the focused row stays
+// visibly selected and visibly focused in one hue. It is a function, not
+// a variable: restyling means passing your own Theme, never mutating a
+// shared one.
 func DefaultTheme() Theme {
 	return Theme{
 		Text:   render.Style{},
 		Muted:  render.Style{Attrs: render.AttrDim},
 		Accent: render.Style{Attrs: render.AttrBold},
+		Focus:  render.Style{Attrs: render.AttrBold | render.AttrUnderline},
 		Danger: render.Style{Attrs: render.AttrReverse},
 	}
 }

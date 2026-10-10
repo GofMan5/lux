@@ -225,9 +225,9 @@ func columnAt(columns []TableColumn, width, x int) int {
 
 // TableStyle defines table row states. Zero values resolve through the
 // context theme: Normal reads Text, Header reads Muted (plus an underline
-// either way), Selected reads Accent, DisabledStyle reads Danger; explicit
-// styles always win. Ellipsis defaults to the single ellipsis codepoint,
-// clipped to the column like any other text.
+// either way), Selected reads Accent, Focused reads Focus, DisabledStyle
+// reads Danger; explicit styles always win. Ellipsis defaults to the
+// single ellipsis codepoint, clipped to the column like any other text.
 type TableStyle struct {
 	Normal        render.Style
 	Header        render.Style
@@ -336,7 +336,7 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 		} else if index == state.Selected {
 			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
-				visual = fallbackStyle(style.Focused, visual)
+				visual = themedStyle(style.Focused, theme.Focus, visual)
 			} else if c.Hovered(id) {
 				visual = fallbackStyle(style.Hovered, visual)
 			}

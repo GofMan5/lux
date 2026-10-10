@@ -154,8 +154,8 @@ func (s *TreeState) ensureVisible(count, rows int) {
 }
 
 // TreeStyle defines tree row states. Zero values resolve through the
-// context theme: Normal reads Text, Selected reads Accent, DisabledStyle
-// reads Danger; explicit styles always win. The branch
+// context theme: Normal reads Text, Selected reads Accent, Focused reads
+// Focus, DisabledStyle reads Danger; explicit styles always win. The branch
 // markers default to ASCII ("+" collapsed, "-" expanded, "" leaf) so the
 // tree aligns on any terminal, including CJK-ambiguous-width renderers;
 // restyle them to "▸"/"▾" when the renderer is trusted.
@@ -226,7 +226,7 @@ func (c *Context) Tree(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		} else if index == state.Selected {
 			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))
 			if c.Focused(id) {
-				visual = fallbackStyle(style.Focused, visual)
+				visual = themedStyle(style.Focused, theme.Focus, visual)
 			} else if c.Hovered(id) {
 				visual = fallbackStyle(style.Hovered, visual)
 			}

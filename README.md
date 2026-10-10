@@ -242,17 +242,18 @@ state, style, `Apply`, region registration, two wiring lines — is a
 document's worked stepper compiles and runs as a test in the `ui` package,
 so the recipe cannot rot.
 
-One palette runs across the whole set. `ui.Theme` is four roles — Text
-(body), Muted (structure), Accent (selection and markers), Danger
-(disabled) — and `Context.UseTheme` installs it per Context; there is no
-global mutable style table to collide with another application's. The
-resolution rule is one line: a zero-value style field reads its theme
-role, an explicit style always wins, and a zero role falls back to the
-widget's own default. `DefaultTheme` is attributes-only (dim structure,
-bold accents, reverse disabled), so the built-in look survives monochrome
-terminals and redirected output while color themes stay opt-in —
-`ui.DefaultTheme()` is a function, so restyling means passing your own
-value, never mutating a shared one.
+One palette runs across the whole set. `ui.Theme` is five roles — Text
+(body), Muted (structure), Accent (selection and markers), Focus
+(keyboard focus), Danger (disabled) — and `Context.UseTheme` installs it
+per Context; there is no global mutable style table to collide with
+another application's. The resolution rule is one line: a zero-value
+style field reads its theme role, an explicit style always wins, and a
+zero role falls back to the widget's own default. `DefaultTheme` is
+attributes-only (dim structure, bold accents, bold+underlined focus,
+reverse disabled), so the built-in look survives monochrome terminals and
+redirected output while color themes stay opt-in, and focus stays visible
+next to a selection without any hue — `ui.DefaultTheme()` is a function,
+so restyling means passing your own value, never mutating a shared one.
 
 The window title is a lifecycle claim, not a per-frame one. `lux.WithTitle`
 writes the title through OSC 0 bracketed by the XTWINOPS title stack — the

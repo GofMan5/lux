@@ -167,6 +167,33 @@ semver: breaking changes land only in a new major.
   until a low surrogate completes the pair), which is console behavior,
   not framework behavior, and is documented rather than worked around.
 
+- Focus role in the theme system (`ui`): `ui.Theme` grows a fifth role,
+  `Focus`, resolved by every widget that has a `Focused` style — table,
+  tree, radio, list, tabs, select (closed field and open popup option),
+  checkbox, and button. A zero-value `Focused` field now reads the theme's
+  `Focus`, an explicit style still wins, and a theme without a `Focus`
+  role keeps the previous rendering (the focused row falls back to the
+  selected visual), so existing custom themes are unaffected. The role
+  exists because selection and focus are different states: before it, a
+  themed focused table was pixel-identical to a selected-unfocused one —
+  only a hand-set `Focused` style separated them, which every example had
+  to do per widget. `DefaultTheme` paints `Focus` as bold+underline, so
+  the focused row stays visibly selected and visibly focused in monochrome
+  and redirected output, and focus never relies on hue alone. `Button` and
+  `List`, the last two controls that still ignored the theme, now resolve
+  their zero-value styles through it like their siblings (Normal reads
+  Text, Selected reads Accent, DisabledStyle reads Danger), keeping the
+  whole control set on one resolution rule.
+
+### Changed
+
+- Under `DefaultTheme` (and any theme that sets the new `Focus` role), a
+  focused widget is now visibly distinct from a selected-but-unfocused
+  one: previously a focused table row drew exactly like a bold selected
+  row, so keyboard focus was invisible without a hand-set style. This is
+  the intended fix, not a regression; themes that do not set `Focus` see
+  no change.
+
 ### Fixed
 
 - Blind and uncancellable pipe reads on Windows (`internal/terminal`):

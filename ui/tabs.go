@@ -164,8 +164,8 @@ func (s *TabsState) Apply(action Action, labels []string) (changed, activated bo
 }
 
 // TabsStyle defines tab strip states. Zero values resolve through the
-// context theme: Normal reads Muted, Selected reads Accent, DisabledStyle
-// reads Danger; explicit styles always win. Visual
+// context theme: Normal reads Muted, Selected reads Accent, Focused reads
+// Focus, DisabledStyle reads Danger; explicit styles always win. Visual
 // states apply to the selected tab only; the other tabs always draw Normal,
 // and hover styling is not claimed (the router reports hover per region, not
 // per tab).
@@ -221,7 +221,7 @@ func (c *Context) Tabs(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	case c.Pressed(id):
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
-		visual = fallbackStyle(style.Focused, visual)
+		visual = themedStyle(style.Focused, theme.Focus, visual)
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}

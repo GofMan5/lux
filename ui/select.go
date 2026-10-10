@@ -21,10 +21,11 @@ type SelectState struct {
 
 // SelectStyle defines the closed box and the open popup states. Zero values
 // resolve through the context theme: Normal and OptionNormal read Text,
-// OptionSelected reads Accent, Popup and DisabledStyle read Muted and Danger
-// respectively; explicit styles always win. The popup is intentionally
-// borderless so its drawn cells and its press rows stay the same rectangle;
-// style the Popup fill against the surrounding panel instead of a border.
+// OptionSelected reads Accent, Focused and OptionFocused read Focus, Popup
+// and DisabledStyle read Muted and Danger respectively; explicit styles
+// always win. The popup is intentionally borderless so its drawn cells and
+// its press rows stay the same rectangle; style the Popup fill against the
+// surrounding panel instead of a border.
 type SelectStyle struct {
 	Normal        render.Style
 	Focused       render.Style
@@ -206,7 +207,7 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 	case c.Pressed(id) || state.Open:
 		visual = fallbackStyle(style.Pressed, visual)
 	case c.Focused(id):
-		visual = fallbackStyle(style.Focused, visual)
+		visual = themedStyle(style.Focused, theme.Focus, visual)
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}
@@ -236,7 +237,7 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 		if index == state.Selected {
 			optionVisual = themedStyle(style.OptionSelected, theme.Accent, fallbackStyle(style.OptionSelected, optionNormal))
 			if c.Focused(id) {
-				optionVisual = fallbackStyle(style.OptionFocused, optionVisual)
+				optionVisual = themedStyle(style.OptionFocused, theme.Focus, optionVisual)
 			}
 		}
 		y := popup.Y + row
