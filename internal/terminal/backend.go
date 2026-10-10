@@ -470,12 +470,17 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// Windows poller notices the change on its first tick, and the replay
 	// below covers everything before the watcher existed.
 	b.resize.start(readCtx, b.input, b.resizes)
-	// The lifecycle watcher translates job-control signals (Unix) and
-	// console-close events (Windows) into terminal suspension, resume, and
-	// the terminal-loss error. It rides the read context like the resize
-	// watcher, so Close cancels it together with the read side, and the
-	// suspend and resume paths re-check the backend under the mutex so a
-	// Close racing the signals never leaves a half-restored terminal.
+	// The lifecycle watcher translates job-control signals and console
+	// events into terminal suspension, resume, and terminal-loss errors:
+	// SIGHUP is terminal loss on Unix, console-close is the same error on
+	// Windows, and an external SIGINT/SIGTERM (Unix) or console-close
+	// signal (Windows) is the restore-then-error contract — the runtime
+	// restores the terminal, the application owns the exit code through
+	// the error it receives, and SIGKILL promises nothing. It rides the
+	// read context like the resize watcher, so Close cancels it together
+	// with the read side, and the suspend and resume paths re-check the
+	// backend under the mutex so a Close racing the signals never leaves a
+	// half-restored terminal.
 	go b.watchLifecycle(readCtx)
 	// A resize that landed inside the probe window is replayed here as the
 	// first event, so the app's first layout reflects the real terminal size
@@ -938,22 +943,37 @@ func (b *Backend) resumeTerminal() error {
 	return enterErr
 }
 
-// deliverLifecycle offers a terminal-loss error — or, on Windows, the
-// console-close error — to the application without ever blocking the
-// lifecycle watcher. A blocked send would wedge the watcher's own exit,
-// and the events queue is deep enough that a full buffer means the
-// application is busy, not that the notice is load-bearing: the run exits
-// through its deferred Close whether or not the error event is seen. The
-// suspend handshake delivers no events from this path — its Suspend and
-// Resume events are delivered by the run loop, in order around the
-// handshake — so the timestamping by deliverEvent is the only shared
-// machinery left.
+// deliverLifecycle offers a terminal-loss error — a hangup (Unix) or a
+// console-close (Windows) — or a termination error for a trapped
+// SIGINT/SIGTERM, to the application without ever blocking the lifecycle
+// watcher. A blocked send would wedge the watcher's own exit, and the
+// events queue is deep enough that a full buffer means the application is
+// busy, not that the notice is load-bearing: the run exits through its
+// deferred Close whether or not the error event is seen, and for the
+// termination pair the terminal restore has already run before the event
+// is offered. The suspend handshake delivers no events from this path —
+// its Suspend and Resume events are delivered by the run loop, in order
+// around the handshake — so the timestamping by deliverEvent is the only
+// shared machinery left.
 func (b *Backend) deliverLifecycle(next event.Event) {
 	select {
 	case b.events <- next:
 	default:
 	}
 }
+
+// ErrInterrupt reports the SIGINT the lifecycle watcher trapped and turned
+// into an application exit: the Unix watcher delivers it after the terminal
+// restore has run, so a caller mapping it to the conventional exit status
+// (130) has nothing left to clean up. Exported only for the application
+// package's re-export: the sentinel belongs to the module, not to any
+// importer of the internal tree.
+var ErrInterrupt = errors.New("terminal: interrupt")
+
+// ErrTerminated reports a trapped SIGTERM under the same contract as
+// ErrInterrupt; the conventional exit status is 143. SIGKILL is not part
+// of the contract: no runtime cleanup is promised for it.
+var ErrTerminated = errors.New("terminal: terminated")
 
 func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<- event.Event, parser *parser, prefill []byte) {
 	defer func() {

@@ -17,6 +17,25 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Unix termination contract (`internal/terminal`, `lux`): `SIGINT` and
+  `SIGTERM` are now trapped by the runtime's lifecycle watcher, which owns
+  the cleanup half of the contract — the terminal is restored immediately
+  (the same leave sequences `Close` writes, exactly once, idempotently
+  latched) — and `Run` then returns `lux.ErrInterrupt` / `lux.ErrTerminated`
+  through its ordinary error unwind, so a caller can map them to the
+  conventional exit statuses 130/143 with `errors.Is`. The application owns
+  the exit code; the model never sees the event. A Ctrl+C typed at the
+  terminal is deliberately not this path: raw mode claims the byte and the
+  model sees a Key event, which keeps interactive quit in the model's
+  hands. `SIGHUP` stays terminal-loss-only (no restore attempt), `SIGTSTP`
+  is untouched, and `SIGKILL` is promised nothing. The dispatcher loop was
+  split out of the `signal.Notify` wrapper into `dispatchLifecycle` so the
+  dispatch logic is unit-testable without racing a real signal against the
+  registration; the pty e2e suite proves the whole chain against a real
+  `kill -TERM` / `kill -INT`: the wait status must be a clean exit (an
+  untrapped death is killed-by-signal), with exactly one leave set and the
+  title pop as the final bytes.
+
 - CI lanes for the nested Go modules (`.github/workflows/ci.yml`): the
   PTY end-to-end suite (`e2e/`) and the SSH example (`examples/07-ssh`)
   live behind their own `go.mod` files, so the root `go test ./...` job

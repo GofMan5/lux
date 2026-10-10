@@ -90,7 +90,7 @@ P0/P1 здесь обозначают порядок работ, не CVSS ил�
 - В PR: быстрые tests/race/vet/lint, core fuzz smoke, tour interaction/snapshots, allocation guards.
 - По расписанию/release: более долгие parser/TextInput/TextArea/wrap fuzz, terminal lanes, slow-link/resize/input stress.
 - Проверить Open/Present/Close и suspend/resume при partial write, zero write, error, blocked writer, cancellation и panic.
-- Определить контракт SIGINT/SIGTERM на Unix: кто отвечает за cleanup — runtime adapter или documented application pattern; SIGKILL cleanup не обещать.
+- ~~Определить контракт SIGINT/SIGTERM на Unix: кто отвечает за cleanup — runtime adapter или documented application pattern; SIGKILL cleanup не обещать.~~ Сделано: runtime ловит пару и сам делает restore (leave-последовательности, идемпотентный latch), приложение получает `lux.ErrInterrupt`/`lux.ErrTerminated` из `Run` и само ставит код 130/143; SIGKILL вне обещаний, SIGHUP — как раньше (loss, без restore); Ctrl+C в raw-режиме остаётся Key-событием. Юнит-тесты диспетчера (`!windows`), app-уровневый тест маппинга, e2e с настоящим `kill` как оракулом (wait status обязан быть exit, не signal).
 - Доказать нет блокирующего exit и утечки framework-owned goroutines; arbitrary custom Backend/Command обязан соблюдать cancellation contract.
 - Fixtures win32 non-BMP/UTF-16 pair, split/dangling records; ручной emoji/CJK ввод на Windows Terminal. Отличать source hypothesis от проверенной совместимости.
 - Проверки WidthPolicy по всем widgets: особенно Tabs/Checkbox custom markers, hit mapping и measured width.

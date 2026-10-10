@@ -10,6 +10,7 @@ import (
 
 	"github.com/GofMan5/lux/capability"
 	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/internal/terminal"
 	"github.com/GofMan5/lux/render"
 )
 
@@ -284,6 +285,52 @@ func TestRunClosesAfterPresentError(t *testing.T) {
 	defer backend.mu.Unlock()
 	if !backend.closed {
 		t.Fatal("backend not closed")
+	}
+}
+
+// TestRunReturnsTerminationSentinelsAndCloses pins the application half of
+// the Unix termination contract at the only level the application can see
+// it: an Error event carrying the runtime's sentinel comes out of Run as
+// that same sentinel — identity preserved through the errors.Join with
+// the close error, so errors.Is works for the caller mapping 130/143 —
+// and the backend is closed on the way out while the model never sees
+// the event, because termination is not the model's decision to make.
+// The watcher that produces the event against a real signal is proven by
+// the pty e2e lane; this test is the mapping, and it runs everywhere,
+// including platforms where that watcher never fires, so the contract's
+// shape cannot drift.
+func TestRunReturnsTerminationSentinelsAndCloses(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want error
+	}{
+		{"interrupt", terminal.ErrInterrupt},
+		{"terminated", terminal.ErrTerminated},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			backend := newFakeBackend(10, 3)
+			model := &testModel{}
+			go func() {
+				backend.events <- event.Event{Kind: event.Error, Err: tc.want}
+			}()
+			err := Run(context.Background(), model, WithBackend(backend))
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+			backend.mu.Lock()
+			closed := backend.closed
+			backend.mu.Unlock()
+			if !closed {
+				t.Fatal("backend not closed after the termination event")
+			}
+			model.mu.Lock()
+			defer model.mu.Unlock()
+			for _, kind := range model.updates {
+				if kind == event.Error {
+					t.Fatal("the model saw the termination event: termination belongs to Run, not the model")
+				}
+			}
+		})
 	}
 }
 

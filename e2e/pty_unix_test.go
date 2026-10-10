@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -204,7 +205,10 @@ func (s *session) resize(cols, rows uint16) {
 
 // waitExit polls for the lane's process to exit; blocking only when force
 // is set. In the shell lane this is the shell itself, which outlives the
-// child job, so a clean exit means the whole session drained.
+// child job, so a clean exit means the whole session drained. A pid the
+// kernel no longer knows is also gone: a signal test reaps the direct
+// lane's child itself, and the cleanup that runs after it must not burn
+// its whole timeout waiting for a process that already left.
 func (s *session) waitExit(timeout time.Duration, force bool) bool {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -217,6 +221,8 @@ func (s *session) waitExit(timeout time.Duration, force bool) bool {
 				}
 				return true
 			}
+		} else if errors.Is(err, syscall.ECHILD) {
+			return true
 		}
 		if time.Now().After(deadline) {
 			return false
@@ -225,6 +231,46 @@ func (s *session) waitExit(timeout time.Duration, force bool) bool {
 			time.Sleep(2 * time.Millisecond)
 		}
 	}
+}
+
+// waitReap polls until the direct lane's child is reaped by this caller
+// and returns how it ended. The termination contract needs the wait
+// status itself, which waitExit throws away: a child killed by an
+// untrapped signal and a child that unwound through Run's error return
+// are indistinguishable from the parent side until Wait4 speaks, and
+// killed-by-signal is exactly the failure the contract exists to prevent.
+// The pid belongs to the direct lane only — in the shell lane it is the
+// shell's, and the shell is not the process under signal test.
+func (s *session) waitReap(timeout time.Duration) syscall.WaitStatus {
+	s.t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		var ws syscall.WaitStatus
+		if wpid, err := syscall.Wait4(s.pid, &ws, syscall.WNOHANG, nil); err == nil {
+			if wpid == s.pid {
+				return ws
+			}
+		} else {
+			s.t.Fatalf("e2e: wait4(%d): %v", s.pid, err)
+		}
+		if time.Now().After(deadline) {
+			s.t.Fatalf("e2e: child never reaped; output:\n%q", clip(s.snapshot()))
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// describeExit renders a wait status the failure messages can carry: the
+// distinction the termination tests fail on is exit versus signal, and
+// the raw status prints as a bare number on Linux.
+func describeExit(ws syscall.WaitStatus) string {
+	if ws.Exited() {
+		return fmt.Sprintf("exited %d", ws.ExitStatus())
+	}
+	if ws.Signaled() {
+		return fmt.Sprintf("killed by %v", ws.Signal())
+	}
+	return fmt.Sprintf("stopped or continued (raw status %d)", int(ws))
 }
 
 // findChildPid scans the process table for a child of the given pid —
@@ -454,4 +500,61 @@ func TestPTYSuspendRefusesToDoubleWrite(t *testing.T) {
 	s.waitFor("close leave after quit", func(out string) bool {
 		return strings.Count(out, leaveAltScreen) == 2
 	})
+}
+
+// TestPTYTerminationSignalsRestoreBeforeExit pins the external-kill half of
+// the Unix termination contract in the direct lane: a SIGINT or SIGTERM
+// from outside — a supervisor, a kill from another terminal — must be
+// trapped, not left to the default disposition. The trap's two halves have
+// two different oracles. The wait status is the one the bytes cannot fake:
+// an untrapped termination leaves the child killed by the kernel, a trapped
+// one exits on its own feet through Run's error return, and the child maps
+// every Run error to exit 0, so a clean reap with code 0 means the run loop
+// unwound through the error event. The wire bytes are the restore's oracle:
+// exactly one leave set and one title pop, the title pop last — the same
+// terminal state the ordinary quit path leaves behind, because Close runs
+// on top of the watcher's latch and must not write a second set. A Ctrl+C
+// typed into the terminal is deliberately not this test: raw mode claims
+// the byte, the model sees a Key event, and that ownership is what keeps
+// the trap from stealing interactive quit from the model.
+func TestPTYTerminationSignalsRestoreBeforeExit(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sig  syscall.Signal
+	}{
+		{"SIGTERM", syscall.SIGTERM},
+		{"SIGINT", syscall.SIGINT},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := startSession(t, "LUX_TUI_PROBE_TIMEOUT=off")
+
+			s.waitFor("first frame", func(out string) bool {
+				return strings.Contains(out, "READY K:0 S:0 R:0 80x24")
+			})
+
+			syscall.Kill(s.pid, tc.sig)
+
+			ws := s.waitReap(10 * time.Second)
+			if !ws.Exited() || ws.ExitStatus() != 0 {
+				t.Fatalf("e2e: child %s after %s, want exit 0 — the trap must turn the signal into an ordinary Run return; output:\n%q",
+					describeExit(ws), tc.name, clip(s.snapshot()))
+			}
+			// The exit is a poor moment to sample the stream: the reader
+			// drains asynchronously, so the restore bytes are awaited by
+			// their bytes, not by the process state.
+			s.waitFor("leave sequences written by the trap", func(out string) bool {
+				return strings.Count(out, leaveAltScreen) == 1 && strings.Count(out, titlePop) == 1
+			})
+			out := s.snapshot()
+			if got := strings.Count(out, leaveAltScreen); got != 1 {
+				t.Fatalf("e2e: want exactly one leave after %s, got %d — Close must not double-restore on top of the watcher's latch", tc.name, got)
+			}
+			if !strings.HasSuffix(out, titlePop) {
+				t.Fatalf("e2e: output does not end with the title pop; tail:\n%q", clip(out))
+			}
+			if !strings.Contains(out, showCursor) {
+				t.Fatalf("e2e: restore does not show the cursor")
+			}
+		})
+	}
 }

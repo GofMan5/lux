@@ -306,6 +306,20 @@ has no job control: a console-close event releases the console immediately
 and reports an Error event before the OS terminates the process —
 best-effort cleanup, not a resume path.
 
+External termination has an explicit contract on Unix. `SIGINT` and
+`SIGTERM` are trapped by the runtime, which owns the cleanup half: the
+terminal is restored immediately — the same leave sequences Close writes,
+exactly once — and `Run` returns `lux.ErrInterrupt` or `lux.ErrTerminated`
+after an ordinary unwind through the deferred Close, so a caller can map
+them to the conventional exit statuses (130 and 143) with `errors.Is`.
+The application owns the exit code, not the terminal. A Ctrl+C typed at
+the terminal is deliberately not this path: raw mode claims the byte and
+the model sees a Key event, which keeps interactive quit in the model's
+hands. `SIGHUP` stays what it always was — terminal loss, an error exit
+with no restore attempt, because the terminal is gone. `SIGKILL` is
+promised nothing: no runtime can clean up after it, and this one does not
+claim to.
+
 The whole cycle is verified against real operating-system truth, not
 fakes: an end-to-end suite (`e2e/`, Linux and macOS) runs the runtime
 inside a pseudo-terminal under a live interactive shell, types the 0x1A
@@ -314,7 +328,10 @@ waitpid on a genuinely stopped job produces — before `fg` resumes it.
 A second `SIGTSTP` raised straight at the stopped job is discarded by
 `fg`'s SIGCONT, exactly one suspension is delivered, and keystrokes that
 race the capability probe are replayed against the real kernel input
-buffer.
+buffer. The termination contract is proven the same way: a real
+`kill -TERM`/`kill -INT` against the pty session must leave the wait
+status a clean exit — not a process killed by the default disposition —
+with the restore bytes already on the wire.
 
 Some terminals measure differently from the model: a CJK-locale xterm doubles
 East Asian Ambiguous codepoints, legacy consoles squeeze emoji into one cell,
@@ -435,7 +452,10 @@ resume with full repaint, Suspend/Resume events, SIGHUP as an error exit,
 Windows console-close cleanup) is in, pinned by a pseudo-terminal
 end-to-end suite that proves the real kernel stop and the real shell's
 `Stopped` line, the double-stop discard, and probe-racing keystroke
-replay; a twelve-lane terminal validation matrix (tmux and Screen ptys,
+replay; the Unix termination contract (SIGINT/SIGTERM trapped, terminal
+restored before a clean error return, SIGHUP and SIGKILL outside the
+promise) is pinned by the same lane's real-signal kills; a twelve-lane
+terminal validation matrix (tmux and Screen ptys,
 ssh over a real sshd/ssh pair, netem-shaped ssh, plain and dumb
 profiles on Linux and Windows, CJK and NO_COLOR panes, an interactive
 scripted Windows Terminal window, a headless conhost lifecycle, the

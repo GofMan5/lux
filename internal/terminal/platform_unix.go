@@ -140,40 +140,91 @@ func (b *Backend) CanSuspend() bool {
 	return b.opened && !b.plain && !b.suspended
 }
 
-// watchLifecycle watches for terminal loss. Job-control suspension is NOT
-// handled here: this process never notifies SIGTSTP, so the kernel's default
-// disposition survives untouched and a stop that arrives anyway — an
-// external kill -TSTP, or a Ctrl+Z forwarded by a terminal in cooked mode —
-// stops the process the ordinary kernel way. The raw-mode runtime claims
-// the Ctrl+Z byte itself and runs the suspend handshake on the run loop's
-// goroutine through Backend.Suspend, which is the only place that can
-// order the model's Suspend event before the leave sequences. What the
-// watcher owns is SIGHUP: the controlling terminal went away, which is an
-// error event and an exit, never a suspend. Reset in the deferred cleanup
-// restores the default disposition a shell expects to find after the
-// program exits — a terminal loss must not leave behind a process that
-// survives the next HUP.
+// watchLifecycle watches for terminal loss and termination signals.
+// Job-control suspension is NOT handled here: this process never notifies
+// SIGTSTP, so the kernel's default disposition survives untouched and a
+// stop that arrives anyway — an external kill -TSTP, or a Ctrl+Z forwarded
+// by a terminal in cooked mode — stops the process the ordinary kernel
+// way. The raw-mode runtime claims the Ctrl+Z byte itself and runs the
+// suspend handshake on the run loop's goroutine through Backend.Suspend,
+// which is the only place that can order the model's Suspend event before
+// the leave sequences. What the watcher owns is three signals:
+//
+//   - SIGHUP: the controlling terminal went away. An error event and an
+//     exit, never a suspend — the terminal is gone, raw mode, the
+//     alternate screen, and any restore all died with it, so nothing is
+//     restored, only the loss is reported.
+//   - SIGINT and SIGTERM: an external termination. The runtime owns the
+//     cleanup half of the contract: the terminal is restored immediately —
+//     the same leave-and-cook path suspendTerminal runs, whose latch also
+//     gates Present — and the error event carries ErrInterrupt or
+//     ErrTerminated, which the run loop turns into an ordinary exit
+//     through the deferred Close. The application owns the exit code:
+//     conventional callers map the two errors to 130 and 143. SIGKILL
+//     stays unhandleable by contract: no cleanup is promised for it.
+//
+// A Ctrl+C typed at the terminal in raw mode is NOT the SIGINT path: the
+// byte was claimed by MakeRaw and arrives as a Key event, so the model
+// stays the owner of interactive quit. The deferred Reset restores the
+// default disposition a shell expects to find after the program exits —
+// a terminal loss must not leave behind a process that survives the next
+// HUP, and a watcher that already delivered its one event must not
+// swallow a second signal the kernel would have honored.
 func (b *Backend) watchLifecycle(ctx context.Context) {
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGHUP)
-	defer signal.Reset(syscall.SIGHUP)
+	signal.Notify(signals, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	defer signal.Reset(syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM)
+	b.dispatchLifecycle(ctx, signals)
+}
+
+// dispatchLifecycle is watchLifecycle's loop, split from the signal
+// registration so the dispatch contract itself — which signal restores
+// the terminal and which error it reports — is testable without racing a
+// real signal against the Notify call that must register first. The
+// registration and the Reset stay above, untested at unit level on
+// purpose: they are wiring, and a real kill against a real pty is the
+// only honest proof of them, which is what the e2e lane is for.
+func (b *Backend) dispatchLifecycle(ctx context.Context, signals <-chan os.Signal) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-signals:
-			// The controlling terminal is gone: raw mode, the alternate
-			// screen, and any restore all died with it — writes would fail
-			// and the read loop already saw EOF — so the loss is reported
-			// through the same error path and the application exits through
-			// its deferred Close. The watcher stops too: a dead terminal
-			// produces no further job control.
+		case sig := <-signals:
+			// A closed or plain backend reports nothing: the terminal
+			// half is already gone, and the process is on its way out
+			// through paths that own their own cleanup.
 			b.mu.Lock()
 			opened := b.opened
 			b.mu.Unlock()
-			if opened {
-				b.deliverLifecycle(event.Event{Kind: event.Error, Err: errHangup})
+			if !opened {
+				return
 			}
+			if sig == syscall.SIGINT || sig == syscall.SIGTERM {
+				// The restore runs before the application is told: the
+				// dying process stops painting onto a cooked screen the
+				// moment the latch closes, and the leave sequences land
+				// within microseconds of the signal instead of after
+				// however long the model takes to unwind. A restore that
+				// races a real suspension is safe both ways — the
+				// suspendTerminal/resumeTerminal pair is idempotent under
+				// the mutex — and Close's own restore is idempotent on
+				// top of this one, so the application still exits through
+				// the error event either way.
+				b.suspendTerminal()
+				cause := ErrTerminated
+				if sig == syscall.SIGINT {
+					cause = ErrInterrupt
+				}
+				b.deliverLifecycle(event.Event{Kind: event.Error, Err: cause})
+				return
+			}
+			// SIGHUP: the controlling terminal is gone. Raw mode, the
+			// alternate screen, and any restore all died with it —
+			// writes would fail and the read loop already saw EOF — so
+			// the loss is reported through the same error path and the
+			// application exits through its deferred Close. The watcher
+			// stops too: a dead terminal produces no further job control.
+			b.deliverLifecycle(event.Event{Kind: event.Error, Err: errHangup})
 			return
 		}
 	}
