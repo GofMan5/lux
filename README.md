@@ -131,6 +131,7 @@ The examples are numbered as a curriculum:
 | `05-widgets` | The widget catalog — every control end to end ([CUSTOM-CONTROL.md](docs/CUSTOM-CONTROL.md)) |
 | `06-showcase` | The adaptive animated 3D showcase with a live Interaction Lab |
 | `07-ssh` | A LUX TUI served over SSH — the engine in a child on a real pty |
+| `08-tour` | The full-capability tour — nine tabs, one live demo per library area |
 | `annex` | Sideband channels — taskbar progress, a toast, a clipboard write |
 
 ```sh
