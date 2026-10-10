@@ -45,7 +45,7 @@ jobs:
         if: steps.gots.outputs.status != '0'
         shell: bash
         run: |
-          grep -E '^(--- FAIL|FAIL|ok |panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
+          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
             echo "::error::${line}"
           done
           exit 1
@@ -107,7 +107,7 @@ jobs:
       - name: Report failures as annotations
         if: steps.gots.outputs.status != '0'
         run: |
-          grep -E '^(--- FAIL|FAIL|ok |panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
+          grep -E '^(--- FAIL|FAIL|panic)|WARNING: DATA RACE|Found [0-9]+ data race|^\t+Test[A-Za-z0-9_]+ \(' test-output.txt | head -8 | while IFS= read -r line; do
             echo "::error::${line}"
           done
           exit 1
