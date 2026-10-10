@@ -15,7 +15,17 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
-_Nothing yet. The v0.1.0 cut below is the first tagged release; per the
+### Fixed
+
+- Hardened the OSC 8 output seam: a `render.Link` whose URI or ID carries
+  control characters, malformed UTF-8, id field separators, or fields beyond
+  the size caps now degrades to plain text at the encoder instead of
+  traveling inside the control string, where a spliced string terminator
+  could smuggle terminal commands. Glyphs and styles survive, a hostile
+  link replacing a valid one closes the region, and legitimate Unicode
+  destinations ride unchanged.
+
+_Unreleased notes: the v0.1.0 cut below is the first tagged release; per the
 v0.x policy above, the next `0.2.0` may break API — watch this file._
 
 ## [0.1.0] - 2026-10-10

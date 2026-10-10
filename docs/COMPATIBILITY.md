@@ -610,6 +610,20 @@ The frame contract keeps regions honest on every path:
   into ambiguity;
 - the diff compares both URI and ID, so a changed target repaints the cell.
 
+A destination is also validated before it can reach the wire, because a
+`render.Link` may come from untrusted data — a chat message, a file name, a
+remote table row — and the URI and ID travel inside a control string. The
+encoding seam accepts a link only when every rune of both fields is
+printable (which excludes the C0 and C1 controls, DEL, format characters,
+and malformed UTF-8), the ID carries no `;` or `:` — those would spill its
+tail into the URI field — and the fields fit the caps (8192 bytes for the
+URI, 256 for the ID; longer strings are where terminals diverge between
+truncate and drop). A rejected destination degrades to plain text: the cell
+keeps its glyph and style, the encoder never opens a region for it, and a
+hostile link replacing a valid one mid-frame closes the region instead of
+leaving the old target live. The diff compares the effective link, so a
+degraded cell matches a plain cell on the wire.
+
 ## Window title (OSC 0 and the XTWINOPS stack)
 
 `lux.WithTitle` sets the terminal window and tab title as a lifecycle

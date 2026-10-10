@@ -19,6 +19,7 @@ Thumbs.db
 *.tmp
 *.log
 .verification/keystroke.prof
+.verification/production-progress.md
 
 # Nested module build artifacts
 /examples/ssh/ssh

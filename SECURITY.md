@@ -38,3 +38,8 @@ Changes to these areas require bounded parsing, integer/size validation,
 control-sequence tests, failure cleanup, and a conservative fallback. Never
 place secrets in terminal titles, links, clipboard sequences, logs, snapshots,
 or issue reports.
+
+Implemented controls include the OSC 8 output seam: link URIs and IDs are
+validated before encoding (printable runes only, no id field separators,
+capped field sizes), and an untransmittable destination degrades to plain
+text rather than reach the wire. Reports of a bypass belong here.

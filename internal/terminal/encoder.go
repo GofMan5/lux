@@ -2,6 +2,9 @@ package terminal
 
 import (
 	"strconv"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/GofMan5/lux/capability"
 	"github.com/GofMan5/lux/render"
@@ -436,8 +439,13 @@ func equalRenderedCell(frame, terminal *render.Buffer, x, y int, depth capabilit
 	if current.Grapheme != old.Grapheme || current.Width != old.Width || current.Style.Attrs != old.Style.Attrs {
 		return false
 	}
-	if links && current.Link != old.Link {
-		return false
+	if links {
+		// A cell whose destination cannot travel as OSC 8 degrades to plain
+		// text at the seam, so the terminal model and the frame agree only
+		// after the same normalization the encoder applies.
+		if effectiveLink(current.Link) != effectiveLink(old.Link) {
+			return false
+		}
 	}
 	if current.Style.Attrs&render.AttrUnderline != 0 {
 		// The underline shape and color ride the attribute: without it they are
@@ -544,6 +552,12 @@ type styleWriter struct {
 func (w *styleWriter) apply(dst []byte, style render.Style, link render.Link, depth capability.ColorDepth) []byte {
 	if !w.links {
 		link = render.Link{}
+	} else {
+		// A destination that cannot travel as an OSC 8 string degrades to
+		// plain text here, so the run state only ever tracks links the wire
+		// can carry: an unchanged hostile one neither re-opens a region run
+		// after run nor pays for a spurious close.
+		link = effectiveLink(link)
 	}
 	if w.known && w.current == style && w.link == link {
 		return dst
@@ -595,11 +609,69 @@ func (w *styleWriter) reset(dst []byte) []byte {
 	return append(dst, resetStyle...)
 }
 
+// maxLinkURI and maxLinkID bound the OSC 8 string fields in bytes. Terminals
+// buffer the whole control string before acting on it, and several truncate
+// long ones, so a destination beyond the cap degrades to plain text rather
+// than arrive mangled on some hosts.
+const (
+	maxLinkURI = 8192
+	maxLinkID  = 256
+)
+
+// safeLink reports whether link can travel inside an OSC 8 control string
+// without leaving it. Every rune of the URI and the id must be printable —
+// which excludes the C0 and C1 controls, DEL, format characters, and
+// malformed UTF-8 — and the id may not carry the OSC field separator ';' or
+// the params pair separator ':', which would spill its tail into another
+// field. A link that fails is rendered as plain text: the cell keeps its
+// glyph and style, and the encoder never opens a region for it.
+func safeLink(link render.Link) bool {
+	if len(link.URI) > maxLinkURI || len(link.ID) > maxLinkID {
+		return false
+	}
+	if link.Empty() {
+		return true
+	}
+	if strings.ContainsAny(link.ID, ";:") {
+		return false
+	}
+	return safeLinkText(link.URI) && safeLinkText(link.ID)
+}
+
+// safeLinkText reports whether s carries only printable runes, the character
+// set an OSC string may hold without terminating or corrupting itself.
+func safeLinkText(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if !unicode.IsPrint(r) {
+			return false
+		}
+	}
+	return true
+}
+
+// effectiveLink returns the destination the encoder actually transmits: one
+// that cannot travel as an OSC 8 string degrades to no link at all.
+func effectiveLink(link render.Link) render.Link {
+	if safeLink(link) {
+		return link
+	}
+	return render.Link{}
+}
+
 // setLink switches the terminal into link's region, or closes the region when
 // the link is empty. Switching straight from one target to another is legal,
 // so no intermediate close is emitted, and an id travels only when the link
 // carries one.
 func (w *styleWriter) setLink(dst []byte, link render.Link) []byte {
+	if !safeLink(link) {
+		// The wire seam is the last line of defense: whatever reaches this
+		// point from a caller that skipped apply's normalization must still
+		// never place unsafe bytes inside an OSC 8 string.
+		link = render.Link{}
+	}
 	w.link = link
 	if !w.links {
 		return dst
