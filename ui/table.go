@@ -71,6 +71,11 @@ func ColumnLayout(columns []TableColumn, width int) []int {
 // sort requested. The table itself never reorders rows — it records a header
 // press in SortColumn/SortDesc and sets SortRequested; the application owns
 // the data, re-slices it, and clears SortRequested when the request is served.
+//
+// FreeScroll records who last moved the viewport: the wheel (true) or the
+// selection (false, the default). While it is true the viewport stays where
+// the wheel left it, even across frames; the first key press or click that
+// moves the selection hands control back.
 type TableState struct {
 	Selected      int
 	Offset        int
@@ -78,6 +83,7 @@ type TableState struct {
 	SortColumn    int
 	SortDesc      bool
 	SortRequested bool
+	FreeScroll    bool
 }
 
 // Apply mutates state for a routed Table action and reports whether anything
@@ -89,8 +95,7 @@ type TableState struct {
 // viewport, so a table over a large data set scrolls without dragging the
 // selection along. A pointer press on the body selects that row; on the header
 // it toggles the sort request for the hit column (asc, then desc, then asc
-// again). Key releases are inert. Clicks on the header need at least one body
-// row to be routed, because the router drops presses below the content.
+// again). Key releases are inert.
 func (s *TableState) Apply(action Action, columns []TableColumn, count int) (changed, activated, sortRequested bool) {
 	if s == nil {
 		return false, false, false
@@ -162,12 +167,14 @@ func (s *TableState) Apply(action Action, columns []TableColumn, count int) (cha
 		}
 	}
 	if count == 0 {
-		s.Selected, s.Offset = 0, 0
+		s.Selected, s.Offset, s.FreeScroll = 0, 0, false
 	} else {
 		s.Selected = min(max(s.Selected, 0), count-1)
 		if viewportOnly {
+			s.FreeScroll = true
 			s.Offset = min(max(s.Offset, 0), max(count-rows, 0))
 		} else {
+			s.FreeScroll = false
 			s.Offset = keepRowVisible(s.Selected, s.Offset, count, rows)
 		}
 	}
@@ -238,7 +245,8 @@ type TableStyle struct {
 // count. Cells are clipped to their column at grapheme boundaries and
 // elided with Ellipsis when they do not fit. Register the same columns in
 // Apply so pointer hits map identically. View is side-effect free except for
-// bounds repair (the selection and offset clamps).
+// bounds repair: the selection and offset clamps, and keeping the selected
+// row visible unless the wheel last moved the viewport (TableState.FreeScroll).
 func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state *TableState, columns []TableColumn, count int, rowAt func(index int) []string, style TableStyle) {
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
@@ -252,11 +260,17 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 	state.Selected = min(max(state.Selected, 0), max(count-1, 0))
 	if count == 0 {
 		state.Selected, state.Offset = 0, 0
+	} else if state.FreeScroll {
+		// The wheel moved the viewport away from the selection: repair only
+		// the range, and do not pull the viewport back to the selection.
+		state.Offset = min(max(state.Offset, 0), max(count-rows, 0))
 	} else {
 		state.Offset = keepRowVisible(state.Selected, state.Offset, count, rows)
 	}
 	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{
-		ContentHeight: min(rows, max(count-state.Offset, 0)),
+		// The header row is pressable structure (sorting), so it counts toward
+		// the pressable height along with the visible body rows.
+		ContentHeight: header + min(rows, max(count-state.Offset, 0)),
 		AtTop:         state.Offset <= 0,
 		AtBottom:      state.Offset >= max(count-rows, 0),
 	})

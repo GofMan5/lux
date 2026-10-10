@@ -3,6 +3,7 @@ package ui
 import (
 	"testing"
 
+	lux "github.com/GofMan5/lux"
 	"github.com/GofMan5/lux/event"
 	"github.com/GofMan5/lux/render"
 )
@@ -160,6 +161,84 @@ func TestTableStateWheelScrollsViewportOnly(t *testing.T) {
 	}
 	if state.Offset != 93 {
 		t.Fatalf("Offset = %d; want 93", state.Offset)
+	}
+}
+
+func TestTableViewKeepsWheelViewport(t *testing.T) {
+	// The wheel scrolls the viewport away from the selection; the next View
+	// must keep that offset instead of snapping the viewport back to the
+	// selected row. A key or click hands control back to the selection.
+	state := TableState{Selected: 5}
+	columns := tableColumns()
+	wheel := tableAction(Scroll, event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+		Action: event.MouseWheel, Button: event.MouseWheelDown,
+	}}, 40, 8, 0, 0)
+	for range 10 {
+		state.Apply(wheel, columns, 100)
+	}
+	if state.Offset != 20 {
+		t.Fatalf("wheel offset = %d; want 20", state.Offset)
+	}
+	var ctx Context
+	frame := func() *lux.Frame {
+		return &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(40, 8))}
+	}
+	next := frame()
+	ctx.Begin(next)
+	ctx.Table("table", next.Canvas, render.Rect{W: 40, H: 8}, &state, columns, 100,
+		func(int) []string { return nil }, TableStyle{})
+	ctx.End(next)
+	commitBuilt(&ctx)
+	if state.Offset != 20 {
+		t.Fatalf("View pulled the viewport back to the selection: Offset = %d; want 20", state.Offset)
+	}
+	if state.Selected != 5 {
+		t.Fatalf("View moved the selection: %d; want 5", state.Selected)
+	}
+	down := tableAction(Scroll, event.KeyPress(event.KeyDown, 0), 40, 8, 0, 0)
+	state.Apply(down, columns, 100)
+	after := frame()
+	ctx.Begin(after)
+	ctx.Table("table", after.Canvas, render.Rect{W: 40, H: 8}, &state, columns, 100,
+		func(int) []string { return nil }, TableStyle{})
+	ctx.End(after)
+	if state.Offset != 6 { // keepRowVisible(6, 20, 100, 7) follows the selection again.
+		t.Fatalf("View after key navigation: Offset = %d; want 6", state.Offset)
+	}
+}
+
+func TestTablePressesReachHeaderAndLastRow(t *testing.T) {
+	// A 40x8 table has one header row and seven body rows, so the last body
+	// row sits at local y 7 — the router must deliver that press to the
+	// table instead of dropping it as blank tail.
+	columns := tableColumns()
+	draw := func(ctx *Context, state *TableState, count int) {
+		next := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(40, 8))}
+		ctx.Begin(next)
+		ctx.Table("table", next.Canvas, render.Rect{W: 40, H: 8}, state, columns, count,
+			func(int) []string { return nil }, TableStyle{})
+		ctx.End(next)
+		commitBuilt(ctx)
+	}
+	press := func(y int) event.Event {
+		return event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 4, Y: y, Action: event.MousePress, Button: event.MouseLeft}}
+	}
+
+	var ctx Context
+	state := TableState{}
+	draw(&ctx, &state, 20)
+	action, handled := ctx.Handle(press(7))
+	if !handled || action.Kind != Scroll || action.Target != "table" || action.Y != 7 {
+		t.Fatalf("last body row press = %#v handled=%v", action, handled)
+	}
+	// An empty table still routes header presses: sorting an empty result
+	// set is how the user clears or changes the pending sort.
+	empty := TableState{}
+	draw(&ctx, &empty, 0)
+	action, handled = ctx.Handle(press(0))
+	if !handled || action.Kind != Scroll || action.Target != "table" || action.Y != 0 {
+		t.Fatalf("header press on empty table = %#v handled=%v", action, handled)
 	}
 }
 
