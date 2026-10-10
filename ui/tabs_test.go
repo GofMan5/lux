@@ -10,7 +10,7 @@ import (
 var tabsLabels = []string{"alpha", "beta", "gamma"}
 
 func TestTabLayoutMeasuresSlots(t *testing.T) {
-	slots := tabLayout(tabsLabels, 0, 30)
+	slots := tabLayout(tabsLabels, 0, 30, render.WidthPolicy{})
 	if len(slots) != 3 {
 		t.Fatalf("slots = %d; want 3", len(slots))
 	}
@@ -22,14 +22,57 @@ func TestTabLayoutMeasuresSlots(t *testing.T) {
 		}
 	}
 	// A narrow strip clips the last slot instead of dropping it.
-	slots = tabLayout(tabsLabels, 0, 9)
+	slots = tabLayout(tabsLabels, 0, 9, render.WidthPolicy{})
 	if len(slots) != 2 || slots[1].w != 2 {
 		t.Fatalf("clipped slots = %+v; want alpha + beta clipped to 2", slots)
 	}
 	// The offset skips earlier tabs.
-	slots = tabLayout(tabsLabels, 2, 30)
+	slots = tabLayout(tabsLabels, 2, 30, render.WidthPolicy{})
 	if len(slots) != 1 || slots[0].index != 2 || slots[0].x != 0 {
 		t.Fatalf("offset slots = %+v; want gamma at x 0", slots)
+	}
+}
+
+// Greek letters are East Asian Ambiguous: one cell under the default policy,
+// two under AmbiguousWidth 2. The strip must measure, draw, and hit-test its
+// labels through the canvas policy so slots match what the terminal renders.
+func TestTabsMeasureLabelsUnderCanvasWidthPolicy(t *testing.T) {
+	labels := []string{"αβ", "γδ"}
+	policy := render.WidthPolicy{AmbiguousWidth: 2}
+	if w := render.TextWidthWith(labels[0], policy); w != 4 {
+		t.Fatalf("policy label width = %d; want 4 (ambiguity fixture)", w)
+	}
+	buffer := render.NewBuffer(24, 1)
+	canvas := render.NewCanvasWithPolicy(buffer, policy)
+	var ctx Context
+	ctx.begun = true
+	state := TabsState{}
+	ctx.Tabs("tabs", canvas, render.Rect{X: 0, Y: 0, W: 24, H: 1}, &state, labels, TabsStyle{})
+	// Slot 0 spans x 0..5: padding, αβ (4 cells), padding. Clipping the label
+	// at the default 2-cell width would drop β and δ from the strip.
+	if cell := buffer.Cell(3, 0); cell.Grapheme != "β" {
+		t.Fatalf("first label's second grapheme at x=3 = %q; want β", cell.Grapheme)
+	}
+	if cell := buffer.Cell(9, 0); cell.Grapheme != "δ" {
+		t.Fatalf("second label's second grapheme at x=9 = %q; want δ", cell.Grapheme)
+	}
+}
+
+// Presses map through the layout the strip actually drew: under the policy
+// the first tab owns x 0..5, so a press on the boundary cell x 4 — where the
+// default layout would already sit in tab 2 — selects tab 1.
+func TestTabsPressesMapThroughCanvasWidthPolicy(t *testing.T) {
+	labels := []string{"αβ", "γδ"}
+	buffer := render.NewBuffer(24, 1)
+	canvas := render.NewCanvasWithPolicy(buffer, render.WidthPolicy{AmbiguousWidth: 2})
+	var ctx Context
+	ctx.begun = true
+	state := TabsState{}
+	ctx.Tabs("tabs", canvas, render.Rect{X: 0, Y: 0, W: 24, H: 1}, &state, labels, TabsStyle{})
+	state.Selected = 1 // as a Right key would leave it
+	press := event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft}}
+	if changed, _ := state.Apply(Action{Kind: Scroll, Event: press, X: 4, Y: 0, Bounds: render.Rect{W: 24}}, labels); !changed || state.Selected != 0 {
+		t.Fatalf("press x 4 changed=%v Selected=%d; want true 0", changed, state.Selected)
 	}
 }
 

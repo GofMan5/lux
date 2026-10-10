@@ -12,6 +12,13 @@ import (
 type TabsState struct {
 	Selected int
 	Offset   int
+
+	// widthPolicy is the canvas policy the strip was last drawn on. Apply
+	// maps pointer presses through the same layout the terminal rendered, so
+	// slots and hits stay the same rectangles under any policy. It is set by
+	// Tabs and is part of the state comparison; the zero value is the
+	// default policy, which matches a strip never drawn yet.
+	widthPolicy render.WidthPolicy
 }
 
 // tabSlot is one tab's drawn rectangle inside the strip: x and w are relative
@@ -25,18 +32,18 @@ type tabSlot struct {
 
 // tabLayout measures the visible strip for labels flowing from offset: each
 // tab is its label plus one padding cell on each side, measured with the
-// default width policy — the same measurement Apply maps presses through, so
-// drawn slots and hit slots are the same rectangles under the default policy.
+// width policy the strip's canvas carries — the same measurement Apply maps
+// presses through, so drawn slots and hit slots are the same rectangles.
 // Slots clip to the strip width; a tab wider than the whole strip still gets
 // one clipped slot, never zero.
-func tabLayout(labels []string, offset, width int) []tabSlot {
+func tabLayout(labels []string, offset, width int, policy render.WidthPolicy) []tabSlot {
 	if offset < 0 {
 		offset = 0
 	}
 	slots := make([]tabSlot, 0, len(labels))
 	x := 0
 	for i := offset; i < len(labels) && x < width; i++ {
-		w := render.TextWidth(labels[i]) + 2
+		w := render.TextWidthWith(labels[i], policy) + 2
 		if x+w > width {
 			w = width - x
 		}
@@ -48,8 +55,8 @@ func tabLayout(labels []string, offset, width int) []tabSlot {
 
 // tabAt maps a strip-local x to a tab index, or -1 when x is outside every
 // slot (the gap-free strip means this only happens past the last slot).
-func tabAt(labels []string, offset, width, x int) int {
-	for _, slot := range tabLayout(labels, offset, width) {
+func tabAt(labels []string, offset, width, x int, policy render.WidthPolicy) int {
+	for _, slot := range tabLayout(labels, offset, width, policy) {
 		if x >= slot.x && x < slot.x+slot.w {
 			return slot.index
 		}
@@ -62,8 +69,9 @@ func tabAt(labels []string, offset, width, x int) int {
 // the strip then starts at the left edge and clips). Visibility is measured
 // against the unclipped label width, because a clipped trailing slot always
 // "fits" numerically while showing no label at all. Without geometry
-// (width 0) there is nothing to keep visible, so it is a no-op.
-func (s *TabsState) keepTabVisible(labels []string, width int) {
+// (width 0) there is nothing to keep visible, so it is a no-op. Labels are
+// measured with the drawing policy so visibility matches the rendered slots.
+func (s *TabsState) keepTabVisible(labels []string, width int, policy render.WidthPolicy) {
 	if width <= 0 || s.Selected >= len(labels) || s.Selected < 0 {
 		return
 	}
@@ -74,9 +82,9 @@ func (s *TabsState) keepTabVisible(labels []string, width int) {
 	for s.Offset < s.Selected {
 		x := 0
 		for i := s.Offset; i < s.Selected; i++ {
-			x += render.TextWidth(labels[i]) + 2
+			x += render.TextWidthWith(labels[i], policy) + 2
 		}
-		if x == 0 || x+render.TextWidth(labels[s.Selected])+2 <= width {
+		if x == 0 || x+render.TextWidthWith(labels[s.Selected], policy)+2 <= width {
 			break
 		}
 		s.Offset++
@@ -137,7 +145,7 @@ func (s *TabsState) Apply(action Action, labels []string) (changed, activated bo
 				}
 			case event.MousePress:
 				if action.Y == 0 {
-					if index := tabAt(labels, s.Offset, width, action.X); index >= 0 {
+					if index := tabAt(labels, s.Offset, width, action.X, s.widthPolicy); index >= 0 {
 						s.Selected = index
 					}
 				}
@@ -149,7 +157,7 @@ func (s *TabsState) Apply(action Action, labels []string) (changed, activated bo
 	// geometry: routed Scrolls always do, while an Activate is a report and
 	// must not move the strip.
 	if action.Kind == Scroll {
-		s.keepTabVisible(labels, width)
+		s.keepTabVisible(labels, width, s.widthPolicy)
 	}
 	changed = *s != before
 	return changed, activated
@@ -188,13 +196,14 @@ func (c *Context) Tabs(id ID, canvas *render.Canvas, bounds render.Rect, state *
 	}
 	count := len(labels)
 	state.Selected = min(max(state.Selected, 0), max(count-1, 0))
+	state.widthPolicy = canvas.WidthPolicy()
 	if count == 0 {
 		state.Selected, state.Offset = 0, 0
 	} else {
 		state.Offset = min(max(state.Offset, 0), count-1)
-		state.keepTabVisible(labels, bounds.W)
+		state.keepTabVisible(labels, bounds.W, state.widthPolicy)
 	}
-	slots := tabLayout(labels, state.Offset, bounds.W)
+	slots := tabLayout(labels, state.Offset, bounds.W, state.widthPolicy)
 	atBottom := len(slots) == 0 || slots[len(slots)-1].index == count-1
 	c.RegionWithOptions(id, canvas, bounds, flags, RegionOptions{
 		ContentHeight: min(len(slots), 1),

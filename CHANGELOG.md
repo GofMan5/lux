@@ -29,6 +29,20 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Width policy in Tabs and Checkbox measurement (`ui`): two layout paths
+  bypassed the canvas width policy — tab strips sized, hit-tested, and
+  scrolled their labels with the default policy while clipping the drawn
+  labels with the canvas's, so on `AmbiguousWidth: 2` terminals (CJK-locale
+  xterm and friends) ambiguous labels (Greek, Cyrillic, box drawing) drew
+  truncated and a click landed one tab off where the labels rendered; and a
+  Checkbox with a custom marker measured the marker with the default policy
+  while drawing it with the canvas's, letting an ambiguous marker push its
+  label onto the marker's tail cell. `TabsState` now records the drawing
+  policy (unexported, zero value = default) and every tabs measurement —
+  slot layout, press mapping, visibility — runs through it; the checkbox
+  label column follows the marker's canvas-policy width. Default-policy
+  terminals (all ASCII labels and markers) draw byte-for-byte as before.
+
 - Modal caret takeover (`ui`, `render`): while a modal scope was open, the
   editor beneath the dialog still painted the terminal cursor — the base
   repaints with its regained focus before `BeginModal` runs, so a focused

@@ -11,6 +11,27 @@ func checkAction(kind ActionKind, next event.Event, x, y int) Action {
 	return Action{Kind: kind, Event: next, X: x, Y: y}
 }
 
+// α (U+03B1) is East Asian Ambiguous: one cell under the default policy, two
+// under AmbiguousWidth 2. The label column must start after the marker the
+// canvas actually drew, not after its default-policy width.
+func TestCheckboxLabelColumnFollowsWidthPolicy(t *testing.T) {
+	buffer := render.NewBuffer(10, 1)
+	canvas := render.NewCanvasWithPolicy(buffer, render.WidthPolicy{AmbiguousWidth: 2})
+	var ctx Context
+	ctx.begun = true
+	state := CheckboxState{Checked: true}
+	ctx.Checkbox("check", canvas, render.Rect{X: 0, Y: 0, W: 10, H: 1}, &state, "X", CheckboxStyle{Checked: "α"})
+	if cell := buffer.Cell(0, 0); cell.Grapheme != "α" {
+		t.Fatalf("marker cell = %q; want α", cell.Grapheme)
+	}
+	if cell := buffer.Cell(2, 0); cell.Grapheme != " " {
+		t.Fatalf("marker pad cell at x=2 = %q; want a space (label starts at x=3)", cell.Grapheme)
+	}
+	if cell := buffer.Cell(3, 0); cell.Grapheme != "X" {
+		t.Fatalf("label cell at x=3 = %q; want X", cell.Grapheme)
+	}
+}
+
 func TestCheckboxStateTogglesOnActivationOnly(t *testing.T) {
 	state := CheckboxState{}
 	activate := checkAction(Activate, event.KeyPress(event.KeyEnter, 0), 0, 0)

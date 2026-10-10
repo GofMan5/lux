@@ -90,7 +90,10 @@ func (c *Context) Checkbox(id ID, canvas *render.Canvas, bounds render.Rect, sta
 		marker = empty
 	}
 	canvas.Text(bounds.X, bounds.Y, clipText(marker+" ", bounds.W, canvas.WidthPolicy()), markerVisual)
-	markerCells := render.TextWidth(marker)
+	// The label column follows the marker as the canvas actually drew it: a
+	// marker that is two cells wide under the policy must push the label one
+	// cell further than its default-policy width.
+	markerCells := canvas.TextWidth(marker)
 	if bounds.W > markerCells+1 {
 		label := clipText(label, bounds.W-markerCells-1, canvas.WidthPolicy())
 		canvas.Text(bounds.X+markerCells+1, bounds.Y, label, visual)
