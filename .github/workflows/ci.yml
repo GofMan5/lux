@@ -72,7 +72,18 @@ jobs:
       - run: go mod download
       - run: go vet ./...
       - run: go build .
-      - run: go test -race ./...
+      - name: Run go test -race ./...
+        run: |
+          set +e
+          go test -race -v -count=1 ./... > test-output.txt 2>&1
+          status=$?
+          {
+            echo '## SSH example test output'
+            echo '```'
+            cat test-output.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit $status
 
   tidy:
     name: Module and formatting
