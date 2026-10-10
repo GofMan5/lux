@@ -1,0 +1,46 @@
+Stage 10 slice 4 — content: tutorials, catalog, godoc examples (closed 2026-10-10)
+
+Commit: 3902867 (docs+examples: tutorials, numbered example catalog,
+godoc examples) + vhs outcome recorded in the release commit.
+
+What shipped
+- docs/QUICKSTART.md — quick-start tutorial; every snippet lifted
+  verbatim from examples/01-counter/main.go (model struct, update with
+  ctrl-c handling, ink/violet counter view, KeyRune text handling).
+- docs/ANIMATION.md — animation tutorial from examples/02-animation/
+  main.go: 1200ms tween vs 900ms spring side-by-side, retarget via
+  next.At pattern, self-restart idiom, frame.RequestFrame after state
+  changes, absolute-time sampling (late frames skip stale states).
+- Third tutorial rung is the existing docs/CUSTOM-CONTROL.md ("your
+  own control in an evening") — ladder quick-start -> animation ->
+  custom control complete; all three linked from README.
+- examples catalog: 01-counter, 02-animation (new, runnable),
+  03-textedit, 04-table, 05-widgets, 06-showcase, 07-ssh (+ examples/
+  annex) — README run section is now a catalog table with per-example
+  doc links. Renames themselves landed with slice 1 (they were staged
+  by git mv before that commit; disclosed in its message).
+- 07-ssh README/main.go comments + docs/CUSTOM-CONTROL.md point at the
+  numbered paths now.
+- Godoc: 16 Example* functions total (DoD >= 15): layout
+  ExampleFlex/ExampleClassify, motion ExampleTween/ExampleSpring,
+  capability ExamplePortable/ExampleSet (+ prior 10 in root/render/ui).
+  Class.String() and ColorDepth.String() added so Example output reads
+  Tiny/Compact/Medium/Wide and Monochrome/ANSI16/ANSI256/TrueColor.
+
+Gate checks (run at slice close and re-run at stage close)
+- go test ./... green (root 13 packages, incl. new example tests).
+- go vet ./... clean; gofmt -l . empty.
+- Example funcs verified countable: `go test -run Example -v` outputs
+  PASS for all with output comments.
+
+Deferred (honest record)
+- vhs screencast docs/assets/demo-counter.gif: NOT rendered. The vhs
+  docker image build fails in this environment — apk mirrors
+  (dl-ccdn.alpinelinux.org) are unreachable from the build sandbox, so
+  ffmpeg/ttyd cannot be installed; the vhs release tarball itself
+  downloads fine but is useless without them. No vhs/ffmpeg on host
+  either. Committed docs/assets/demo-counter.tape renders the GIF
+  wherever vhs + ffmpeg + fonts exist (e.g. any dev machine with
+  `brew install vhs`). README Direction states this deferral.
+- ROADMAP translation: decided to keep ROADMAP.md Russian/internal;
+  user-facing docs are English. Recorded in ROADMAP stage-10 closure.

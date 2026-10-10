@@ -15,6 +15,15 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+_Nothing yet. The v0.1.0 cut below is the first tagged release; per the
+v0.x policy above, the next `0.2.0` may break API — watch this file._
+
+## [0.1.0] - 2026-10-10
+
+First tagged release. Module path: `github.com/GofMan5/lux` (the planned
+`lux-tui` org was not created — organization creation is web-UI-only and
+the release pipeline runs headless; see the repository README).
+
 ### Added
 
 - Core runtime (`lux`): `Model`/`Command` application loop, frames and metrics,

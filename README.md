@@ -4,9 +4,11 @@
 
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
-> **Pre-release:** the public runtime, renderer, responsive layout, immediate-
-> mode interaction context, core controls, motion, terminal adapter, and CPU 3D
-> rasterizer exist. API stability is not promised yet.
+> **v0.1.0:** the first tagged release. The public runtime, renderer,
+> responsive layout, immediate-mode interaction context, core controls,
+> motion, terminal adapter, and CPU 3D rasterizer are in. Semver rules for
+> `0.x` are stated in [CHANGELOG.md](CHANGELOG.md) — minor releases may
+> break, patch releases never do.
 
 LUX TUI treats the terminal as a constrained rendering target, not a stream of
 decorated strings. The current core stores complete extended grapheme clusters,
@@ -441,10 +443,17 @@ self-asserting scripts with committed evidence; the SSH example serves
 the engine over the wire by bridging each session onto a real pty; and
 the frame's sideband channels — taskbar progress, notifications, and a
 write-only clipboard — are pinned by byte truth and a decoded tmux
-buffer. The prove-it stage is next: a benchmarks module with a
-reproducible report, a facts-only README pass, and the v0.1.0 release.
+buffer. The prove-it stage is closed: the
+[benchmarks module](benchmarks/README.md) ran its full comparative
+campaign (168 runs, 0 failed; committed raw data, benchstat, and a
+facts-only [report](benchmarks/results/report.md) reproduced by one
+docker command), the README above quotes only those measured numbers,
+and v0.1.0 is tagged on this repository. The planned
+`docs/assets/demo-counter.gif` screencast is deferred: rendering the
+committed [tape](docs/assets/demo-counter.tape) needs ffmpeg/ttyd from
+package mirrors that the release sandbox cannot reach.
 Graphics protocols and semantic accessibility bridges follow
-only after these paths are measurable.
+only on measured demand, per the roadmap's post-1.0 gate.
 The existing CPU `scene3d` package proves the cell-rendering path; it is not a
 GPU engine.
 

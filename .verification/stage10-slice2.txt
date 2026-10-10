@@ -1,0 +1,25 @@
+Stage 10 slice 2 — README facts-only pass (closed 2026-10-10)
+
+Commit: b0912f6 (docs: README facts-only from the committed full
+benchmark run)
+
+What shipped
+- README "does not claim to be faster" caveat replaced with numbers
+  taken ONLY from benchmarks/results/report.md (the committed 168-run
+  full campaign; the 28-run quick campaign was never citable).
+- Quoted: alloc B/frame 1-2 orders under both lanes in every scene
+  (full 240x80: 55,504 lux vs 5,464,384 tea vs 2,723,542 tview);
+  0.0 ms p50 input latency inputburst 120x40 (tview 282.3);
+  8,581 us CPU/frame full 240x80 (tea 88,920).
+- Honest losses kept in the same paragraph: tview ms/frame lower in
+  light scenes (6.18 vs 12.67 static 120x40) at ~150x allocations;
+  tea cells honestly "-" where it painted nothing.
+- docs/PERFORMANCE.md snapshot line updated: 2026-10-10, links to the
+  committed report and one-command reproduction.
+
+Gate checks
+- Every number cross-checked against report.md lines (grep run on the
+  committed file, lines 45-195).
+- No claim added that has no matching report row; no old numbers.
+- Tree otherwise unchanged: go build/test/vet/gofmt all clean (same
+  tree as slice 1 close, verified again at stage close).
