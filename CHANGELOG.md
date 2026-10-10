@@ -17,6 +17,22 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Runtime discipline guards (`lux`, `internal/terminal`, `render`): the
+  framework's steady-state discipline is now enforced by failing tests
+  instead of benchmark observations. `TestRunReturnsToTheGoroutineBaseline`
+  runs five complete lifecycles — interactive quit, present failure,
+  cancellation inside a blocked write, model panic, and the plain
+  non-interactive path — after a cancellation-based warm-up, and fails
+  with a full goroutine stack dump if any framework goroutine outlives
+  `Run`; the fake backend starts none of its own, so the guard attributes
+  leaks to the framework alone. Four allocation guards pin the
+  zero-allocation floors already measured by the benchmarks: frame diff
+  encoding with a reused scratch buffer, the idle `Present` early exit,
+  a full canvas repaint with mixed Latin/CJK/emoji content, and the
+  unchanged `AppendDiff` sweep — `testing.AllocsPerRun` budgets of zero,
+  verified to hold both with and without `-race`, so they gate the exact
+  lanes the CI matrix runs.
+
 - Scheduled verification workflow (`.github/workflows/scheduled.yml`,
   weekly Monday 03:30 UTC plus manual `workflow_dispatch`): single-pass
   CI verdicts miss interleavings that only repetition exposes, so the
