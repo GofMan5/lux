@@ -540,6 +540,89 @@ func TestRevealIgnoresNeighbourOfNestedViewport(t *testing.T) {
 	}
 }
 
+// TestModalHidesCoveredCaretAndRestoresAfterDismiss pins the overlay caret
+// contract: while a modal scope owns the frame, the editor beneath it may
+// still paint with its regained focus, but it must not leave the terminal
+// cursor blinking under the dialog; dismissing the dialog returns the caret
+// to the editor on the first frame without one.
+func TestModalHidesCoveredCaretAndRestoresAfterDismiss(t *testing.T) {
+	buffer := render.NewBuffer(20, 5)
+	canvas := render.NewCanvas(buffer)
+	frame := &lux.Frame{Canvas: canvas}
+	input := TextInput{Value: "name"}
+
+	var ctx Context
+	paint := func(modal bool) {
+		buffer.Reset()
+		ctx.Begin(frame)
+		ctx.Input("name", canvas, render.Rect{X: 4, Y: 1, W: 10, H: 1}, &input, InputStyle{})
+		if modal {
+			ctx.BeginModal("dialog", canvas, render.Rect{X: 2, Y: 2, W: 16, H: 3})
+			ctx.Region("dialog-ok", canvas, render.Rect{X: 4, Y: 3, W: 6, H: 1}, Focusable|Activatable)
+			ctx.EndModal()
+		}
+		ctx.End(frame)
+		commitBuilt(&ctx)
+	}
+
+	paint(false)
+	if _, _, visible := caretOf(t, buffer); !visible {
+		t.Fatal("the focused editor must own the caret before the modal opens")
+	}
+
+	// Opening frame: the base painted its caret before BeginModal ran.
+	paint(true)
+	if _, _, visible := caretOf(t, buffer); visible {
+		t.Fatal("opening modal frame must not leave the covered editor's caret visible")
+	}
+
+	// Steady frame: the base repaints with its regained focus before the
+	// dialog opens; the caret must still stay hidden under the overlay.
+	paint(true)
+	if _, _, visible := caretOf(t, buffer); visible {
+		t.Fatal("steady modal frame must not leave the covered editor's caret visible")
+	}
+
+	paint(false)
+	if x, y, visible := caretOf(t, buffer); !visible || x != 4 || y != 1 {
+		t.Fatalf("dismiss must restore the editor caret to (4,1), got (%d,%d,%t)", x, y, visible)
+	}
+}
+
+// TestModalEditorOwnsTheCaret pins the other half of the contract: an editor
+// registered inside the modal scope is the one caret that survives the
+// overlay's takeover.
+func TestModalEditorOwnsTheCaret(t *testing.T) {
+	buffer := render.NewBuffer(20, 5)
+	canvas := render.NewCanvas(buffer)
+	frame := &lux.Frame{Canvas: canvas}
+	base := TextInput{Value: "base"}
+	dialog := TextInput{Value: "dialog"}
+
+	var ctx Context
+	paint := func() {
+		buffer.Reset()
+		ctx.Begin(frame)
+		ctx.Input("base", canvas, render.Rect{X: 4, Y: 1, W: 10, H: 1}, &base, InputStyle{})
+		ctx.BeginModal("dialog", canvas, render.Rect{X: 2, Y: 2, W: 16, H: 3})
+		ctx.Input("dialog-input", canvas, render.Rect{X: 4, Y: 3, W: 10, H: 1}, &dialog, InputStyle{})
+		ctx.EndModal()
+		ctx.End(frame)
+		commitBuilt(&ctx)
+	}
+
+	paint()
+	if x, y, visible := caretOf(t, buffer); !visible || x != 4 || y != 3 {
+		t.Fatalf("modal editor must own the caret at (4,3), got (%d,%d,%t)", x, y, visible)
+	}
+
+	// The focus stays on the dialog editor across steady frames.
+	paint()
+	if x, y, visible := caretOf(t, buffer); !visible || x != 4 || y != 3 {
+		t.Fatalf("modal editor keeps the caret at (4,3), got (%d,%d,%t)", x, y, visible)
+	}
+}
+
 // BenchmarkWheelBubbling measures the worst case for the router: every nested
 // level is exhausted, so it walks the whole enclosure chain.
 func BenchmarkWheelBubbling(b *testing.B) {

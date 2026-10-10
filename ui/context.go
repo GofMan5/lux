@@ -333,6 +333,10 @@ func (c *Context) BeginModal(id ID, canvas *render.Canvas, bounds render.Rect) {
 	}
 	c.buildingModal = modal{id: id, bounds: absolute}
 	c.currentModal = id
+	// The modal scope owns the terminal cursor for this frame: whatever caret
+	// the covered base already painted stays hidden until a control drawn
+	// inside the scope (a dialog editor) sets its own.
+	canvas.HideCaret()
 	if c.committed.modal.id == id {
 		c.viewFocus = c.focused
 	} else {

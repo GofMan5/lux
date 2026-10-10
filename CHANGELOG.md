@@ -29,6 +29,16 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Modal caret takeover (`ui`, `render`): while a modal scope was open, the
+  editor beneath the dialog still painted the terminal cursor — the base
+  repaints with its regained focus before `BeginModal` runs, so a focused
+  `TextInput`/`TextArea` left a blinking hardware caret under the overlay
+  even though its input was routed to the dialog alone. `BeginModal` now
+  clears the frame's caret as its scope begins (new `Canvas.HideCaret`),
+  so the covered editor stays caret-less until a control drawn inside the
+  dialog sets its own; on dismiss the editor's caret returns on the first
+  frame without the dialog, with focus restore unchanged.
+
 - Table wheel-scroll continuity (`ui`): after a wheel notch the table viewport
   now stays where the wheel left it instead of snapping back to the selected
   row on the next frame. `TableState` gains a `FreeScroll` flag: wheel input

@@ -131,6 +131,17 @@ func (c *Canvas) SetCaret(x, y int) {
 	c.buffer.SetCaret(spot.X, spot.Y)
 }
 
+// HideCaret clears a caret set earlier in this frame through any canvas
+// sharing the buffer. A modal overlay calls it when its scope begins so the
+// covered editor does not leave the terminal cursor blinking under the
+// dialog; controls drawn inside the scope afterwards set it again normally.
+func (c *Canvas) HideCaret() {
+	if c == nil || c.buffer == nil {
+		return
+	}
+	c.buffer.HideCaret()
+}
+
 // ClipRect returns the canvas's active clip in terminal-buffer coordinates.
 // Controls drawn through the same canvas share it, which is what lets an
 // interaction layer tell a container's own children from its neighbours.
