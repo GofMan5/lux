@@ -418,6 +418,20 @@ func bufferContainsRow(buffer *render.Buffer, y int, needle string) bool {
 	return strings.Contains(bufferRow(buffer, y), needle)
 }
 
+// bufferFindRow returns the row carrying the needle, or -1.
+func bufferFindRow(buffer *render.Buffer, needle string) int {
+	if buffer == nil {
+		return -1
+	}
+	_, height := buffer.Size()
+	for y := 0; y < height; y++ {
+		if strings.Contains(bufferRow(buffer, y), needle) {
+			return y
+		}
+	}
+	return -1
+}
+
 // TestCompactWidgetsPageKeepsControlsReachable pins the compact widgets page
 // (80x24): the two-column layout does not fit at that height, so the page
 // must stack its panels at full width inside one page viewport. Every
@@ -480,6 +494,82 @@ func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
 	}
 	if !bufferContains(top, "slow spinner") {
 		t.Fatal("keyboard scrolling could not bring the stacked page back to the top")
+	}
+
+	backend.events <- event.RuneKey('q', 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("q never quit the tour")
+	}
+}
+
+// TestWidgetsPageSortsFeatureTable pins the whole sort path end to end on the
+// compact widgets page (80x24): twelve wheels reveal the stacked feature
+// table, a click on the CAPABILITY header must reach the table (header and
+// last row presses used to be dropped by the router below the content), and
+// the tour must serve the request by re-ordering its own rows — ascending
+// first, then descending on the second click.
+func TestWidgetsPageSortsFeatureTable(t *testing.T) {
+	backend := newProbeBackend(80, 24)
+	app := newTour()
+	app.page = 6
+	app.tabs.Selected = 6
+	app.sync.Started = time.Time{}
+	done := make(chan error, 1)
+	go func() {
+		done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240))
+	}()
+
+	if backend.lastFrame(150 * time.Millisecond) == nil {
+		t.Fatal("no frame presented during warm-up")
+	}
+	for i := 0; i < 12; i++ {
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
+		}}
+	}
+	scrolled := backend.lastFrame(200 * time.Millisecond)
+	if scrolled == nil {
+		t.Fatal("no frame presented after the wheel")
+	}
+	header := bufferFindRow(scrolled, "CAPABILITY")
+	if header < 0 {
+		t.Fatal("feature table header is not on screen after scrolling")
+	}
+	clickHeader := func() *render.Buffer {
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 4, Y: header, Action: event.MousePress, Button: event.MouseLeft,
+		}}
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 4, Y: header, Action: event.MouseRelease, Button: event.MouseLeft,
+		}}
+		return backend.lastFrame(200 * time.Millisecond)
+	}
+
+	ascending := clickHeader()
+	if ascending == nil {
+		t.Fatal("no frame presented after the first header click")
+	}
+	if !bufferContainsRow(ascending, header+1, "allocation steady state") {
+		t.Fatalf("ascending sort: first row = %q", bufferRow(ascending, header+1))
+	}
+	if !bufferContainsRow(ascending, header, "▲") {
+		t.Fatalf("ascending sort: header = %q", bufferRow(ascending, header))
+	}
+
+	descending := clickHeader()
+	if descending == nil {
+		t.Fatal("no frame presented after the second header click")
+	}
+	if !bufferContainsRow(descending, header+1, "word wrap authority") {
+		t.Fatalf("descending sort: first row = %q", bufferRow(descending, header+1))
+	}
+	if !bufferContainsRow(descending, header, "▼") {
+		t.Fatalf("descending sort: header = %q", bufferRow(descending, header))
 	}
 
 	backend.events <- event.RuneKey('q', 0)

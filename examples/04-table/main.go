@@ -104,6 +104,7 @@ func newTabledemo(count int) *tabledemo {
 func (app *tabledemo) applyTable(action ui.Action) {
 	if _, _, sortRequested := app.table.Apply(action, tableColumns, len(app.order)); sortRequested {
 		app.sortRows()
+		app.table.SortRequested = false // request served: keep the state clean
 	}
 }
 

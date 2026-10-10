@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -75,17 +76,18 @@ type tour struct {
 	renderer scene3d.Renderer
 	mesh     scene3d.Mesh
 	// Widgets tab.
-	name    ui.TextInput
-	list    ui.ListState
-	scroll  ui.ScrollState
-	wscroll ui.ScrollState // page scroller that stacks the widgets tab when the terminal is short
-	table   ui.TableState
-	slow    ui.CheckboxState
-	glyph   ui.RadioState
-	gauge   float64
-	target  float64
-	trace   []float64
-	sync    ui.SpinnerState
+	name     ui.TextInput
+	list     ui.ListState
+	scroll   ui.ScrollState
+	wscroll  ui.ScrollState // page scroller that stacks the widgets tab when the terminal is short
+	table    ui.TableState
+	features [][2]string // app-owned copy of featureRows; re-ordered to serve table sorts
+	slow     ui.CheckboxState
+	glyph    ui.RadioState
+	gauge    float64
+	target   float64
+	trace    []float64
+	sync     ui.SpinnerState
 	// Input tab.
 	feed     []feedRow
 	presses  int
@@ -115,6 +117,7 @@ func newTour() *tour {
 	app.list.Selected = 2
 	app.gauge = .25
 	app.target = .25
+	app.features = append([][2]string(nil), featureRows...)
 	app.sync.Started = time.Now()
 	app.spring.Response = 250 * time.Millisecond
 	return app
@@ -144,7 +147,13 @@ func (app *tour) Update(next event.Event) lux.Command {
 		case "wscroll":
 			app.wscroll.Apply(action, widgetsPageContentHeight, max(action.Bounds.H, 1))
 		case "table":
-			app.table.Apply(action, featureColumns, len(featureRows))
+			// The widget records the request; serving it means re-ordering the
+			// app-owned rows and clearing SortRequested (the widget never
+			// reorders data).
+			if _, _, sortRequested := app.table.Apply(action, featureColumns, len(app.features)); sortRequested {
+				sortFeatureRows(app.features, app.table.SortColumn, app.table.SortDesc)
+				app.table.SortRequested = false
+			}
 		case "slow":
 			app.slow.Apply(action)
 		case "glyph":
@@ -875,6 +884,25 @@ var featureRows = [][2]string{
 	{"allocation steady state", "0-1/frame"},
 }
 
+// sortFeatureRows serves a table sort request by re-ordering the rows. The
+// column index comes from the header hit and is clamped defensively.
+func sortFeatureRows(rows [][2]string, column int, desc bool) {
+	if len(rows) == 0 {
+		return
+	}
+	column = min(max(column, 0), len(rows[0])-1)
+	sort.SliceStable(rows, func(i, j int) bool {
+		left, right := rows[i][column], rows[j][column]
+		if left == right {
+			return false
+		}
+		if desc {
+			return right < left
+		}
+		return left < right
+	})
+}
+
 var spinnerNames = []string{"braille", "arc", "ascii"}
 var spinners = [][]string{ui.SpinnerBraille, ui.SpinnerArc, ui.SpinnerASCII}
 
@@ -961,8 +989,8 @@ func (app *tour) drawDisplayPanel(canvas *render.Canvas, area render.Rect, pageO
 	app.ui.Spinner(canvas, render.Rect{X: content.X, Y: y + 11, W: 1, H: 1}, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
 	canvas.Text(content.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: muted, Background: panel})
 	canvas.Text(content.X, y+13, "feature table", render.Style{Foreground: muted, Background: panel})
-	app.ui.Table("table", canvas, render.Rect{X: content.X, Y: y + 14, W: content.W, H: 6}, &app.table, featureColumns, len(featureRows),
-		func(index int) []string { return featureRows[index][:] },
+	app.ui.Table("table", canvas, render.Rect{X: content.X, Y: y + 14, W: content.W, H: 6}, &app.table, featureColumns, len(app.features),
+		func(index int) []string { return app.features[index][:] },
 		ui.TableStyle{
 			Normal:   render.Style{Foreground: ink, Background: panel},
 			Header:   render.Style{Foreground: muted, Background: panel, Attrs: render.AttrUnderline},

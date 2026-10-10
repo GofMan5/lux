@@ -29,6 +29,31 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Table wheel-scroll continuity (`ui`): after a wheel notch the table viewport
+  now stays where the wheel left it instead of snapping back to the selected
+  row on the next frame. `TableState` gains a `FreeScroll` flag: wheel input
+  sets it (viewport clamps only to the row range), the first selection-driven
+  action — key press, click, or programmatic selection — clears it and
+  `keepRowVisible` resumes. The flag defaults to false, so programmatic
+  deep-selection snapping and wheel-at-boundary bubbling are unchanged.
+
+- Table header and last-row press routing (`ui`): a press on the header row —
+  or on the last visible body row — was dropped by the router because the
+  table's region content height excluded the header, so header-click sorting
+  and row-click selection were dead on arrival. The region now reports
+  `header + visible body rows` as its content height, which makes the header
+  pressable even when the table is empty (sorting an empty view is a no-op
+  that still flips the indicator) and keeps the blank tail below the last row
+  non-pressable, matching the List contract.
+
+- Tour feature-table sorting (`examples/08-tour`): the widgets page fed the
+  table actions but ignored the sort request, so clicking the CAPABILITY
+  header flipped the state (indicator, sort direction) while the rows stayed
+  in place. The tour now owns a copy of the feature rows, re-orders them
+  with a stable sort when the widget reports `SortRequested`, and clears the
+  flag once the request is served; the 04-table demo clears the flag the same
+  way so both examples match the documented `TableState` contract.
+
 - Compact layout of the widgets tour page (`examples/08-tour`): at 80×24 the
   fixed two-column layout cut off the checkbox, radio group, table, and
   virtual log because panel heights never scrolled and controls below the

@@ -54,9 +54,10 @@ func TestTableSortsByHeaderAndView(t *testing.T) {
 	}
 
 	// A header click on NAME (fixed ID is 7 wide, gutter at x 7, NAME at
-	// x 8) requests an ascending lexical sort of the index view.
+	// x 8) requests an ascending lexical sort of the index view. The demo
+	// serves the request, so SortRequested is already cleared.
 	app.applyTable(pressAt(60, 10, 8, 0))
-	if !app.table.SortActive || app.table.SortColumn != 1 || app.table.SortDesc || !app.table.SortRequested {
+	if !app.table.SortActive || app.table.SortColumn != 1 || app.table.SortDesc || app.table.SortRequested {
 		t.Fatalf("sort state: %#v", app.table)
 	}
 	first, last := app.rows[app.order[0]], app.rows[app.order[len(app.order)-1]]
