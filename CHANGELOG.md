@@ -17,6 +17,34 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Application-result seam (`event.Message` and `event.Event.Data`): a
+  Command can now report application-level results back to
+  `Model.Update` as an `event.Message` event whose `Data` payload is
+  fully owned by the application — LUX only serializes delivery, the
+  payload's type is opaque to the framework, and the field stays nil for
+  every other kind. Unlike `event.Error`, a Message never terminates the
+  run: recoverable failures (a failed load, a rejected request) travel
+  as payloads for the UI to render, while fatal transport errors remain
+  `event.Error` and end the run unchanged. Two tests pin the contract:
+  a Message carrying a failed-list payload leaves the run alive and
+  still serving input, an Error still terminates it.
+
+- Process explorer reference app (`examples/09-procs`): the stage-2
+  vertical for the async pattern on real data. A `processSource` seam
+  isolates the OS — `tasklist` on Windows, `/proc` on Linux, `ps` on
+  macOS — behind one context-aware `List(ctx, filter)` call that owns
+  filtering; the Command goroutine captures everything by value and
+  never touches the model, results return as `event.Message` payloads
+  with a request identity so superseded answers are ignored, and at
+  most one load runs at a time with keystrokes coalesced into a single
+  deferred replay. The app renders loading, data, empty, and error
+  phases honestly, retries on F5, cancels the in-flight load on quit,
+  and pairs a virtualized table with a master-detail pane. The test
+  suite drives the full journey end to end through a scripted source,
+  feeds stale and foreign results directly to the model, proves quit
+  unblocks without waiting on the worker, and smoke-tests the real
+  OS adapters on every CI lane.
+
 - Runtime discipline guards (`lux`, `internal/terminal`, `render`): the
   framework's steady-state discipline is now enforced by failing tests
   instead of benchmark observations. `TestRunReturnsToTheGoroutineBaseline`

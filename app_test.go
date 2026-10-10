@@ -642,3 +642,158 @@ func TestWidthPolicyDefaultIsLegacy(t *testing.T) {
 		t.Fatalf("canvas measurements = %d, %d; want 2, 1", model.textWidth, model.graphemeWidth)
 	}
 }
+
+// appMessage is the application-defined payload of the message tests: the
+// type and its semantics belong to the application, never to LUX. A failed
+// field set to non-nil is a recoverable application failure — data the
+// model renders, not a reason for the run to end.
+type appMessage struct {
+	value  string
+	failed error
+}
+
+// messageModel records every Message payload Update receives and answers
+// the first Resize and later keys with Commands, exercising the run loop's
+// asynchronous delivery path exactly the way an application loads data.
+type messageModel struct {
+	mu       sync.Mutex
+	received []appMessage
+	onResize func() Command
+	onKey    func() Command
+}
+
+func (m *messageModel) Update(next event.Event) Command {
+	switch next.Kind {
+	case event.Resize:
+		if m.onResize != nil {
+			return m.onResize()
+		}
+	case event.Key:
+		if next.Key.Code == event.KeyEscape {
+			return Quit()
+		}
+		if m.onKey != nil {
+			return m.onKey()
+		}
+	case event.Message:
+		payload, ok := next.Data.(appMessage)
+		if !ok {
+			// A foreign payload is ordinary data the model ignores.
+			return nil
+		}
+		m.mu.Lock()
+		m.received = append(m.received, payload)
+		m.mu.Unlock()
+	}
+	return nil
+}
+
+func (m *messageModel) View(frame *Frame) {
+	frame.Canvas.Text(0, 0, "message", render.Style{})
+}
+
+func (m *messageModel) messages() []appMessage {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]appMessage(nil), m.received...)
+}
+
+// waitForMessages polls the model until the expected number of payloads has
+// arrived or the deadline passes. Delivery is asynchronous by design, so a
+// bounded poll is the honest observable.
+func waitForMessages(t *testing.T, model *messageModel, count int) []appMessage {
+	t.Helper()
+	deadline := time.Now().Add(hangTimeout)
+	for {
+		got := model.messages()
+		if len(got) >= count {
+			return got
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("message delivery timeout: got %d of %d payloads", len(got), count)
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
+// TestCommandMessageDeliversApplicationResults pins the seam for
+// asynchronous application work: a Command's Message event carries an
+// application payload through the run loop and reaches Model.Update
+// serially, after the earlier updates, without ending the run. Recoverable
+// application failures are payloads: the run keeps serving input after one
+// arrives, and only the model decides what it means.
+func TestCommandMessageDeliversApplicationResults(t *testing.T) {
+	backend := newFakeBackend(24, 6)
+	model := &messageModel{
+		onResize: func() Command {
+			return func(context.Context) event.Event {
+				return event.Event{Kind: event.Message, Data: appMessage{value: "procs"}}
+			}
+		},
+		onKey: func() Command {
+			return func(context.Context) event.Event {
+				return event.Event{Kind: event.Message, Data: appMessage{failed: errors.New("list failed, retry")}}
+			}
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), model, WithBackend(backend))
+	}()
+
+	delivered := waitForMessages(t, model, 1)
+	if delivered[0].value != "procs" || delivered[0].failed != nil {
+		t.Fatalf("first payload = %#v; want the load result", delivered[0])
+	}
+
+	backend.events <- event.RuneKey('x', 0)
+	delivered = waitForMessages(t, model, 2)
+	if delivered[1].failed == nil || delivered[1].value != "" {
+		t.Fatalf("second payload = %#v; want a recoverable failure", delivered[1])
+	}
+
+	// The recoverable failure did not end the run: input still flows and
+	// the application quits on its own terms.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run ended with %v; a message payload must not terminate it", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("run kept going after escape; a recoverable payload broke input service")
+	}
+}
+
+// TestCommandErrorStillTerminatesRun pins the other half of the contract:
+// a Command reporting Kind Error is a fatal, transport-level failure, and
+// the run returns it — exactly as backend-reported errors do.
+func TestCommandErrorStillTerminatesRun(t *testing.T) {
+	backend := newFakeBackend(24, 6)
+	fatal := errors.New("transport is gone")
+	model := &messageModel{
+		onKey: func() Command {
+			return func(context.Context) event.Event {
+				return event.Event{Kind: event.Error, Err: fatal}
+			}
+		},
+	}
+	done := make(chan error, 1)
+	go func() {
+		done <- Run(context.Background(), model, WithBackend(backend))
+	}()
+	backend.events <- event.RuneKey('x', 0)
+	select {
+	case err := <-done:
+		if !errors.Is(err, fatal) {
+			t.Fatalf("run ended with %v; want the command's fatal error", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("run kept going after a fatal command error")
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if !backend.closed {
+		t.Fatal("backend was not closed after the fatal command error")
+	}
+}

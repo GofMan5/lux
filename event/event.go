@@ -32,6 +32,13 @@ const (
 	// baseline, so the next presented frame is a full repaint. A resize
 	// riding the same wakeup is delivered separately before this event.
 	Resume
+	// Message delivers an application-defined payload from a Command back
+	// to Model.Update. It is the seam for asynchronous application
+	// results: unlike Error it never terminates the run, so recoverable
+	// application failures travel as payloads the model renders, while
+	// transport-level failures keep using Error. The payload's type and
+	// ownership belong to the application; LUX only serializes delivery.
+	Message
 )
 
 // String names the kind for logs and test failures; the names match the
@@ -62,6 +69,8 @@ func (k Kind) String() string {
 		return "suspend"
 	case Resume:
 		return "resume"
+	case Message:
+		return "message"
 	}
 	return fmt.Sprintf("kind(%d)", uint8(k))
 }
@@ -79,6 +88,9 @@ type Event struct {
 	Height  int
 	Focused bool
 	Err     error
+	// Data carries the Message payload. It is nil for every other kind,
+	// and the application owns its type: LUX treats it as opaque.
+	Data any
 }
 
 // KeyCode identifies non-text keys. KeyRune uses KeyEvent.Rune.

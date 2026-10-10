@@ -7,7 +7,7 @@ func TestKindValuesAreUnique(t *testing.T) {
 	// and treat the rest as ordinary updates, which only stays true while
 	// every kind has its own value. The lifecycle additions must not
 	// collide with any pre-existing kind.
-	kinds := []Kind{None, Key, Text, Paste, Mouse, Resize, Focus, Frame, Quit, Error, Suspend, Resume}
+	kinds := []Kind{None, Key, Text, Paste, Mouse, Resize, Focus, Frame, Quit, Error, Suspend, Resume, Message}
 	seen := make(map[Kind]bool, len(kinds))
 	for _, kind := range kinds {
 		if seen[kind] {
