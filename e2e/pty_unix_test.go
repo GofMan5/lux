@@ -56,7 +56,12 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	childBinary = filepath.Join(dir, "childapp")
-	build := exec.Command("go", "build", "-o", childBinary, "./childapp")
+	buildArgs := []string{"build"}
+	if childRaceFlag != "" {
+		buildArgs = append(buildArgs, childRaceFlag)
+	}
+	buildArgs = append(buildArgs, "-o", childBinary, "./childapp")
+	build := exec.Command("go", buildArgs...)
 	build.Env = append(os.Environ(), "GOFLAGS=-buildvcs=false")
 	if out, err := build.CombinedOutput(); err != nil {
 		fmt.Fprintf(os.Stderr, "e2e: childapp build failed: %v\n%s\n", err, out)
