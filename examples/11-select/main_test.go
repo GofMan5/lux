@@ -30,7 +30,7 @@ func rowText(buffer *render.Buffer, y int) string {
 }
 
 func TestSelectPaintsClosedBoxesEchoAndFooter(t *testing.T) {
-	app := newSelectApp(nil)
+	app := newSelectApp(nil, nil)
 	paint := func() *render.Buffer {
 		frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(paintWidth, paintHeight)), Capabilities: capability.Set{Interactive: true, Unicode: true}}
 		app.View(frame)
@@ -65,7 +65,7 @@ func TestSelectPaintsClosedBoxesEchoAndFooter(t *testing.T) {
 }
 
 func TestSelectTinyTerminalGuard(t *testing.T) {
-	app := newSelectApp(nil)
+	app := newSelectApp(nil, nil)
 	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(30, 8)), Capabilities: capability.Set{Interactive: true, Unicode: true}}
 	app.View(frame)
 	if painted := frame.Canvas.Buffer(); !strings.Contains(rowText(painted, 0), "enlarge terminal") {
@@ -148,27 +148,45 @@ func drainFrames(frames <-chan *render.Buffer) {
 	}
 }
 
-// commitFrames drains the frame backlog, provokes one repaint, and waits
-// for a frame on the wire. The writer presents asynchronously and
-// sequentially, so that frame's arrival proves every frame painted
-// BEFORE it was presented and committed. That is the right tool for
-// first-commit gates; an input that must route against the NEW state
-// (like a mouse press on the just-committed modal) needs the barrier
-// this provides. F6 is bound nowhere; every event dirties the model.
-func commitFrames(t *testing.T, backend *interactiveBackend) *render.Buffer {
+// waitCommittedWhere blocks until a frame whose View BUILT the matching
+// state has been COMMITTED to the event tree — not merely painted. The
+// test backend pushes its frame clone inside Present, BEFORE the writer
+// runs the frame's OnPresented callbacks, so "a frame carrying the state
+// is on the wire" does not prove the tree inputs route against matches
+// it. The committed channel fixes that by construction: the beacon the
+// app queues after End fires only once the writer has committed the very
+// frame that built the state. Any wait immediately followed by a key or
+// a click must gate here, never on paint.
+func waitCommittedWhere(t *testing.T, app *selectApp, done <-chan error, match func(selectState) bool) selectState {
 	t.Helper()
-	drainFrames(backend.frames)
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	return waitFrame(t, backend.frames)
+	deadline := time.After(hangTimeout)
+	seen := 0
+	var last selectState
+	for {
+		select {
+		case state := <-app.committed:
+			seen++
+			last = state
+			if match(state) {
+				return state
+			}
+		case err := <-done:
+			t.Fatalf("run ended before the commit arrived: %v", err)
+		case <-deadline:
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching commit timeout after %d states; last: open=%q focused=%q applied=%d status=%q values=%v; goroutine dump follows\n%s",
+				seen, last.open, last.focused, last.applied, last.status, last.values, stack)
+		}
+	}
 }
 
-// commitFrameWhere is commitFrames as a state gate and for content
-// asserts: it keeps reading until a frame carries the predicate, because
-// a frame painted before the state change can land after the drain.
-func commitFrameWhere(t *testing.T, backend *interactiveBackend, pred func(*render.Buffer) bool) *render.Buffer {
+// waitFrameWhere keeps reading frames until one carries the predicate —
+// a pure paint-content assert. It never gates input routing; see
+// waitCommittedWhere for that. Callers drain and provoke the repaint
+// (F6 is bound nowhere; every event dirties the model) before it.
+func waitFrameWhere(t *testing.T, backend *interactiveBackend, pred func(*render.Buffer) bool) *render.Buffer {
 	t.Helper()
-	drainFrames(backend.frames)
-	backend.events <- event.KeyPress(event.KeyF6, 0)
 	for {
 		frame := waitFrame(t, backend.frames)
 		if pred(frame) {
@@ -180,11 +198,16 @@ func commitFrameWhere(t *testing.T, backend *interactiveBackend, pred func(*rend
 func newTestApp(t *testing.T) (*selectApp, *interactiveBackend, <-chan error) {
 	t.Helper()
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newSelectApp(make(chan selectState, 64))
+	app := newSelectApp(make(chan selectState, 64), make(chan selectState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 	waitFrame(t, backend.frames)
-	commitFrames(t, backend)
+	// The first frame auto-claims focus for the style box; waiting for
+	// its COMMIT (not just its paint) is what lets every later event
+	// route against a live tree.
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
+		return state.focused == "style"
+	})
 	return app, backend, done
 }
 
@@ -198,7 +221,9 @@ func release(backend *interactiveBackend, x, y int) {
 
 // focus tabs forward to the wanted dropdown. The first committed frame
 // already claims focus for the style box (the first focusable region),
-// so the tab count is the target's index in the settings slice.
+// so the tab count is the target's index in the settings slice. Zero
+// tabs means newTestApp's committed gate already proved the target:
+// no event is sent, so no newer beacon can exist.
 func focus(t *testing.T, app *selectApp, backend *interactiveBackend, done <-chan error, id string) {
 	t.Helper()
 	target := -1
@@ -211,10 +236,13 @@ func focus(t *testing.T, app *selectApp, backend *interactiveBackend, done <-cha
 	if target < 0 {
 		t.Fatalf("unknown focus target %q", id)
 	}
+	if target == 0 {
+		return
+	}
 	for i := 0; i < target; i++ {
 		backend.events <- event.KeyPress(event.KeyTab, 0)
 	}
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.focused == id
 	})
 }
@@ -229,8 +257,12 @@ func TestSelectOpenNavigateCommitKeyboard(t *testing.T) {
 	// sharp/rounded/double/ascii, covering the Motion label row 5 and
 	// the motion box row 6 while it is open.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool { return state.open == "style" })
-	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool { return state.open == "style" })
+	// Paint proof of the popup's placement and coverage, strictly after
+	// the committed gate above — a visual check, not a routing one.
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrameWhere(t, backend, func(painted *render.Buffer) bool {
 		return strings.Contains(rowText(painted, styleRow+2), "rounded") &&
 			strings.Contains(rowText(painted, styleRow+4), "ascii") &&
 			!strings.Contains(rowText(painted, motionRow-1), "Motion")
@@ -239,7 +271,7 @@ func TestSelectOpenNavigateCommitKeyboard(t *testing.T) {
 	// Down moves the choice; Enter commits it and closes the popup,
 	// handing the covered rows back.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.open == "style" && state.values[0] == "rounded"
 	})
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
@@ -249,7 +281,10 @@ func TestSelectOpenNavigateCommitKeyboard(t *testing.T) {
 	if state.status != "style = rounded" {
 		t.Fatalf("commit status missing: %q", state.status)
 	}
-	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+	// The closed popup hands the covered rows back (paint check).
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrameWhere(t, backend, func(painted *render.Buffer) bool {
 		return strings.Contains(rowText(painted, motionRow-1), "Motion") &&
 			!strings.Contains(rowText(painted, styleRow+2), "rounded")
 	})
@@ -262,23 +297,27 @@ func TestSelectEscapeRevertsUncommittedChoice(t *testing.T) {
 	focus(t, app, backend, done, "sort")
 
 	// Down opens the popup and moves the choice in one step; the revert
-	// target is the pre-open choice, snapshotted before Apply. The
-	// committed frame must follow before the Escape routes, or the key
-	// meets the pre-modal tree and reaches the app-scope quit shortcut.
+	// target is the pre-open choice, snapshotted before Apply.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.open == "sort" && state.values[3] == "oldest"
 	})
-	commitFrames(t, backend)
 
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	// The status must be part of the match, not a follow-up assert: the
+	// observe channel has accumulated every state since startup (the
+	// intermediate gates read the committed beacon instead), and the
+	// pre-Down states also satisfy open=="" with the default value.
 	state := waitStateWhere(t, app.observe, done, func(state selectState) bool {
-		return state.open == "" && state.values[3] == "newest"
+		return state.open == "" && state.values[3] == "newest" && state.status == "sort cancelled"
 	})
-	if state.status != "sort cancelled" {
-		t.Fatalf("cancel status missing: %q", state.status)
+	if state.focused != "sort" {
+		t.Fatalf("cancel dropped focus: %+v", state)
 	}
-	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+	// The popup's rows are gone from the screen (paint check).
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrameWhere(t, backend, func(painted *render.Buffer) bool {
 		return !strings.Contains(rowText(painted, sortRow-1), "hot")
 	})
 }
@@ -293,8 +332,11 @@ func TestSelectPopupFlipsAboveAndClickCommits(t *testing.T) {
 	// flips above the anchor: options fill rows 10-17, the anchor row
 	// stays the closed box, and the popup covers what it overlaps.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool { return state.open == "sort" })
-	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool { return state.open == "sort" })
+	// Paint proof of the flip: options fill rows 10-17 above the anchor.
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrameWhere(t, backend, func(painted *render.Buffer) bool {
 		return strings.Contains(rowText(painted, sortRow-8), "newest") &&
 			strings.Contains(rowText(painted, sortRow-1), "hot") &&
 			strings.Contains(rowText(painted, sortRow), "newest")
@@ -303,7 +345,7 @@ func TestSelectPopupFlipsAboveAndClickCommits(t *testing.T) {
 	// A click on a flipped-popup row picks on the press and commits on
 	// the release: row 12 is option index 2 ("name").
 	press(backend, 6, 12)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.open == "sort" && state.values[3] == "name"
 	})
 	release(backend, 6, 12)
@@ -321,13 +363,12 @@ func TestSelectOutsideClickDismissesWithoutClickThrough(t *testing.T) {
 
 	focus(t, app, backend, done, "sort")
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool { return state.open == "sort" })
-	commitFrames(t, backend)
+	waitCommittedWhere(t, app, done, func(state selectState) bool { return state.open == "sort" })
 
 	// The press on the Apply button while the popup is open must become
 	// the popup's Dismiss — revert, and the button must NOT fire.
 	press(backend, 4, applyRow)
-	state := waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	state := waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.open == "" && state.values[3] == "newest"
 	})
 	if state.status != "sort cancelled" {
@@ -361,13 +402,12 @@ func TestSelectTabTrapsWhilePopupOpen(t *testing.T) {
 
 	focus(t, app, backend, done, "style")
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool { return state.open == "style" })
-	commitFrames(t, backend)
+	waitCommittedWhere(t, app, done, func(state selectState) bool { return state.open == "style" })
 
 	// Tab cannot leave the popup: the modal scope's single focusable
 	// region is the select itself, so focus stays and the popup stays.
 	backend.events <- event.KeyPress(event.KeyTab, 0)
-	state := waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	state := waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.focused == "style"
 	})
 	if state.open != "style" || state.applied != 0 {
@@ -376,15 +416,14 @@ func TestSelectTabTrapsWhilePopupOpen(t *testing.T) {
 
 	// Escape closes, focus lands back on the select, and the next Tab
 	// moves on to the next dropdown — the trap released cleanly. The
-	// committed frame must follow before that Tab routes, or the key
-	// meets the still-committed modal tree and traps a second time.
+	// beacon above is what makes the Tab safe: it routes against the
+	// released tree, not the still-committed modal.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.open == "" && state.focused == "style"
 	})
-	commitFrames(t, backend)
 	backend.events <- event.KeyPress(event.KeyTab, 0)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.focused == "motion"
 	})
 
@@ -411,14 +450,17 @@ func TestSelectMouseOnlyFlowOnRightColumn(t *testing.T) {
 	// the press focuses it, the release opens the popup below.
 	press(backend, 36, sideRow)
 	release(backend, 36, sideRow)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool { return state.open == "side" })
-	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool { return state.open == "side" })
+	// Paint proof the popup opened below the anchor.
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrameWhere(t, backend, func(painted *render.Buffer) bool {
 		return strings.Contains(rowText(painted, sideRow+1), "left")
 	})
 
 	// Clicking the second option commits it.
 	press(backend, 38, sideRow+2)
-	waitStateWhere(t, app.observe, done, func(state selectState) bool {
+	waitCommittedWhere(t, app, done, func(state selectState) bool {
 		return state.open == "side" && state.values[2] == "right"
 	})
 	release(backend, 38, sideRow+2)

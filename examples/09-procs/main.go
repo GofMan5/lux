@@ -96,6 +96,7 @@ type procsApp struct {
 	table         ui.TableState
 	source        processSource
 	observe       chan procsState
+	committed     chan procsState // commit-time twin of observe, fed from OnPresented
 
 	started        bool       // the initial resize has issued the first load
 	filter         string     // the filter the user has typed
@@ -130,8 +131,8 @@ type procsState struct {
 	paletteSelected int  // selected command index, clamped into the matches
 }
 
-func newProcsApp(source processSource, observe chan procsState) *procsApp {
-	app := &procsApp{source: source, observe: observe}
+func newProcsApp(source processSource, observe, committed chan procsState) *procsApp {
+	app := &procsApp{source: source, observe: observe, committed: committed}
 	// The palette is named once, in the library, and the widgets
 	// resolve it: the table below draws with a zero TableStyle, so its
 	// cells read the Text role, its header the Muted role (underlined
@@ -445,7 +446,25 @@ func (app *procsApp) View(frame *lux.Frame) {
 	area := canvas.Bounds()
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
-	defer app.ui.End(frame)
+	// End registers the interaction-tree commit on this frame's presented
+	// queue; the beacon below registers after it, so the presentation
+	// goroutine — which runs the queue in registration order — reports
+	// this View's state only once that commit has run. The pair is the
+	// commit-time twin of report(): waitStateWhere observes the model
+	// inside View, waitCommittedWhere observes the tree the next
+	// keystroke actually routes against. A nil channel never sends: the
+	// select below falls straight to default.
+	var state procsState
+	defer func() {
+		app.ui.End(frame)
+		beacon := state
+		frame.OnPresented(func() {
+			select {
+			case app.committed <- beacon:
+			default:
+			}
+		})
+	}()
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyEscape}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 	// Priority so Ctrl+P toggles the palette even while the modal scope
 	// is open — closing it with the same key that opened it.
@@ -453,7 +472,7 @@ func (app *procsApp) View(frame *lux.Frame) {
 
 	if area.W < 44 || area.H < 14 {
 		canvas.Text(0, 0, "LUX procs - enlarge terminal", render.Style{Foreground: violet})
-		app.report()
+		state = app.report()
 		return
 	}
 
@@ -515,7 +534,7 @@ func (app *procsApp) View(frame *lux.Frame) {
 	if app.paletteOpen {
 		app.drawPalette(canvas, area)
 	}
-	app.report()
+	state = app.report()
 }
 
 // drawDetail renders the master-detail pane for the selected row.
@@ -531,10 +550,7 @@ func (app *procsApp) drawDetail(canvas *render.Canvas, area render.Rect) {
 	canvas.Text(4, area.H-6, fmt.Sprintf(" cpu %.1f   mem %s   state %s ", r.cpu, memString(r.mem), r.state), render.Style{Foreground: muted, Background: background})
 }
 
-func (app *procsApp) report() {
-	if app.observe == nil {
-		return
-	}
+func (app *procsApp) report() procsState {
 	detail := ""
 	if len(app.order) > 0 {
 		detail = app.rows[app.order[app.table.Selected]].name
@@ -557,10 +573,13 @@ func (app *procsApp) report() {
 			state.paletteSelected = min(app.paletteList.Selected, len(matches)-1)
 		}
 	}
-	select {
-	case app.observe <- state:
-	default:
+	if app.observe != nil {
+		select {
+		case app.observe <- state:
+		default:
+		}
 	}
+	return state
 }
 
 func main() {
@@ -569,7 +588,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if err := lux.Run(context.Background(), newProcsApp(source, nil)); err != nil {
+	if err := lux.Run(context.Background(), newProcsApp(source, nil, nil)); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}

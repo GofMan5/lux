@@ -441,6 +441,77 @@ func TestPresentationCallbackPanicReturnsErrorAndRestores(t *testing.T) {
 	}
 }
 
+// hookOrderModel registers its commit hook first and its beacon hook
+// second, exactly like the example harnesses queue ui.End's commit before
+// the committed-beacon OnPresented callback.
+type hookOrderModel struct {
+	seen chan string
+}
+
+func (hookOrderModel) Update(event.Event) Command { return nil }
+
+func (m hookOrderModel) View(frame *Frame) {
+	frame.OnPresented(func() {
+		select {
+		case m.seen <- "commit":
+		default:
+		}
+	})
+	frame.OnPresented(func() {
+		select {
+		case m.seen <- "beacon":
+		default:
+		}
+	})
+}
+
+// TestPresentationCallbacksRunInRegistrationOrder pins the sequencing
+// contract the committed-beacon harness relies on: for one frame, the
+// writer runs OnPresented callbacks in the order the model registered
+// them, after the frame's tree is committed. Queue-order execution is
+// what lets a beacon queued after End observe the commit that End
+// queued before it.
+func TestPresentationCallbacksRunInRegistrationOrder(t *testing.T) {
+	backend := newFakeBackend(10, 3)
+	model := hookOrderModel{seen: make(chan string, 8)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, model, WithBackend(backend)) }()
+
+	// Wait for the first frame to reach the wire, then stop the run.
+	// The callbacks fire in the writer right after Present returns, so
+	// both records exist by the time Run tears down.
+	select {
+	case <-backend.presented:
+	case <-time.After(hangTimeout):
+		cancel()
+		t.Fatal("first frame never presented")
+	}
+	cancel()
+
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(hangTimeout):
+		t.Fatal("run did not end after cancel")
+	}
+	if err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("run error = %v", err)
+	}
+
+	want := []string{"commit", "beacon"}
+	for _, expected := range want {
+		select {
+		case got := <-model.seen:
+			if got != expected {
+				t.Fatalf("callback order = %q, want %q", got, expected)
+			}
+		case <-time.After(hangTimeout):
+			t.Fatalf("callback %q never ran", expected)
+		}
+	}
+}
+
 type blockingBackend struct {
 	*fakeBackend
 	started chan struct{}

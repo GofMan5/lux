@@ -71,13 +71,17 @@ type selectApp struct {
 	width, height int
 	ui            ui.Context
 	observe       chan selectState
-	settings      []setting
-	applied       int
-	status        string
+	// committed receives a beacon the instant the frame that built the
+	// state is committed to the event tree — see View for why the wire
+	// alone cannot prove that.
+	committed chan selectState
+	settings  []setting
+	applied   int
+	status    string
 }
 
-func newSelectApp(observe chan selectState) *selectApp {
-	app := &selectApp{observe: observe}
+func newSelectApp(observe, committed chan selectState) *selectApp {
+	app := &selectApp{observe: observe, committed: committed}
 	app.ui.UseTheme(palette.Theme())
 	app.settings = []setting{
 		{id: "style", label: "Style", options: []string{"sharp", "rounded", "double", "ascii"}, anchor: render.Rect{X: 4, Y: styleRow, W: 22, H: 1}},
@@ -175,7 +179,24 @@ func (app *selectApp) View(frame *lux.Frame) {
 	area := canvas.Bounds()
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
-	defer app.ui.End(frame)
+	// The committed beacon: End queues the frame's commit first, then
+	// this OnPresented callback right after it, and the writer runs
+	// present callbacks in queue order — so the beacon fires strictly
+	// after the tree this View built is the tree inputs route against.
+	// The send is non-blocking so it can never stall the writer. One
+	// composite defer is load-bearing: a second plain defer would run
+	// before this one (LIFO) and queue the beacon BEFORE the commit.
+	var state selectState
+	defer func() {
+		app.ui.End(frame)
+		beacon := state
+		frame.OnPresented(func() {
+			select {
+			case app.committed <- beacon:
+			default:
+			}
+		})
+	}()
 	// Escape quits when nothing is open. While a popup is open the
 	// framework turns Escape into the popup's Dismiss before any shortcut
 	// can see it, so this binding never races the cancel.
@@ -183,7 +204,7 @@ func (app *selectApp) View(frame *lux.Frame) {
 
 	if area.W < 44 || area.H < paintHeight {
 		canvas.Text(0, 0, "LUX select - enlarge terminal", render.Style{Foreground: violet})
-		app.report()
+		state = app.report()
 		return
 	}
 
@@ -224,7 +245,7 @@ func (app *selectApp) View(frame *lux.Frame) {
 		footer = " esc cancel or quit "
 	}
 	canvas.Text(max((area.W-canvas.TextWidth(footer))/2, 0), area.H-1, footer, render.Style{Foreground: muted})
-	app.report()
+	state = app.report()
 }
 
 // selectStyle is the explicit style for the dropdowns: the popup fills
@@ -240,11 +261,10 @@ func selectStyle() ui.SelectStyle {
 }
 
 // report publishes the observable state from inside View; the channel is
-// drained non-blockingly so observation can never steer the run.
-func (app *selectApp) report() {
-	if app.observe == nil {
-		return
-	}
+// drained non-blockingly so observation can never steer the run. It also
+// returns the state, because View's beacon re-publishes that same value
+// on the committed channel once the frame's tree is live.
+func (app *selectApp) report() selectState {
 	state := selectState{values: app.values(), applied: app.applied, status: app.status}
 	for i := range app.settings {
 		if app.settings[i].state.Open {
@@ -257,14 +277,17 @@ func (app *selectApp) report() {
 	if app.ui.Focused("apply") {
 		state.focused = "apply"
 	}
-	select {
-	case app.observe <- state:
-	default:
+	if app.observe != nil {
+		select {
+		case app.observe <- state:
+		default:
+		}
 	}
+	return state
 }
 
 func main() {
-	app := newSelectApp(nil)
+	app := newSelectApp(nil, nil)
 	if err := lux.Run(context.Background(), app); err != nil {
 		fmt.Fprintln(os.Stderr, "select:", err)
 		os.Exit(1)

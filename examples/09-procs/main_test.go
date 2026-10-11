@@ -144,7 +144,7 @@ func rowText(buffer *render.Buffer, y int) string {
 
 func TestProcsViewPaintsEveryPhase(t *testing.T) {
 	full := seedProcs(40)
-	app := newProcsApp(nil, nil)
+	app := newProcsApp(nil, nil, nil)
 	app.width, app.height = 80, 24
 
 	paint := func() *render.Buffer {
@@ -205,7 +205,7 @@ func TestProcsViewPaintsEveryPhase(t *testing.T) {
 }
 
 func TestProcsTinyTerminalGuard(t *testing.T) {
-	app := newProcsApp(nil, nil)
+	app := newProcsApp(nil, nil, nil)
 	frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(30, 8)), Capabilities: capability.Set{Interactive: true, Unicode: true}}
 	app.View(frame)
 	if painted := frame.Canvas.Buffer(); !strings.Contains(rowText(painted, 0), "enlarge terminal") {
@@ -269,6 +269,41 @@ func waitStateWhere(t *testing.T, states <-chan procsState, done <-chan error, m
 	}
 }
 
+// waitCommittedWhere is waitStateWhere for the commit wire: the app
+// reports the same procsState from a frame's OnPresented callback,
+// registered after ui.End queued the interaction-tree commit, and the
+// presentation goroutine runs each frame's callbacks in registration
+// order after Present — so a state read here ran in a callback whose
+// frame is already committed. A keystroke sent after this returns
+// routes against exactly that tree: no window remains between "the
+// model holds the state" (waitStateWhere, observed inside View) and
+// "the tree is committed". The predicate skips stale beacons the same
+// way waitStateWhere skips stale states; displaced frames drop their
+// callbacks, but the newest frame always reports.
+func waitCommittedWhere(t *testing.T, app *procsApp, done <-chan error, match func(procsState) bool) procsState {
+	t.Helper()
+	deadline := time.After(hangTimeout)
+	seen := 0
+	var last procsState
+	for {
+		select {
+		case state := <-app.committed:
+			seen++
+			last = state
+			if match(state) {
+				return state
+			}
+		case err := <-done:
+			t.Fatalf("run ended before the committed state arrived: %v", err)
+		case <-deadline:
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching committed state timeout after %d states; last: phase=%v rows=%d selected=%d confirm=%d filter=%q palette=%t notice=%q err=%q; goroutine dump follows\n%s",
+				seen, last.phase, last.rows, last.selected, last.confirm, last.filter, last.palette, last.notice, last.errText, stack)
+		}
+	}
+}
+
 func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	t.Helper()
 	select {
@@ -315,49 +350,15 @@ func waitFrameWhere(t *testing.T, frames <-chan *render.Buffer, pred func(*rende
 	}
 }
 
-// commitFrames drains the frame backlog, provokes one repaint, and waits
-// for a frame on the wire. The writer presents asynchronously and
-// sequentially, so that frame's arrival proves every frame painted
-// BEFORE it was presented and committed. That is a proof about the
-// past: it is the right tool for first-commit gates (a keystroke that
-// must not beat the first frame's focus/shortcut commit — the read
-// frame is at-or-after the first frame). It proves NOTHING about
-// frames painted after a state change: those may still be queued in
-// the writer, so the read frame can predate the change and the next
-// keystroke routes against a dead snapshot. A keystroke that must
-// route against the NEW state needs commitFrameWhere below. F6 is
-// bound nowhere, and every event dirties the model, so the press
-// repaints without touching any state under test.
-func commitFrames(t *testing.T, backend *interactiveBackend) *render.Buffer {
-	t.Helper()
-	drainFrames(backend.frames)
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	return waitFrame(t, backend.frames)
-}
-
-// commitFrameWhere is commitFrames as a state gate: it keeps reading
-// until a frame whose PAINTED content satisfies pred, so the next
-// keystroke routes against a snapshot committed from the state the
-// pred recognizes. waitStateWhere observes state from inside View —
-// before the writer presents and commits — and the single read in
-// commitFrames can land on a frame painted before the change (an
-// 'n' typed after a palette-run landed in the just-closed palette's
-// input; an Escape dismissed the already-closed modal instead of
-// quitting; a click fell through a still-Disabled button). The F6
-// frame is painted from the current model, which already holds the
-// target state, so the loop always terminates; a wrong expectation
-// hangs into waitFrame's dump like the single-shot waits did.
-func commitFrameWhere(t *testing.T, backend *interactiveBackend, pred func(painted *render.Buffer) bool) *render.Buffer {
-	t.Helper()
-	drainFrames(backend.frames)
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	for {
-		painted := waitFrame(t, backend.frames)
-		if pred(painted) {
-			return painted
-		}
-	}
-}
+// commitFrames and commitFrameWhere were the paint-wire approximation of
+// this proof: drain, force an F6 repaint, then wait for a frame whose
+// painted content matched the target state. The match could land on the
+// change-frame's own clone — the test backend pushes the clone inside
+// Present, before the writer runs that frame's commit callbacks — so on
+// a loaded 2-core runner a keystroke sent right after the gate could
+// still route against the pre-commit tree (CI 38115640192: Down after
+// Escape-close kept hitting the palette's list). The committed beacon
+// above closes the window by construction instead of by timing luck.
 
 func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
 	full := seedProcs(40)
@@ -369,7 +370,7 @@ func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
 		scriptStep{delay: 30 * time.Millisecond, rows: full}, // retry with "rel"
 	)
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64))
+	app := newProcsApp(source, make(chan procsState, 64), nil)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
@@ -452,7 +453,7 @@ func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
 	)
 	source.killDelay = 30 * time.Millisecond
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64))
+	app := newProcsApp(source, make(chan procsState, 64), nil)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
@@ -546,7 +547,7 @@ func TestProcsActionFailureKeepsDataAndBoundsDoubleFire(t *testing.T) {
 	source := newScriptedSource(scriptStep{rows: seedProcs(8)})
 	source.killErr = errors.New("access denied")
 	source.killDelay = 80 * time.Millisecond
-	app := newProcsApp(source, nil)
+	app := newProcsApp(source, nil, nil)
 	app.width, app.height = 80, 24
 
 	load := app.Update(event.ResizeTo(80, 24))
@@ -617,7 +618,7 @@ func TestProcsActionFailureKeepsDataAndBoundsDoubleFire(t *testing.T) {
 }
 
 func TestProcsViewPaintsConfirmAndNotice(t *testing.T) {
-	app := newProcsApp(nil, nil)
+	app := newProcsApp(nil, nil, nil)
 	app.width, app.height = 80, 24
 	paint := func() *render.Buffer {
 		frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(80, 24)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
@@ -652,7 +653,7 @@ func TestProcsStaleAndForeignResultsIgnored(t *testing.T) {
 		scriptStep{rows: seedProcs(8)},
 		scriptStep{err: errors.New("transient")},
 	)
-	app := newProcsApp(source, nil)
+	app := newProcsApp(source, nil, nil)
 	app.width, app.height = 80, 24
 
 	load := app.Update(event.ResizeTo(80, 24))
@@ -705,7 +706,7 @@ func TestProcsStaleAndForeignResultsIgnored(t *testing.T) {
 func TestProcsQuitCancelsInFlightLoad(t *testing.T) {
 	source := newScriptedSource(scriptStep{delay: 8 * time.Second, rows: nil})
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64))
+	app := newProcsApp(source, make(chan procsState, 64), nil)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
@@ -799,7 +800,7 @@ func TestProcessSourceListsRealProcesses(t *testing.T) {
 // opt-out — so the focused selected row falls back to the Accent role
 // live: restyling is a theme swap, not an edit to any style block.
 func TestProcsPaletteFlowsThroughTheme(t *testing.T) {
-	app := newProcsApp(nil, nil)
+	app := newProcsApp(nil, nil, nil)
 	app.width, app.height = 80, 24
 	app.phase = phaseData
 	app.rows = seedProcs(4)
@@ -870,7 +871,7 @@ func TestProcessSourceKillMissingPidFails(t *testing.T) {
 func TestProcsResizeGateKeepsTasksAndFocus(t *testing.T) {
 	source := newScriptedSource(scriptStep{delay: 20 * time.Millisecond, rows: seedProcs(40)})
 	backend := &interactiveBackend{events: make(chan event.Event, 64), frames: make(chan *render.Buffer, 64)}
-	app := newProcsApp(source, make(chan procsState, 64))
+	app := newProcsApp(source, make(chan procsState, 64), nil)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
@@ -999,27 +1000,6 @@ func hasRow(painted *render.Buffer, text string) bool {
 	return false
 }
 
-// The palette commit gates, shared by the two end-to-end palette
-// tests: Enter/Down route modal-scoped only against a committed open
-// palette, runes feed the committed palette input, and the closing
-// frame's commit disarms the modal scope so a later Escape reaches the
-// app-scope quit shortcut instead of dismissing a dead modal.
-func paletteOpenFrame(painted *render.Buffer) bool {
-	return hasRow(painted, "command palette")
-}
-
-func paletteClosedFrame(painted *render.Buffer) bool {
-	return !hasRow(painted, "command palette")
-}
-
-// killAskPainted matches the inline confirm ask, which only paints when
-// the palette modal is gone (the modal covers its row): the gates for
-// the 'n'/'y' runes need the closed palette AND the armed ask
-// committed, or the rune routes into the dead palette input.
-func killAskPainted(painted *render.Buffer) bool {
-	return !paletteOpenFrame(painted) && hasRow(painted, "kill pid 1000")
-}
-
 // findRow returns the first painted row containing text, failing the
 // test when nothing matches.
 func findRow(t *testing.T, painted *render.Buffer, text string) int {
@@ -1052,16 +1032,12 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	full := seedProcs(40)
 	source := newScriptedSource(scriptStep{delay: 40 * time.Millisecond, rows: full})
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64))
+	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
-	// The F6 dance: a second frame on the wire proves the first frame's
-	// present callbacks ran, so the Ctrl+P shortcut is committed.
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	waitFrame(t, backend.frames)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
 
 	// Ctrl+P opens the palette with all commands listed; only "Clear
 	// filter" is disabled, because the table filter is empty.
@@ -1096,7 +1072,7 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	for _, r := range "refresh" {
 		backend.events <- event.RuneKey(r, 0)
 	}
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.palette && state.paletteRows == 1 && state.rows == 40 && state.filter == ""
 	})
 	drainFrames(backend.frames)
@@ -1115,7 +1091,7 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	backend.events <- event.RuneKey('z', 0)
 	backend.events <- event.RuneKey('z', 0)
 	backend.events <- event.RuneKey('z', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 0 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette && state.paletteRows == 0 })
 	drainFrames(backend.frames)
 	backend.events <- event.KeyPress(event.KeyF6, 0)
 	waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
@@ -1134,13 +1110,13 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		backend.events <- event.KeyPress(event.KeyBackspace, 0)
 	}
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 1 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette && state.paletteRows == 1 })
 
 	// Escape closes; Ctrl+P reopens with the filter reset.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return !state.palette })
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
 	drainFrames(backend.frames)
 	backend.events <- event.KeyPress(event.KeyF6, 0)
 	waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
@@ -1152,7 +1128,7 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	// the key hints with the reason.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.palette && state.paletteRows == 4 && state.paletteSelected == 2
 	})
 	drainFrames(backend.frames)
@@ -1189,9 +1165,14 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	}
 
 	// Escape closes the palette and hands focus back to the table: the
-	// next Down moves the table's selection.
+	// next Down moves the table's selection. This exact spot is where
+	// CI 38115640192 hung: the old paint-side gate matched the closing
+	// frame's own pre-commit clone, so the Down still routed into the
+	// palette's list. The committed gate is the safe one — the modal
+	// scope must be disarmed in the tree the Down routes against — and
+	// the paint below stays a visual check, not the routing proof.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return !state.palette })
 	drainFrames(backend.frames)
 	backend.events <- event.KeyPress(event.KeyF6, 0)
 	// The stale frames here are still-open palettes; the target view
@@ -1200,35 +1181,29 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 		return !hasRow(painted, "command palette")
 	})
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.selected == 1 && state.phase == phaseData
 	})
 
 	// Ctrl+P toggles both ways; a click outside the open palette
 	// dismisses it.
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette })
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return !state.palette })
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
-	// The click routes against the modal only once the OPEN palette
-	// frame is committed: frames painted before the toggle can still be
-	// queued in the writer, so gate on the open palette's content, not
-	// on whichever frame arrives next.
-	commitFrameWhere(t, backend, paletteOpenFrame)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette })
+	// The click routes against the modal scope, which the beacon above
+	// proves committed: the tree the click lands on has the palette
+	// open, so the press hits the modal's outside-click rule.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
 		Action: event.MousePress, Button: event.MouseLeft, X: 1, Y: 15,
 	}}
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return !state.palette })
 
-	// The mouse press closed the palette, but that closing frame must
-	// commit before Escape or the key dismisses the already-closed
-	// modal instead of quitting. A single post-drain read is not enough
-	// here: frames painted before the click can still be queued in the
-	// writer, so gate on the CLOSED palette's content — the frame that
-	// proves the modal scope is disarmed.
-	commitFrameWhere(t, backend, paletteClosedFrame)
+	// The click's closing frame is committed — the beacon above is that
+	// proof — so Escape reaches the app-scope quit shortcut instead of
+	// dismissing an already-closed modal.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	select {
 	case err := <-done:
@@ -1261,47 +1236,36 @@ func TestCommandPaletteRunsCommands(t *testing.T) {
 	)
 	source.killDelay = 30 * time.Millisecond
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64))
+	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
-	// The F6 dance: a second frame on the wire proves the first frame's
-	// present callbacks ran, so the Ctrl+P shortcut is committed.
-	commitFrames(t, backend)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
 
 	// Run the kill command from the palette: the palette closes and the
 	// existing inline confirm ask names the selected row. Cancelling
 	// with 'n' leaves the table alone.
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
-	// The palette's shortcuts are modal-scoped: Enter routes against the
-	// palette only once its frame is committed — an open-palette frame,
-	// not whichever frame the writer delivers next.
-	commitFrameWhere(t, backend, paletteOpenFrame)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette })
+	// The palette's shortcuts are modal-scoped, so Enter routes against
+	// the palette only once that frame is committed — the beacon is
+	// that proof.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.confirm == 1000
 	})
-	// Running the command closed the palette as a side effect; that
-	// closing frame must commit before 'n' or the rune routes into the
-	// dead palette input instead of the confirm ask. Gate on the ask
-	// being painted — which also proves the modal is gone, since the
-	// palette covers the ask's row.
-	commitFrameWhere(t, backend, killAskPainted)
+	// Running the command closed the palette as a side effect; the 'n'
+	// must answer the committed ask, not the dead palette's input.
 	backend.events <- event.RuneKey('n', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.confirm == 0 && state.rows == 40
 	})
 
 	// Refresh from the palette: the command reuses the app's load seam,
 	// the palette owns no separate pipeline.
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
-	// Down and Enter are modal-scoped here too: gate on the open
-	// palette's frame, not the first post-drain frame.
-	commitFrameWhere(t, backend, paletteOpenFrame)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette })
 	backend.events <- event.KeyPress(event.KeyDown, 0)
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
 	// The loading phase between the palette closing and the refresh
@@ -1310,26 +1274,21 @@ func TestCommandPaletteRunsCommands(t *testing.T) {
 	// to coalesce with the Enter event, and no loading frame ever
 	// paints. The durable contract is the closed palette plus the
 	// reloaded data.
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.phase == phaseData && state.rows == 38
 	})
 
 	// Kill again, this time confirming: the pid dies, the notice lands,
 	// and the post-kill auto-refresh repaints the shorter table.
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
-	// Enter must route against the committed open palette, so the kill
-	// command runs rather than an event into the stale table snapshot.
-	commitFrameWhere(t, backend, paletteOpenFrame)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette })
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.confirm == 1000
 	})
-	// Same closing race as the 'n' step: the 'y' must answer the ask,
-	// not the dead palette input, so the armed-ask frame must commit.
-	commitFrameWhere(t, backend, killAskPainted)
+	// The 'y' must answer the ask, not the dead palette input.
 	backend.events <- event.RuneKey('y', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return strings.Contains(state.notice, "terminated pid 1000") && state.rows == 39
 	})
 
@@ -1337,39 +1296,43 @@ func TestCommandPaletteRunsCommands(t *testing.T) {
 	// clears the filter and reloads through the same seam. Of the 40
 	// seeded rows, "r" matches the relay and worker names: 20.
 	backend.events <- event.RuneKey('r', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.filter == "r" && state.phase == phaseData && state.rows == 20
 	})
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
-	// The Downs move the modal's selection only against a committed
-	// open-palette frame.
-	painted := commitFrameWhere(t, backend, paletteOpenFrame)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
+	// "Clear filter" is runnable now that the table filter is typed, so
+	// the palette's footer shows key hints, not the disabled reason.
+	// Paint check for that, then the committed gate for the Downs.
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted := waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
+		return hasRow(painted, "command palette")
+	})
 	forbidRow(t, painted, "the filter is empty")
 	backend.events <- event.KeyPress(event.KeyDown, 0)
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.palette && state.paletteSelected == 2
 	})
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
 	// Same coalescing hazard as the refresh step above: wait for the
 	// outcome (filter cleared, palette closed, data reloaded), not the
 	// transient loading phase.
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return !state.palette && state.filter == "" && state.phase == phaseData && state.rows == 37
 	})
 
 	// Quit runs from the palette: filter down to one command, Enter ends
 	// the run cleanly.
 	backend.events <- ctrlP()
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
-	// The runes feed the palette's input; an open-palette frame must be
-	// committed first or they fall through to the table's filter.
-	commitFrameWhere(t, backend, paletteOpenFrame)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
+	// The runes feed the palette's committed input; from a tree still
+	// holding the table focus they would fall through to the filter.
 	for _, r := range "quit" {
 		backend.events <- event.RuneKey(r, 0)
 	}
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 1 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.palette && state.paletteRows == 1 })
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
 	select {
 	case err := <-done:

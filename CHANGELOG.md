@@ -17,6 +17,37 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Committed-state beacon for the interactive harnesses (`app_test.go`,
+  `examples/09-procs`, `examples/11-select`): a new
+  `TestPresentationCallbacksRunInRegistrationOrder` test pins the
+  writer's sequencing contract — for one frame, `Frame.OnPresented`
+  callbacks run in registration order, after the frame's tree is
+  committed — and the example tests now gate input routing on that
+  contract instead of on wire frames. Root cause (proven on CI run
+  38115640192, where TestCommandPaletteLifecycle hung 45s on both
+  ubuntu lanes): the test backends push their frame clone inside
+  Present, BEFORE the writer runs the frame's OnPresented callbacks,
+  so "a frame carrying the new state is on the wire" never proved "the
+  event tree inputs route against matches it" — a wait built on the
+  former could hand the next keystroke to a still-committed modal.
+  The fix is harness-only; the framework's commit-follows-the-wire
+  design is correct and unchanged. Each example app now queues a
+  beacon after `ui.End` in one composite defer (LIFO would run a
+  second plain defer before End and queue the beacon before the
+  commit) — `End` queues the commit first, the beacon's `OnPresented`
+  registration right after it, and the writer runs them in that
+  order — so the beacon carrying the View's own reported state fires
+  strictly after that state's tree is live, with a non-blocking send
+  that can never stall the writer. Every test wait immediately
+  followed by a key or a click now uses the new
+  `waitCommittedWhere`; final asserts with state-exclusive
+  predicates stay on the observe channel; paint asserts keep their
+  drain-provoke-read shape but lost their routing duty
+  (`waitFrameWhere`). The `commitFrames`/`commitFrameWhere` barriers
+  and their per-popup frame predicates were deleted — a frame
+  predicate off by one row waits forever, and a predicate built from
+  a stale clone never proves a commit; the beacon proves it by
+  construction.
 - Select component and popover recipe (`ui`, `examples/11-select`): a
   dropdown control whose popup is placed by the new exported
   `ui.SelectPlacement(anchor, state, count, canvasHeight)` — below the
