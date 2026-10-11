@@ -112,6 +112,29 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- `examples/05-widgets` no longer presents at the frame cap: idle pages
+  ask for no frames at all (measured 96 frames in 400ms each of a
+  parked table, form, and tree — now 0), and the motion page schedules
+  its frames at the wall-clock moment of the next visible change
+  instead of every pacer tick (384 frames in 1.6s — now 36, the exact
+  union of 12.5 spinner glyph flips and 10 sparkline points). The
+  request uses the absolute `RequestFrameAt`, not `RequestFrameAfter`:
+  the relative form anchors to the run loop's timer fire, which
+  precedes the View's post-draw clock, so every deadline fired one
+  compose early, painted the pre-change glyph, and burned a
+  pacer-clamped catch-up frame — 54 frames where 36 suffice.
+  Non-interactive and reduced-motion terminals never schedule the glyph
+  clock at all. Pinned by `TestCatalogIdlePagesGoQuiet` and
+  `TestMotionPageWaitsForGlyphDeadlines`.
+- The `examples/05-widgets` keystroke-before-first-commit canary is now
+  deterministic across the run loop's two start interleaves: Run's
+  first select may dequeue the pre-queued key before or after the
+  initial compose, so the report sequence itself is nondeterministic.
+  The test now waits on the model's own key counter (`keys == 1` while
+  the selection has not moved) instead of report ordinal, and forces
+  its settling report with an inert F5 keypress that bubbles to a
+  frame, replacing the old reliance on the example's own animation.
+  `go test -count=3 -race` no longer reshuffles it.
 - The `examples/08-tour` interaction tests' warm-up barrier gives a cold
   `lux.Run` two seconds to present its first frame instead of 150
   milliseconds. A slow shared CI runner under `-race` once outlived the

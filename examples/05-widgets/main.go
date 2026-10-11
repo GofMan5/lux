@@ -59,6 +59,16 @@ var stations = []string{"ink", "violet", "amber"}
 var modes = []string{"live", "drag", "paint"}
 var pages = []string{"table", "form", "motion", "tree"}
 
+// The motion page's two live clocks: the spinner glyph flips every
+// spinnerGlyph of wall time, and the sparkline gains a point every
+// loadSample. View and wantsFrame share them so the painted content and
+// the requested schedule cannot drift apart — a deadline that missed the
+// constant the page actually uses would repaint nothing.
+const (
+	spinnerGlyph = 80 * time.Millisecond
+	loadSample   = 100 * time.Millisecond
+)
+
 // treeEntry is one node of the static demo file tree. The tree widget is
 // virtualized: the catalog flattens these nodes into the rows that are
 // actually visible each frame, driven by TreeState.Expanded.
@@ -261,7 +271,7 @@ func (app *catalog) View(frame *lux.Frame) {
 		})
 		app.ui.Spinner(canvas, render.Rect{X: panelX, Y: 6, W: 1, H: 1}, &app.spinner, time.Now(), ui.SpinnerStyle{
 			Frames:        ui.SpinnerBraille,
-			FrameDuration: 80 * time.Millisecond,
+			FrameDuration: spinnerGlyph,
 			Style:         render.Style{Foreground: cyan, Background: background},
 		})
 		canvas.Text(panelX+2, 6, "syncing", render.Style{Foreground: muted, Background: background})
@@ -273,7 +283,7 @@ func (app *catalog) View(frame *lux.Frame) {
 		if app.lastLoad.IsZero() {
 			app.lastLoad = now
 		}
-		if now.Sub(app.lastLoad) >= 100*time.Millisecond {
+		if now.Sub(app.lastLoad) >= loadSample {
 			app.loadStep++
 			app.load = append(app.load, .5+.5*math.Sin(float64(app.loadStep)*.35))
 			if len(app.load) > 64 {
@@ -317,14 +327,45 @@ func (app *catalog) View(frame *lux.Frame) {
 	}
 	canvas.Text(max((area.W-canvas.TextWidth(footer))/2, 0), area.H-1, footer, render.Style{Foreground: muted})
 
-	// The spinner and sparkline are live clocks, so the screen keeps
-	// redrawing while motion is allowed; the runtime coalesces to the max
-	// frame rate and settles to the pacer when the terminal reports reduced
-	// motion.
+	// The motion page is the only one whose content moves between input:
+	// the spinner flips its glyph every 80ms and the sparkline gains a
+	// point every 100ms, so View schedules the next frame at the absolute
+	// wall-clock moment of the nearest visible change. Absolute, not
+	// now+delay: the frame deadline must survive the compose that asks
+	// for it — a relative request is anchored to the run loop's timer
+	// fire, which precedes this View's post-draw clock, so it would fire
+	// early, paint the pre-change content, and burn a pacer-clamped
+	// catch-up frame every glyph flip. Every other page asks for nothing
+	// — a parked terminal stops presenting identical bytes at the frame
+	// cap and the run loop's timer goes dead between input. Reduced-motion
+	// terminals opt out of even the glyph clock.
 	if frame.Capabilities.Interactive && !frame.ReducedMotion {
-		frame.RequestFrame()
+		if deadline, moving := app.nextChange(time.Now()); moving {
+			frame.RequestFrameAt(deadline)
+		}
 	}
 	app.report()
+}
+
+// nextChange reports the earliest wall-clock moment at which the visible
+// page will change, and whether anything moves at all. The spinner phase
+// is a pure function of absolute time (the same wall-clock paints the same
+// glyph), so the next visible flip is due at the next 80ms multiple since
+// the spinner started — a frame that lands on that boundary measures age
+// a hair past the multiple and paints the new glyph, so overload lowers
+// the frame count without ever producing catch-up bursts. The sparkline
+// append guard already keeps the sample rate wall-clock bound, so its
+// next point lands at lastLoad + 100ms, and the frame at that boundary
+// finds the threshold met and appends in that same frame.
+func (app *catalog) nextChange(now time.Time) (time.Time, bool) {
+	if app.pages.Selected != 2 {
+		return time.Time{}, false
+	}
+	deadline := now.Add(spinnerGlyph - app.spinner.Age(now)%spinnerGlyph)
+	if spark := app.lastLoad.Add(loadSample); spark.Before(deadline) {
+		deadline = spark
+	}
+	return deadline, true
 }
 
 func (app *catalog) report() {

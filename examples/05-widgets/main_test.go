@@ -183,7 +183,7 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	// the first input — not only before region changes — is what keeps
 	// this suite off the 2-vCPU CI lottery; TestKeystrokeBeforeFirstCommitIsDropped
 	// pins the contract deterministically.
-	settle(t, backend.frames)
+	settle(t, backend)
 
 	// The focused table takes the arrow keys; each keystroke waits for its
 	// frame so the next input lands on a settled view.
@@ -203,7 +203,7 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	// settle proves the form controls committed before they are clicked.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
-	settle(t, backend.frames)
+	settle(t, backend)
 
 	// The checkbox toggles on the mouse release: press focuses, release
 	// activates.
@@ -222,7 +222,7 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 10}}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 10}}
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.open })
-	settle(t, backend.frames)
+	settle(t, backend)
 
 	// Pressing a popup option picks it (row 11 is option index 0 under
 	// offset 0); the release commits and closes the dropdown. The popup
@@ -246,7 +246,7 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	// The tree page registers its own region geometry, so settle proves the
 	// tree committed before the press. A press on panel row 1 selects the
 	// second visible row ("examples", Y 4 with the tree at Y 3).
-	settle(t, backend.frames)
+	settle(t, backend)
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 4}}
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.treeSel == 1 })
 
@@ -257,6 +257,110 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.treeSel == 1 && state.treeOpen == 1 })
 
 	// The priority Escape shortcut quits even while a widget holds focus.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("escape did not quit")
+	}
+}
+
+// TestCatalogIdlePagesGoQuiet pins the idle contract for the three static
+// pages: the table, form, and tree pages have nothing that moves, so once
+// the open sequence and the page switch settle, the catalog must not ask
+// for a single frame between input — a parked terminal presents nothing
+// instead of repainting identical bytes at the frame cap.
+func TestCatalogIdlePagesGoQuiet(t *testing.T) {
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newCatalog()
+	app.observe = make(chan catalogState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.tab == 0 })
+	settle(t, backend)
+	// Warm-up absorbs the open-sequence repaints; then the idle window
+	// must be silent. Two frames, not zero, keep the assertion honest
+	// about a deadline straggler without licensing a stream.
+	countFrames(backend.frames, 300*time.Millisecond)
+	if frames := countFrames(backend.frames, 400*time.Millisecond); frames > 2 {
+		t.Fatalf("static table page kept presenting: %d frames in 400ms of idle", frames)
+	} else {
+		t.Logf("table page idle: %d frames in 400ms", frames)
+	}
+
+	// The form tab (slot 2 spans panel-local X 7-12, absolute X 48): one
+	// repaint for the page switch, then quiet again.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
+	countFrames(backend.frames, 200*time.Millisecond)
+	if frames := countFrames(backend.frames, 400*time.Millisecond); frames > 2 {
+		t.Fatalf("static form page kept presenting: %d frames in 400ms of idle", frames)
+	} else {
+		t.Logf("form page idle: %d frames in 400ms", frames)
+	}
+
+	// The strip holds focus after the click, so the arrows page through
+	// motion (2) into tree (3): leaving the live page must stop the
+	// animation with it, and tree is static again.
+	backend.events <- event.KeyPress(event.KeyRight, 0)
+	backend.events <- event.KeyPress(event.KeyRight, 0)
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 3 })
+	countFrames(backend.frames, 300*time.Millisecond)
+	if frames := countFrames(backend.frames, 400*time.Millisecond); frames > 2 {
+		t.Fatalf("static tree page kept presenting: %d frames in 400ms of idle", frames)
+	} else {
+		t.Logf("tree page idle: %d frames in 400ms", frames)
+	}
+
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("escape did not quit")
+	}
+}
+
+// TestMotionPageWaitsForGlyphDeadlines pins the frame-request contract on
+// the motion page: the spinner flips its glyph every 80ms and the sparkline
+// gains a point every 100ms, so View must ask for the next frame exactly at
+// the next visible change — the glyph deadline — never at the pacer cap.
+// Before the fix the View tail requested a frame unconditionally, so the
+// catalog composed at ~240fps here (the cap this test sets) to animate an
+// 80ms glyph. The band stays honest on a starved CI runner: a late frame
+// still paints the correct absolute-phase glyph and asks for the NEXT flip,
+// so overload lowers the count without ever raising it toward the cap.
+func TestMotionPageWaitsForGlyphDeadlines(t *testing.T) {
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newCatalog()
+	app.observe = make(chan catalogState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.tab == 0 })
+	settle(t, backend)
+	// The motion tab is the strip's slot 3: panel-local X 14-19, so
+	// absolute X 55 lands inside it with the strip at X 40.
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 55, Y: 2}}
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 2 })
+	// Warm-up: the page-switch repaint and the first glyph deadline land.
+	countFrames(backend.frames, 250*time.Millisecond)
+	// 1.6s at glyph deadlines is ~20 frames/s (12.5 spinner flips plus 10
+	// sparkline points, minus the overlaps); at the 240fps cap it would
+	// be ~240 frames/s.
+	frames := countFrames(backend.frames, 1600*time.Millisecond)
+	t.Logf("motion page: %d frames in 1.6s (~%d frames/s)", frames, frames*10/16)
+	if frames > 60 {
+		t.Fatalf("motion page composed %d frames in 1.6s; the glyph deadlines ask for ~32", frames)
+	}
+	if frames < 12 {
+		t.Fatalf("motion page composed only %d frames in 1.6s; the spinner glyph must keep flipping every 80ms", frames)
+	}
+
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	select {
 	case err := <-done:
@@ -336,26 +440,28 @@ func TestKeystrokeBeforeFirstCommitIsDropped(t *testing.T) {
 		}
 	}()
 
-	// View #1 reports the initial state from inside the View — before
-	// the writer, parked inside its gated first Present, has run any
-	// commit callback at all. The pre-queued key may already have been
-	// dequeued by then (Run's first select sees both the zero timer and
-	// the key ready and picks randomly), which is still pre-commit and
-	// fine: either interleave reports selected 0.
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
-
-	// The decisive wait: a report must show the key reached Update
-	// (keys == 1) while the selection still has not moved. The gate is
-	// still closed — the writer is parked in the gated first Present —
-	// so the key was routed against the empty snapshot and dropped.
-	// Waiting on the counter, not on the clock, is what makes the drop
-	// provable: the test cannot proceed past this point until the model
-	// itself says the keystroke was consumed.
+	// The decisive wait, straight away: a report must show the key reached
+	// Update (keys == 1) while the selection has not moved. Reports arrive
+	// from inside View, before the writer — parked inside its gated first
+	// Present — has run any commit callback at all, and Run's first select
+	// may dequeue the key either before or after the initial compose, so
+	// the keys == 1 report is the first or the second one; either way it
+	// is the earliest state the gate can ever let the test observe. The
+	// gate is still closed, so the key was routed against the empty
+	// snapshot and dropped. Waiting on the counter, not on the clock, is
+	// what makes the drop provable: the test cannot proceed past this
+	// point until the model itself says the keystroke was consumed.
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.keys == 1 })
 
 	// One more report settles while gated — the writer still has not
-	// committed anything, and the dropped key stays dropped.
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
+	// committed anything, and the dropped key stays dropped. Static pages
+	// no longer self-animate (that is the idle contract now), so the
+	// report is forced the same way settle forces its proof frame: an
+	// inert F5 keys the run loop into exactly one more View without
+	// touching the guarded model state; keys == 2 identifies the report
+	// that View produced.
+	backend.events <- event.KeyPress(event.KeyF5, 0)
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.keys == 2 })
 
 	// Open the gate: the first Present finishes, its callbacks commit the
 	// table's focus, and repaints resume. The keystroke was routed against
@@ -415,18 +521,38 @@ func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 
 // settle waits until the interaction snapshot of a freshly painted frame is
 // committed. ui.Context commits through Frame.OnPresented, which the runtime
-// runs immediately after a successful Present, so a following frame proves
-// the previous commit already ran. The catalog keeps drawing (the spinner is
-// a live clock), so fresh frames always arrive. It returns the last frame it
-// observed.
-func settle(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
+// runs immediately after a successful Present, and the writer presents in
+// FIFO order with the commits between presents, so the arrival of a frame
+// forced after a drain proves every earlier commit already ran. The catalog
+// no longer self-animates on static pages, so the proof frame is forced
+// with an inert keypress: F5 routes through the committed snapshot, no
+// widget consumes it, and the run loop repaints once. It returns the proof
+// frame.
+func settle(t *testing.T, backend *interactiveBackend) *render.Buffer {
 	t.Helper()
 	for {
 		select {
-		case <-frames:
+		case <-backend.frames:
 		default:
-			waitFrame(t, frames)
-			return waitFrame(t, frames)
+			backend.events <- event.KeyPress(event.KeyF5, 0)
+			return waitFrame(t, backend.frames)
+		}
+	}
+}
+
+// countFrames drains presented frames for the window and reports how many
+// arrived: an app that keeps requesting composes at its frame cap, an app
+// on glyph deadlines composes at its content's rate, and a settled app
+// presents nothing between input.
+func countFrames(frames <-chan *render.Buffer, window time.Duration) int {
+	deadline := time.After(window)
+	count := 0
+	for {
+		select {
+		case <-frames:
+			count++
+		case <-deadline:
+			return count
 		}
 	}
 }
