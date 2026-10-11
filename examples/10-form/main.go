@@ -124,15 +124,19 @@ type formApp struct {
 	ui            ui.Context
 	source        formSource
 	observe       chan formState
-	fields        [4]formField
-	endpoint      ui.TextInput // read-only preview, recomputed on host/port edits
-	baseline      profile      // the last proven (connected) snapshot
-	dirty         bool         // derived: profile() != baseline
-	connecting    bool         // single-flight guard for the in-flight connect
-	attempt       int          // identity of the in-flight connect
-	attempts      int          // connects issued, for the double-submit test
-	notice        string
-	ask           bool // the unsaved-changes question is on screen
+	// committed receives a beacon the instant the frame that built the
+	// state is committed to the event tree — see View for why a frame
+	// on the wire cannot prove that.
+	committed  chan formState
+	fields     [4]formField
+	endpoint   ui.TextInput // read-only preview, recomputed on host/port edits
+	baseline   profile      // the last proven (connected) snapshot
+	dirty      bool         // derived: profile() != baseline
+	connecting bool         // single-flight guard for the in-flight connect
+	attempt    int          // identity of the in-flight connect
+	attempts   int          // connects issued, for the double-submit test
+	notice     string
+	ask        bool // the unsaved-changes question is on screen
 }
 
 // checkPort validates the port field in three steps so each verdict
@@ -151,8 +155,8 @@ func checkPort(value string) string {
 	return ""
 }
 
-func newFormApp(source formSource, observe chan formState) *formApp {
-	app := &formApp{source: source, observe: observe}
+func newFormApp(source formSource, observe, committed chan formState) *formApp {
+	app := &formApp{source: source, observe: observe, committed: committed}
 	// A zero ButtonStyle reads the theme: the Connect button resolves
 	// Text/Focus/Danger roles from this palette. Inputs take no theme —
 	// their style is explicit below — and the chrome (labels, hints,
@@ -376,7 +380,24 @@ func (app *formApp) View(frame *lux.Frame) {
 	area := canvas.Bounds()
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
-	defer app.ui.End(frame)
+	// The committed beacon: End queues the frame's commit first, then
+	// this OnPresented callback right after it, and the writer runs
+	// present callbacks in queue order — so the beacon fires strictly
+	// after the tree this View built is the tree inputs route against.
+	// The send is non-blocking so it can never stall the writer. One
+	// composite defer is load-bearing: a second plain defer would run
+	// before this one (LIFO) and queue the beacon BEFORE the commit.
+	var state formState
+	defer func() {
+		app.ui.End(frame)
+		beacon := state
+		frame.OnPresented(func() {
+			select {
+			case app.committed <- beacon:
+			default:
+			}
+		})
+	}()
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyEscape}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 	// Priority so Ctrl+S submits even while a field has focus: an
 	// app-scope priority shortcut outranks the focused Editable's claim
@@ -385,7 +406,7 @@ func (app *formApp) View(frame *lux.Frame) {
 
 	if area.W < 46 || area.H < 24 {
 		canvas.Text(0, 0, "LUX form - enlarge terminal", render.Style{Foreground: violet})
-		app.report()
+		state = app.report()
 		return
 	}
 
@@ -433,7 +454,7 @@ func (app *formApp) View(frame *lux.Frame) {
 		footer = " esc quit "
 	}
 	canvas.Text(max((area.W-canvas.TextWidth(footer))/2, 0), area.H-1, footer, render.Style{Foreground: muted})
-	app.report()
+	state = app.report()
 }
 
 // drawField paints one label / input / hint-or-error triple. The input is
@@ -471,12 +492,11 @@ func fieldInputStyle() ui.InputStyle {
 	}
 }
 
-// report publishes the observable state from inside View; the channel
-// is drained non-blockingly so observation can never steer the run.
-func (app *formApp) report() {
-	if app.observe == nil {
-		return
-	}
+// report publishes the observable state from inside View; the channels
+// are written non-blockingly so observation can never steer the run. It
+// returns the state so the committed beacon can carry the exact View
+// that produced it.
+func (app *formApp) report() formState {
 	state := formState{
 		endpoint:   app.endpoint.Value,
 		dirty:      app.dirty,
@@ -498,16 +518,19 @@ func (app *formApp) report() {
 	case app.ui.Focused("submit"):
 		state.focused = "submit"
 	}
-	select {
-	case app.observe <- state:
-	default:
+	if app.observe != nil {
+		select {
+		case app.observe <- state:
+		default:
+		}
 	}
+	return state
 }
 
 func main() {
 	// A three-second ceiling keeps a dead endpoint from hanging the
 	// app: the failure is a notice, and Ctrl+S retries.
-	app := newFormApp(dialSource{timeout: 3 * time.Second}, nil)
+	app := newFormApp(dialSource{timeout: 3 * time.Second}, nil, nil)
 	if err := lux.Run(context.Background(), app); err != nil {
 		fmt.Fprintln(os.Stderr, "form:", err)
 		os.Exit(1)

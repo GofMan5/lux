@@ -17,6 +17,22 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- The `examples/10-form` interactive tests now ride the committed-state
+  beacon too: the same conversion proven on CI run 38119579494 for
+  09-procs and 11-select. `newFormApp` takes a committed channel,
+  `report` returns the state so the composite-defer beacon carries the
+  View's own values, and every wait followed by a keystroke or the
+  retry click gates on `waitCommittedWhere` — including the failure
+  notice before the pointer retry (the exact stale-disabled-snapshot
+  site this barrier family was built for) and the clean-form Escape
+  before quit. Paint checks (`required` hints, the `connecting`
+  button, the `connect failed` status, the `unsaved changes` line)
+  keep their drain-provoke-read shape as `paintWhere` with routing duty
+  removed; `commitFrames`/`commitFrameWhere` are gone. The unsaved-
+  changes guard's `!state.ask` wait moved onto the committed channel
+  deliberately: on the observe backlog that predicate is stale — every
+  pre-ask state matches it — while the ordered beacon stream carries
+  the ask gate's match, making the next beacon exactly 'n's own frame.
 - Committed-state beacon for the interactive harnesses (`app_test.go`,
   `examples/09-procs`, `examples/11-select`): a new
   `TestPresentationCallbacksRunInRegistrationOrder` test pins the
