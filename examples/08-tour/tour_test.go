@@ -470,7 +470,7 @@ func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
 
 	// Wheel over the viewport's left border column: no widget owns column 1,
 	// so every notch goes to the page scroller instead of an inner control.
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 17; i++ {
 		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
 			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
 		}}
@@ -516,7 +516,7 @@ func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
 }
 
 // TestWidgetsPageSortsFeatureTable pins the whole sort path end to end on the
-// compact widgets page (80x24): twelve wheels reveal the stacked feature
+// compact widgets page (80x24): a stack of wheels reveal the stacked feature
 // table, a click on the CAPABILITY header must reach the table (header and
 // last row presses used to be dropped by the router below the content), and
 // the tour must serve the request by re-ordering its own rows — ascending
@@ -536,7 +536,7 @@ func TestWidgetsPageSortsFeatureTable(t *testing.T) {
 	if backend.lastFrame(2*time.Second) == nil {
 		t.Fatal("no frame presented during warm-up")
 	}
-	for i := 0; i < 12; i++ {
+	for i := 0; i < 17; i++ {
 		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
 			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
 		}}
@@ -589,5 +589,125 @@ func TestWidgetsPageSortsFeatureTable(t *testing.T) {
 		}
 	case <-time.After(hangTimeout):
 		t.Fatal("q never quit the tour")
+	}
+}
+
+// TestWidgetsPageShowsInertAndEmptyStates pins the states demo on the widgets
+// page (80x24, stacked): a disabled checkbox and a disabled button must paint
+// and stay inert — the router never targets a Disabled region, so neither
+// clicks nor focus can move them — while an empty list must paint an honest
+// hint instead of blank rows and swallow clicks without selecting anything.
+// The slow checkbox and the feature table on the same page prove the page is
+// live, so inertness is a state, not a dead frame.
+func TestWidgetsPageShowsInertAndEmptyStates(t *testing.T) {
+	backend := newProbeBackend(80, 24)
+	app := newTour()
+	app.page = 6
+	app.tabs.Selected = 6
+	app.sync.Started = time.Time{} // settled spinner: no continuous repaints
+	done := make(chan error, 1)
+	go func() {
+		done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240))
+	}()
+
+	// Generous cold-start window; see TestCompactWidgetsPageKeepsControlsReachable.
+	start := backend.lastFrame(2 * time.Second)
+	if start == nil {
+		t.Fatal("no frame presented during warm-up")
+	}
+
+	// Click helper: a full press/release pair, then drain whatever repaints
+	// the click caused, so later rows are read from a settled frame.
+	clickRow := func(x, y int) {
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: x, Y: y, Action: event.MousePress, Button: event.MouseLeft,
+		}}
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: x, Y: y, Action: event.MouseRelease, Button: event.MouseLeft,
+		}}
+		backend.countFrames(150 * time.Millisecond)
+	}
+
+	// Contrast click first, while the top of the stacked page is on screen:
+	// the live slow checkbox must toggle.
+	slowRow := bufferFindRow(start, "slow spinner")
+	if slowRow < 0 {
+		t.Fatal("slow checkbox not on screen during warm-up")
+	}
+	clickRow(4, slowRow)
+
+	// Wheel partway down: the states demo sits below the radio group, still
+	// inside the form panel, so a few notches reveal it.
+	for i := 0; i < 4; i++ {
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
+		}}
+	}
+	states := backend.lastFrame(200 * time.Millisecond)
+	if states == nil {
+		t.Fatal("no frame presented after the wheel")
+	}
+	frozenRow := bufferFindRow(states, "frozen (disabled)")
+	if frozenRow < 0 {
+		t.Fatal("states demo never scrolled into view: disabled checkbox missing")
+	}
+	emptyRow := bufferFindRow(states, "(empty)")
+	if emptyRow < 0 {
+		t.Fatal("empty list paints no honest hint")
+	}
+	buttonRow := bufferFindRow(states, "Unavailable")
+	if buttonRow < 0 {
+		t.Fatal("disabled button missing from the states demo")
+	}
+
+	// Clicks on the inert states: the disabled checkbox, the disabled
+	// button, and both rows of the empty list. Nothing may change.
+	clickRow(6, frozenRow)
+	clickRow(6, buttonRow)
+	clickRow(6, emptyRow)
+	clickRow(6, emptyRow+1)
+
+	// Liveness after the inert clicks: wheel the rest of the way down and
+	// sort the feature table. A page that just swallowed four clicks must
+	// still serve the next one.
+	for i := 0; i < 13; i++ {
+		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
+		}}
+	}
+	table := backend.lastFrame(200 * time.Millisecond)
+	if table == nil {
+		t.Fatal("no frame presented after the second wheel")
+	}
+	header := bufferFindRow(table, "CAPABILITY")
+	if header < 0 {
+		t.Fatal("feature table header is not on screen after scrolling")
+	}
+	clickRow(4, header)
+
+	backend.events <- event.RuneKey('q', 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("q never quit the tour")
+	}
+
+	if !app.slow.Checked {
+		t.Fatal("live slow checkbox never toggled: the page was not actually interactive")
+	}
+	if app.frozen.Checked {
+		t.Fatal("disabled checkbox toggled: Disabled regions must refuse routing")
+	}
+	if app.results.Selected != 0 || app.results.Offset != 0 {
+		t.Fatalf("empty list moved: Selected=%d Offset=%d, want 0/0", app.results.Selected, app.results.Offset)
+	}
+	if app.target != .25 {
+		t.Fatalf("target = %v, want 0.25: the disabled button must not fire", app.target)
+	}
+	if app.features[0][0] != "allocation steady state" {
+		t.Fatalf("header click after inert states did not sort: first row = %q", app.features[0][0])
 	}
 }

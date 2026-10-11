@@ -17,6 +17,22 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `examples/08-tour` widgets page closes the stage-4 state demo: a
+  "control states" block under the radio group shows a disabled
+  checkbox, a disabled button, and an empty list side by side. The
+  disabled pair is inert by construction — the router's hit test,
+  focus walk, and wheel claim all skip `Disabled` regions, so no
+  `Update` case can ever exist for them; both paint dim so the state
+  is visible without color alone. The empty list still routes
+  (focusable, scrollable) but `ListState.Apply` with zero rows is
+  inert, and a painted hint replaces the blank rows so the state reads
+  as intentional rather than broken. Pinned end to end by
+  `TestWidgetsPageShowsInertAndEmptyStates`: clicks on the frozen
+  checkbox, the unavailable button, and both rows of the empty list
+  change nothing, while the live slow checkbox and the feature-table
+  sort on the same page prove the page was interactive the whole
+  time. Loading, error, empty, and disabled states are now all
+  demonstrated in the tour and pinned in tests.
 - `examples/13-logs` now discovers itself: `?` opens a keyboard
   cheat-sheet overlay — movement, wheel and mouse, home/end, `end`
   resuming follow, `/`, Enter, Esc, `?` — with the live follow state as

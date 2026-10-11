@@ -82,7 +82,9 @@ type tour struct {
 	table    ui.TableState
 	features [][2]string // app-owned copy of featureRows; re-ordered to serve table sorts
 	slow     ui.CheckboxState
+	frozen   ui.CheckboxState // states demo: disabled checkbox, can never toggle
 	glyph    ui.RadioState
+	results  ui.ListState // states demo: a list that stays empty on purpose
 	gauge    float64
 	target   float64
 	trace    []float64
@@ -141,6 +143,11 @@ func (app *tour) Update(next event.Event) lux.Command {
 			app.name.Apply(action)
 		case "list":
 			_, _ = app.list.Apply(action, len(terminalList), max(action.Bounds.H, 1))
+		case "results":
+			// States demo: the list is empty on purpose, so every routed
+			// action collapses to the zero-row reset — clicks, arrows, and
+			// Enter all stay inert, which is exactly the pinned behavior.
+			_, _ = app.results.Apply(action, 0, max(action.Bounds.H, 1))
 		case "scroll":
 			app.scroll.Apply(action, scrollContent, max(action.Bounds.H, 1))
 		case "wscroll":
@@ -911,7 +918,7 @@ const scrollContent = 120
 // heights so no control is ever squeezed out of the frame: on short
 // terminals the page stacks and scrolls instead of shrinking its panels.
 const (
-	widgetsFormContentHeight    = 20 // input row, button, list, checkbox, radio
+	widgetsFormContentHeight    = 30 // input row, button, list, checkbox, radio, states demo
 	widgetsDisplayContentHeight = 27 // gauge, two sparklines, spinner, table, log
 	widgetsPageGap              = 1
 	widgetsFormPanelHeight      = widgetsFormContentHeight + 4 // inset plus border
@@ -968,6 +975,26 @@ func (app *tour) drawFormPanel(canvas *render.Canvas, area render.Rect) {
 	y = y + 1 + len(terminalList) + 1
 	app.ui.Checkbox("slow", canvas, render.Rect{X: content.X, Y: y, W: content.W, H: 1}, &app.slow, "slow spinner", checkboxStyle())
 	app.ui.RadioGroup("glyph", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(spinnerNames)}, &app.glyph, spinnerNames, radioStyle())
+
+	// States demo, pinned by TestWidgetsPageShowsInertAndEmptyStates. The
+	// disabled pair proves Disabled regions are unroutable by construction:
+	// hit, focus, and wheel routing all skip them, so Update can never
+	// receive "frozen" or "locked" — no case exists and none is needed.
+	// The empty list still routes (it is focusable and scrollable), but
+	// ListState.Apply with zero rows is inert, and the hint replaces the
+	// blank rows so the state stays honest instead of looking broken.
+	y = y + 1 + len(spinnerNames) + 1
+	canvas.Text(content.X, y, "control states — disabled + empty", render.Style{Foreground: muted, Background: panel})
+	frozen := checkboxStyle()
+	frozen.Disabled = true
+	frozen.DisabledStyle = render.Style{Foreground: muted, Background: panel, Attrs: render.AttrDim}
+	app.ui.Checkbox("frozen", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &app.frozen, "frozen (disabled)", frozen)
+	app.ui.List("results", canvas, render.Rect{X: content.X, Y: y + 2, W: content.W, H: 2}, &app.results, nil, listStyle())
+	canvas.Text(content.X+1, y+2, "(empty) list: nothing to select, clicks inert", render.Style{Foreground: muted, Background: panel})
+	locked := buttonStyle()
+	locked.Disabled = true
+	locked.DisabledStyle = render.Style{Foreground: muted, Background: panel, Attrs: render.AttrDim}
+	app.ui.Button("locked", canvas, render.Rect{X: content.X, Y: y + 4, W: 16, H: 3}, "Unavailable", locked)
 }
 
 // drawDisplayPanel draws the display panel chrome and its data widgets at
