@@ -303,7 +303,7 @@ func TestLogsPaintsLevelsStatusAndFooter(t *testing.T) {
 	if !strings.Contains(status, "12 lines") || !strings.Contains(status, "follow") || !strings.Contains(status, "line 12") {
 		t.Fatalf("status: %q", status)
 	}
-	if footer := rowText(painted, 15); !strings.Contains(footer, "esc quit") || !strings.Contains(footer, "end follow") {
+	if footer := rowText(painted, 15); !strings.Contains(footer, "esc quit") || !strings.Contains(footer, "up pause follow") {
 		t.Fatalf("footer: %q", footer)
 	}
 
@@ -359,6 +359,120 @@ func TestLogsTinyTerminalGuards(t *testing.T) {
 	app.View(frame)
 	if painted := frame.Canvas.Buffer(); !strings.Contains(rowText(painted, 0), "enlarge terminal") {
 		t.Fatalf("tiny guard missing: %q", rowText(painted, 0))
+	}
+}
+
+// TestLogsHintBarTracksFocusAndState pins the discoverability contract:
+// hints belong to the current focus and state, not a static legend —
+// follow offers to pause, paused offers to resume, an open help dialog
+// advertises its own close key.
+func TestLogsHintBarTracksFocusAndState(t *testing.T) {
+	app := newUnitApp(100)
+	paintOnce(t, app)
+	app.appendBatch([]logEntry{
+		entry("info", "msg 1", 0), entry("warn", "msg 2", 1), entry("info", "msg 3", 2),
+		entry("info", "msg 4", 3), entry("error", "msg 5", 4), entry("info", "msg 6", 5),
+	})
+
+	painted := paintOnce(t, app)
+	footer := rowText(painted, 15)
+	for _, want := range []string{"up pause follow", "/ filter", "? help", "esc quit"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("follow footer missing %q: %q", want, footer)
+		}
+	}
+
+	// One scroll away from the tail and the advertised verb flips.
+	app.applyList(keyScroll(event.KeyUp))
+	painted = paintOnce(t, app)
+	footer = rowText(painted, 15)
+	if !strings.Contains(footer, "end resume follow") || !strings.Contains(footer, "? help") {
+		t.Fatalf("paused footer: %q", footer)
+	}
+
+	// While help is open the footer says how the overlay itself closes.
+	app.help = true
+	painted = paintOnce(t, app)
+	if footer := rowText(painted, 15); !strings.Contains(footer, "esc close help") {
+		t.Fatalf("help-open footer: %q", footer)
+	}
+}
+
+// TestLogsHintBarDegradesNarrow pins the ladder at the smallest supported
+// width: "/ filter" drops before "? help", and "esc quit" never leaves.
+func TestLogsHintBarDegradesNarrow(t *testing.T) {
+	app := newUnitApp(100)
+	paint := func() *render.Buffer {
+		frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(44, 14)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
+		app.View(frame)
+		return frame.Canvas.Buffer()
+	}
+	paint() // viewRows = 8
+	seed := make([]logEntry, 12)
+	for i := range seed {
+		seed[i] = entry("info", fmt.Sprintf("msg %d", i+1), i)
+	}
+	app.appendBatch(seed)
+	app.applyList(keyScroll(event.KeyUp)) // paused
+
+	footer := rowText(paint(), 13)
+	for _, want := range []string{"end resume follow", "? help", "esc quit"} {
+		if !strings.Contains(footer, want) {
+			t.Fatalf("narrow footer missing %q: %q", want, footer)
+		}
+	}
+	if strings.Contains(footer, "/ filter") {
+		t.Fatalf("narrow footer kept the droppable hint: %q", footer)
+	}
+}
+
+// TestLogsHelpOverlayPaintsKeysAndState pins the overlay as the complete
+// inventory of what the app answers to — every binding listed, none left
+// as a hidden chord — plus the live follow state, so the help reflects
+// the moment it was opened in.
+func TestLogsHelpOverlayPaintsKeysAndState(t *testing.T) {
+	app := newUnitApp(100)
+	paintOnce(t, app)
+	app.appendBatch([]logEntry{
+		entry("info", "msg 1", 0), entry("warn", "msg 2", 1), entry("info", "msg 3", 2),
+		entry("info", "msg 4", 3), entry("error", "msg 5", 4), entry("info", "msg 6", 5),
+	})
+	app.help = true
+	painted := paintOnce(t, app)
+
+	if title := rowText(painted, 2); !strings.Contains(title, "keys") {
+		t.Fatalf("help title row: %q", title)
+	}
+	rows := []struct {
+		y    int
+		want string
+	}{
+		{4, "up, down, pgup, pgdn"},
+		{5, "scroll, select line"},
+		{6, "first or newest line"},
+		{7, "resume follow at the tail"},
+		{8, "focus the filter"},
+		{9, "commit the query"},
+		{10, "clear query (empty: quit)"},
+		{11, "toggle this help"},
+	}
+	for _, row := range rows {
+		if body := rowText(painted, row.y); !strings.Contains(body, row.want) {
+			t.Fatalf("help row %d missing %q: %q", row.y, row.want, body)
+		}
+	}
+	if state := rowText(painted, 12); !strings.Contains(state, "follow: on") {
+		t.Fatalf("help state row: %q", state)
+	}
+	if footer := rowText(painted, 15); !strings.Contains(footer, "esc close help") {
+		t.Fatalf("footer while help open: %q", footer)
+	}
+
+	// The state line inside the overlay follows the app, not the paint.
+	app.applyList(keyScroll(event.KeyUp))
+	painted = paintOnce(t, app)
+	if state := rowText(painted, 12); !strings.Contains(state, "follow: paused") {
+		t.Fatalf("help paused state row: %q", state)
 	}
 }
 
@@ -485,6 +599,141 @@ func TestLogsEndToEndStreamScrollFilterQuit(t *testing.T) {
 	})
 
 	// A bare Escape on an empty query is the advertised quit.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("escape did not quit")
+	}
+}
+
+// TestLogsHelpOverlayEndToEnd walks the discoverability loop through the
+// real event loop: '?' opens the overlay from the log view, keys inside
+// are inert, '?' toggles and Esc and an outside click each close it
+// without disturbing the reading position — and while the filter owns
+// input, '?' is a query character, not a chord.
+func TestLogsHelpOverlayEndToEnd(t *testing.T) {
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	source := newChanSource()
+	app := newLogsDemo(30, source, 5*time.Millisecond)
+	app.observe = make(chan logsState, 64)
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	waitFrame(t, backend.frames)
+
+	source.batches <- []logEntry{
+		entry("info", "boot 1", 0), entry("warn", "boot 2", 1), entry("info", "boot 3", 2),
+		entry("error", "boot 4", 3), entry("info", "boot 5", 4), entry("warn", "boot 6", 5),
+	}
+	waitStateWhere(t, app.observe, done, func(state logsState) bool {
+		return state.lines == 6 && state.follow && state.selected == 5
+	})
+
+	// Keystrokes race the first commit (see TestLogsLifecycleFilterAndQuit);
+	// F5 forces the repaint that proves it ran. But frames on the wire prove
+	// PRESENTATION only: OnPresented — where the router's snapshot commits —
+	// runs on the writer goroutine after Present, and a displaced surface
+	// loses its callbacks entirely, so under -race the next key can still be
+	// routed against a stale snapshot even after waitFrame returns. Modal
+	// transitions therefore get a commit-sound barrier: waitModal polls
+	// ui.ModalOpen, the router's own committed state, so it returns only
+	// once the snapshot key routing is decided against has caught up.
+	commit := func() {
+		backend.events <- event.KeyPress(event.KeyF5, 0)
+		waitFrame(t, backend.frames)
+	}
+	waitModal := func(want bool) {
+		t.Helper()
+		deadline := time.Now().Add(hangTimeout)
+		for time.Now().Before(deadline) {
+			if app.ui.ModalOpen() == want {
+				return
+			}
+			select {
+			case err := <-done:
+				t.Fatalf("run ended while waiting for modal=%v: %v", want, err)
+			default:
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("router never committed modal=%v", want)
+	}
+	commit()
+
+	// '?' opens the overlay; the modal paints over the log body.
+	backend.events <- event.RuneKey('?', 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool { return state.help })
+	waitFrameWhere(t, backend.frames, func(frame *render.Buffer) bool {
+		return strings.Contains(rowText(frame, 2), "keys")
+	})
+	waitModal(true)
+	commit()
+
+	// Keys inside the overlay are inert: the scroll key must not reach the
+	// list. '?' closes the overlay; the state after close doubles as the
+	// proof the scroll key changed nothing.
+	backend.events <- event.KeyPress(event.KeyUp, 0)
+	backend.events <- event.RuneKey('?', 0)
+	state := waitStateWhere(t, app.observe, done, func(state logsState) bool { return !state.help })
+	if state.selected != 5 || !state.follow || state.lines != 6 {
+		t.Fatalf("overlay disturbed the reading position: %+v", state)
+	}
+	commit()
+
+	// Esc closes via Dismiss — the priority quit must not fire while the
+	// overlay is open, so the run stays alive.
+	backend.events <- event.RuneKey('?', 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool { return state.help })
+	waitModal(true)
+	commit()
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	state = waitStateWhere(t, app.observe, done, func(state logsState) bool { return !state.help })
+	if state.selected != 5 || !state.follow || state.filter != "" {
+		t.Fatalf("esc close disturbed the state: %+v", state)
+	}
+	commit()
+
+	// A click outside the panel dismisses the same way.
+	backend.events <- event.RuneKey('?', 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool { return state.help })
+	waitModal(true)
+	commit()
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 1, Y: 1}}
+	state = waitStateWhere(t, app.observe, done, func(state logsState) bool { return !state.help })
+	if state.selected != 5 || !state.follow {
+		t.Fatalf("outside click disturbed the state: %+v", state)
+	}
+	waitModal(false)
+	commit()
+
+	// While the filter owns input, '?' is a query character, and the
+	// footer advertises the typing hints instead of the log hints.
+	backend.events <- event.RuneKey('/', 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool { return state.filterFocus })
+	commit()
+	waitFrameWhere(t, backend.frames, func(frame *render.Buffer) bool {
+		return strings.Contains(rowText(frame, 15), "type query")
+	})
+	backend.events <- event.RuneKey('?', 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool {
+		return state.filterFocus && state.filter == "?"
+	})
+	waitFrameWhere(t, backend.frames, func(frame *render.Buffer) bool {
+		return strings.Contains(rowText(frame, 1), "?")
+	})
+
+	// Esc clears the live query instead of quitting.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool {
+		return state.filter == "" && state.lines == 6 && state.follow
+	})
+	// Enter returns focus to the log view; a bare Esc then quits.
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state logsState) bool { return !state.filterFocus })
+	commit()
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
 	select {
 	case err := <-done:

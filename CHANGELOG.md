@@ -17,6 +17,20 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `examples/13-logs` now discovers itself: `?` opens a keyboard
+  cheat-sheet overlay — movement, wheel and mouse, home/end, `end`
+  resuming follow, `/`, Enter, Esc, `?` — with the live follow state as
+  its last row, and the footer advertises the next move per context
+  (follow, paused, filter typing) instead of making the user guess.
+  The overlay is a real modal: keys inside are inert — the list never
+  scrolls — `?` toggles, Esc and a click outside dismiss without
+  disturbing the reading position, and while the filter owns input `?`
+  is a query character, not a chord. Pinned by
+  `TestLogsHelpOverlayPaintsKeysAndState`,
+  `TestLogsHintBarTracksFocusAndState`,
+  `TestLogsHintBarDegradesNarrow`, and the end-to-end modal loop in
+  `TestLogsHelpOverlayEndToEnd`, which routes every post-modal key
+  through the new `ModalOpen` commit barrier.
 - `ui.Context.ModalOpen()`, a read-only probe of the router's committed
   modal scope — the missing half of the end-to-end barrier story.
   Frames on the wire prove presentation, but the router snapshot

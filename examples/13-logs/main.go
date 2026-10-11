@@ -112,6 +112,7 @@ type logsState struct {
 	filter      string
 	filterFocus bool
 	follow      bool
+	help        bool
 }
 
 // logsApp is the Model: bounded history plus the view state around it.
@@ -126,8 +127,9 @@ type logsApp struct {
 	nextSeq       int
 	order         []int
 	follow        bool
-	anchorSeq     int // identity the reading position is anchored to
-	anchorRow     int // screen row the anchor occupies
+	help          bool // the key inventory overlay is open
+	anchorSeq     int  // identity the reading position is anchored to
+	anchorRow     int  // screen row the anchor occupies
 	viewRows      int
 	source        logSource
 	interval      time.Duration
@@ -315,6 +317,16 @@ func (app *logsApp) Update(next event.Event) lux.Command {
 				return nil
 			}
 			return lux.Quit()
+		case action.Target == "help" && action.Kind == ui.Activate:
+			// '?' toggles the overlay from either scope: app-scope opens
+			// it from the log view, the modal-scope twin closes it from
+			// inside — the same key, the same verb.
+			app.help = !app.help
+		case action.Target == "help" && action.Kind == ui.Dismiss:
+			// Esc and an outside click both arrive as Dismiss; the router
+			// sends Escape to the open modal before the priority quit, so
+			// the overlay always closes first.
+			app.help = false
 		case action.Target == "filter" && action.Kind == ui.Focus:
 			app.ui.Focus("filter")
 		case action.Target == "filter" && action.Kind == ui.Input:
@@ -406,6 +418,22 @@ func (app *logsApp) View(frame *lux.Frame) {
 		Kind:   ui.Focus,
 		Scope:  ui.ScopeApp,
 	})
+	// '?' opens the help overlay from the log view — non-priority, so the
+	// filter editor keeps '?' as a query character while it owns input —
+	// and the modal-scope twin toggles the overlay closed from inside.
+	app.ui.Shortcut(ui.Shortcut{
+		Key:    event.KeyEvent{Code: event.KeyRune, Rune: '?'},
+		Target: "help",
+		Kind:   ui.Activate,
+		Scope:  ui.ScopeApp,
+	})
+	app.ui.Shortcut(ui.Shortcut{
+		Key:    event.KeyEvent{Code: event.KeyRune, Rune: '?'},
+		Owner:  "help",
+		Target: "help",
+		Kind:   ui.Activate,
+		Scope:  ui.ScopeModal,
+	})
 
 	// Status: view size, drop count, cursor position, follow state.
 	lineInfo := "line -"
@@ -427,17 +455,99 @@ func (app *logsApp) View(frame *lux.Frame) {
 	parts = append(parts, lineInfo, followInfo)
 	canvas.Text(2, area.H-2, clipLine(" "+strings.Join(parts, "  ")+" ", area.W-4), render.Style{Foreground: muted, Background: background})
 
-	// Footer with honest degrade.
-	footer := " up/down/page scroll  wheel scroll  click line  end follow  / filter  esc quit "
-	if len([]rune(footer)) > area.W-4 {
-		footer = " scroll  end follow  / filter  esc quit "
+	// The footer is a hint about the current moment, not a static legend.
+	footer := app.hintBar(area.W)
+	canvas.Text(max((area.W-runeLen(footer))/2, 0), area.H-1, footer, render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim})
+
+	if app.help {
+		app.paintHelp(canvas, area)
 	}
-	if len([]rune(footer)) > area.W-4 {
-		footer = " esc quit "
-	}
-	canvas.Text(max((area.W-len([]rune(footer)))/2, 0), area.H-1, footer, render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim})
 
 	app.report()
+}
+
+// hintBar derives the footer from what the current focus and state can
+// do: follow offers to pause, paused offers to resume, a live query
+// offers commit and clear, and an open help dialog advertises its own
+// close key. Each variant degrades by dropping its least load-bearing
+// hint first; "esc quit" never leaves the bar.
+func (app *logsApp) hintBar(width int) string {
+	var tiers []string
+	switch {
+	case app.help:
+		tiers = []string{"esc close help"}
+	case app.ui.Focused("filter"):
+		if app.filter.Value != "" {
+			tiers = []string{"enter commit query  esc clear", "esc clear"}
+		} else {
+			tiers = []string{"type query  enter commit  esc quit", "esc quit"}
+		}
+	case app.follow:
+		tiers = []string{
+			"up pause follow  / filter  ? help  esc quit",
+			"/ filter  ? help  esc quit",
+			"esc quit",
+		}
+	default:
+		tiers = []string{
+			"end resume follow  / filter  ? help  esc quit",
+			"end resume follow  ? help  esc quit",
+			"esc quit",
+		}
+	}
+	for _, hint := range tiers {
+		hint = " " + hint + " "
+		if runeLen(hint) <= width-4 {
+			return hint
+		}
+	}
+	return " esc quit "
+}
+
+// helpKeys is the inventory of what the app answers to. The overlay
+// renders it as-is, so the visible list cannot drift from the bindings
+// the suite pins one by one.
+var helpKeys = [][2]string{
+	{"up, down, pgup, pgdn", "scroll lines"},
+	{"wheel, click", "scroll, select line"},
+	{"home, end", "first or newest line"},
+	{"end", "resume follow at the tail"},
+	{"/", "focus the filter"},
+	{"enter", "commit the query"},
+	{"esc", "clear query (empty: quit)"},
+	{"?", "toggle this help"},
+}
+
+// paintHelp draws the overlay: the full key inventory plus the live
+// follow state, so the help reflects the moment it was opened in. Esc,
+// an outside click, and '?' itself all close it; nothing else inside the
+// modal scope answers.
+func (app *logsApp) paintHelp(canvas *render.Canvas, area render.Rect) {
+	width, height := min(max(area.W-8, 40), 52), min(max(area.H-4, 9), 16)
+	bounds := render.Rect{X: max((area.W-width)/2, 0), Y: max((area.H-height)/2, 0), W: width, H: height}
+	inner := app.ui.Modal("help", canvas, bounds, "keys", ui.ModalStyle{
+		Panel:  render.Style{Background: background},
+		Border: render.Style{Foreground: violet, Background: background},
+		Title:  render.Style{Foreground: cyan, Background: background, Attrs: render.AttrBold},
+	})
+	if inner == nil {
+		return
+	}
+	innerBounds := inner.Bounds()
+	style := render.Style{Foreground: ink, Background: background}
+	keyRows := min(len(helpKeys), max(innerBounds.H-2, 0))
+	for index := 0; index < keyRows; index++ {
+		line := fmt.Sprintf(" %-22s %s", helpKeys[index][0], helpKeys[index][1])
+		inner.Text(1, 1+index, clipLine(line, innerBounds.W-1), style)
+	}
+	stateLine := " follow: on - new lines move the view "
+	if !app.follow {
+		stateLine = " follow: paused - end resumes follow "
+	}
+	if row := keyRows + 1; row <= innerBounds.H-1 {
+		inner.Text(1, row, clipLine(stateLine, innerBounds.W-1), render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim})
+	}
+	app.ui.EndModal()
 }
 
 // paintBody draws the log window: a per-level color per line, the cursor
@@ -533,6 +643,7 @@ func (app *logsApp) report() {
 		filter:      app.filter.Value,
 		filterFocus: app.ui.Focused("filter"),
 		follow:      app.follow,
+		help:        app.help,
 	}:
 	default:
 	}
