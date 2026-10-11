@@ -141,6 +141,19 @@ func newCatalog() *catalog {
 	for i := 0; i < 16; i++ {
 		app.load = append(app.load, .5+.5*math.Sin(float64(i)*2*math.Pi/16))
 	}
+	// The palette is named once, as a theme: every selection widget below
+	// (table, tabs, checkbox, radio, select, tree) resolves its zero
+	// styles through the roles — Text body, Muted structure, Accent
+	// selection, Focus focus. The glyph widgets (gauge, spinner,
+	// sparkline) keep explicit styles in View: their colors are data,
+	// not selection. Danger stays unset: this screen has no disabled
+	// controls to show.
+	app.ui.UseTheme(ui.Theme{
+		Text:   render.Style{Foreground: ink, Background: background},
+		Muted:  render.Style{Foreground: muted, Background: background},
+		Accent: render.Style{Foreground: background, Background: violet},
+		Focus:  render.Style{Foreground: background, Background: cyan},
+	})
 	return app
 }
 
@@ -194,47 +207,44 @@ func (app *catalog) View(frame *lux.Frame) {
 	canvas.Text(3, 0, " LUX WIDGET CATALOG ", render.Style{Foreground: cyan, Background: background, Attrs: render.AttrBold})
 
 	body := render.Rect{X: 2, Y: 1, W: 36, H: area.H - 5}
+	// Zero styles: the theme roles carry the palette. The table reads Text
+	// for body, Muted (auto-underlined) for the header, Accent for the
+	// selected row, Focus for the focused row.
 	app.ui.Table("widgets-table", canvas, body, &app.table, tableColumns, len(catalogRows),
 		func(index int) []string { return catalogRows[index][:] },
-		ui.TableStyle{
-			Normal:   render.Style{Foreground: ink, Background: background},
-			Header:   render.Style{Foreground: muted, Background: background, Attrs: render.AttrUnderline},
-			Selected: render.Style{Foreground: background, Background: violet},
-			Focused:  render.Style{Foreground: background, Background: cyan},
-		})
+		ui.TableStyle{})
 
 	// The controls panel is paged by the tabs strip above it: each page
 	// demos one family instead of stacking all widgets in one column. The
 	// form page keeps the coordinates the slice-2 tests locked in.
 	panelX, panelW := 40, area.W-42
 	canvas.Text(panelX, 1, "CONTROLS", render.Style{Foreground: muted, Background: background, Attrs: render.AttrBold})
-	app.ui.Tabs("pages", canvas, render.Rect{X: panelX, Y: 2, W: panelW, H: 1}, &app.pages, pages, ui.TabsStyle{
-		Normal:   render.Style{Foreground: ink, Background: background},
-		Selected: render.Style{Foreground: background, Background: violet},
-		Focused:  render.Style{Foreground: background, Background: cyan},
-	})
+	// Zero styles: the selected tab reads the Accent block, unselected
+	// tabs read Muted — the strip gains structure/selection hierarchy the
+	// explicit ink styles never had.
+	app.ui.Tabs("pages", canvas, render.Rect{X: panelX, Y: 2, W: panelW, H: 1}, &app.pages, pages, ui.TabsStyle{})
 
 	switch app.pages.Selected {
 	case 1: // form: the input widgets at their slice-2 coordinates.
-		app.ui.Checkbox("telemetry", canvas, render.Rect{X: panelX, Y: 3, W: panelW, H: 1}, &app.telemetry, "stream telemetry", ui.CheckboxStyle{
-			Normal:  render.Style{Foreground: ink, Background: background},
-			Focused: render.Style{Foreground: background, Background: cyan},
-		})
-		app.ui.RadioGroup("palette", canvas, render.Rect{X: panelX, Y: 5, W: panelW, H: 3}, &app.palette, stations, ui.RadioStyle{
-			Normal:   render.Style{Foreground: ink, Background: background},
-			Selected: render.Style{Foreground: background, Background: violet},
-			Focused:  render.Style{Foreground: background, Background: cyan},
-		})
+		// Zero styles: the row reads Text, focus reads Focus, and the
+		// marker reads Accent — the marker IS the checked state, so it
+		// paints the selection block the checkbox previously missed.
+		app.ui.Checkbox("telemetry", canvas, render.Rect{X: panelX, Y: 3, W: panelW, H: 1}, &app.telemetry, "stream telemetry", ui.CheckboxStyle{})
+		// Zero styles: the selected station row reads the Accent block,
+		// the others read Text.
+		app.ui.RadioGroup("palette", canvas, render.Rect{X: panelX, Y: 5, W: panelW, H: 3}, &app.palette, stations, ui.RadioStyle{})
 		canvas.Text(panelX, 9, "MOTION", render.Style{Foreground: muted, Background: background, Attrs: render.AttrBold})
 		// The select draws last so its popup paints over anything it
 		// overlaps.
-		app.ui.Select("motion", canvas, render.Rect{X: panelX, Y: 10, W: panelW, H: 1}, &app.motion, modes, ui.SelectStyle{
-			Normal:         render.Style{Foreground: ink, Background: background},
-			Focused:        render.Style{Foreground: background, Background: cyan},
-			OptionNormal:   render.Style{Foreground: ink, Background: background},
-			OptionSelected: render.Style{Foreground: background, Background: violet},
-		})
-	case 2: // motion: the live display-only widgets.
+		// Zero styles: the closed field reads Text, the popup frame reads
+		// Muted, the chosen option reads Accent, and the option under the
+		// cursor reads Focus — cursor and choice finally differ.
+		app.ui.Select("motion", canvas, render.Rect{X: panelX, Y: 10, W: panelW, H: 1}, &app.motion, modes, ui.SelectStyle{})
+	case 2: // motion: the live display-only widgets. Unlike the selection
+		// widgets, these three keep explicit styles: gauge, spinner, and
+		// sparkline paint data with fg-colored glyphs, and a theme role
+		// would replace fg/bg semantics (an Accent fill would draw dark
+		// blocks on a violet background).
 		// The gauge tracks the catalog selection (row selected+1 of 8).
 		gauge := ui.GaugeState{Value: float64(app.table.Selected + 1), Max: float64(len(catalogRows))}
 		app.ui.Gauge(canvas, render.Rect{X: panelX, Y: 4, W: panelW - 2, H: 1}, &gauge, ui.GaugeStyle{
@@ -272,11 +282,7 @@ func (app *catalog) View(frame *lux.Frame) {
 		rows := app.treeRows()
 		app.ui.Tree("files", canvas, render.Rect{X: panelX, Y: 3, W: panelW, H: 10}, &app.tree, len(rows),
 			func(index int) ui.TreeRow { return rows[index] },
-			ui.TreeStyle{
-				Normal:   render.Style{Foreground: ink, Background: background},
-				Selected: render.Style{Foreground: background, Background: violet},
-				Focused:  render.Style{Foreground: background, Background: cyan},
-			})
+			ui.TreeStyle{})
 	default: // table page: what the catalog is.
 		for y, line := range []string{
 			"the table on the left is",

@@ -409,3 +409,113 @@ func settle(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 		}
 	}
 }
+
+// TestWidgetsCatalogPaletteFlowsThroughTheme pins the stage-3 recipe on the
+// second real screen. newCatalog installs the palette once through
+// Context.UseTheme; every selection widget (table, tabs, checkbox, radio,
+// select, tree) resolves through zero styles, while the glyph widgets
+// (gauge, spinner, sparkline) keep their explicit styles — their colors are
+// data, not selection. The first paint pins the roles page 0 and the form
+// page actually show; the swap repaint proves the resolution is live. Two
+// visible changes are pinned on purpose: unselected tabs demote to the Muted
+// role (structure) now that the selected tab owns the Accent block, and the
+// checkbox marker resolves Accent — the marker IS the state.
+func TestWidgetsCatalogPaletteFlowsThroughTheme(t *testing.T) {
+	app := newCatalog()
+	draw := func() *render.Buffer {
+		frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(64, 16)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
+		app.View(frame)
+		return frame.Canvas.Buffer()
+	}
+
+	// Page 0: the table carries the same colors the explicit style used
+	// to, resolved through the roles now.
+	painted := draw()
+	if got := painted.Cell(2, 2).Style; got.Foreground != background || got.Background != cyan {
+		t.Fatalf("selected table row must resolve the Focus role: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+	if got := painted.Cell(2, 3).Style; got.Foreground != ink {
+		t.Fatalf("table body must resolve the Text role: fg=%v", got.Foreground)
+	}
+	if got := painted.Cell(2, 1).Style; got.Foreground != muted || got.Attrs&render.AttrUnderline == 0 {
+		t.Fatalf("table header must resolve the Muted role underlined: fg=%v attrs=%v", got.Foreground, got.Attrs)
+	}
+	if got := painted.Cell(40, 2).Style; got.Foreground != background || got.Background != violet {
+		t.Fatalf("selected tab must resolve the Accent role: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+	if got := painted.Cell(47, 2).Style; got.Foreground != muted {
+		t.Fatalf("unselected tab must resolve the Muted role: fg=%v", got.Foreground)
+	}
+
+	// Form page: the input widgets resolve their rows through the roles.
+	app.pages.Selected = 1
+	painted = draw()
+	if got := painted.Cell(40, 3).Style; got.Foreground != background || got.Background != violet {
+		t.Fatalf("checkbox marker must resolve the Accent role: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+	if got := painted.Cell(40, 5).Style; got.Foreground != background || got.Background != violet {
+		t.Fatalf("selected radio row must resolve the Accent role: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+	if got := painted.Cell(40, 10).Style; got.Foreground != ink {
+		t.Fatalf("closed select must resolve the Text role: fg=%v", got.Foreground)
+	}
+
+	// Swap the palette with zero Focus — the zero-role opt-out. Every
+	// selection surface restyles live; nothing but the theme changed.
+	red := render.RGBColor(248, 113, 113)
+	app.ui.UseTheme(ui.Theme{
+		Text:   render.Style{Foreground: muted},
+		Muted:  render.Style{Foreground: cyan},
+		Accent: render.Style{Foreground: background, Background: red},
+	})
+	painted = draw()
+	if got := painted.Cell(40, 3).Style; got.Background != red {
+		t.Fatalf("checkbox marker must restyle through the swapped Accent role: bg=%v", got.Background)
+	}
+	if got := painted.Cell(40, 5).Style; got.Background != red {
+		t.Fatalf("selected radio row must restyle through the swapped Accent role: bg=%v", got.Background)
+	}
+	if got := painted.Cell(40, 10).Style; got.Foreground != muted {
+		t.Fatalf("closed select must restyle through the swapped Text role: fg=%v", got.Foreground)
+	}
+
+	// Page 0 again: the focused selected row falls back to the swapped
+	// Accent role through the zero Focus opt-out, and the tabs restyle.
+	app.pages.Selected = 0
+	painted = draw()
+	if got := painted.Cell(2, 2).Style; got.Background != red {
+		t.Fatalf("zero Focus role must fall back to Accent for the selected row: bg=%v", got.Background)
+	}
+	if got := painted.Cell(2, 3).Style; got.Foreground != muted {
+		t.Fatalf("table body must restyle through the swapped Text role: fg=%v", got.Foreground)
+	}
+	if got := painted.Cell(47, 2).Style; got.Foreground != cyan {
+		t.Fatalf("unselected tab must restyle through the swapped Muted role: fg=%v", got.Foreground)
+	}
+	if got := painted.Cell(2, 1).Style; got.Foreground != cyan || got.Attrs&render.AttrUnderline == 0 {
+		t.Fatalf("table header must restyle through the swapped Muted role: fg=%v attrs=%v", got.Foreground, got.Attrs)
+	}
+
+	// Motion page: the glyph widgets keep their explicit styles — the
+	// gauge fill, spinner glyph, and sparkline wave carry data colors,
+	// not selection colors, so the theme swap must not reach them.
+	app.pages.Selected = 2
+	painted = draw()
+	if got := painted.Cell(40, 4).Style; got.Foreground != violet || got.Background != background {
+		t.Fatalf("gauge fill must keep its explicit style: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+	if got := painted.Cell(40, 6).Style; got.Foreground != cyan {
+		t.Fatalf("spinner glyph must keep its explicit style: fg=%v", got.Foreground)
+	}
+	spark := false
+	for x := 40; x < 62; x++ {
+		for _, y := range []int{8, 9} {
+			if c := painted.Cell(x, y); c.Grapheme != " " && c.Style.Foreground == cyan {
+				spark = true
+			}
+		}
+	}
+	if !spark {
+		t.Fatal("sparkline wave must keep its explicit cyan style")
+	}
+}

@@ -199,6 +199,30 @@ semver: breaking changes land only in a new major.
   ask, status and detail text) keeps explicit styles by design, and
   `Danger` stays unset because the app shows no disabled rows.
 
+- The `examples/05-widgets` catalog, the second real screen, now styles
+  every selection widget through the theme: `newCatalog` installs the
+  app palette once with `Context.UseTheme` (Text/Muted for body and
+  structure, Accent for selection, Focus for focus; `Danger` unset —
+  this screen shows no disabled controls), and the table, tabs,
+  checkbox, radio group, select, and tree all pass zero style structs,
+  resolving through those roles. Two screens now share the recipe —
+  09-procs and 05-widgets — which was the bar the production plan set
+  before extracting the palette into a library. The glyph widgets
+  (gauge, spinner, sparkline) keep their explicit styles on purpose:
+  their colors are data painted as fg-colored glyphs, and a role would
+  invert the fg/bg semantics (an Accent gauge fill would draw dark
+  blocks on a violet background). Four visible changes are intended and
+  pinned by a new test: unselected tabs demote to the Muted role so the
+  strip gains structure/selection hierarchy; the checkbox marker paints
+  the Accent block because the marker is the checked state; the select
+  popup frame reads Muted; and the popup option under the cursor reads
+  Focus, so cursor and choice finally differ (the cursor previously
+  fell through to `DefaultTheme`'s bold+underline and lost the
+  selection block). The test pins the roles the app shows on the table
+  and form pages, restyles everything live through a theme swap whose
+  zero `Focus` role falls back to `Accent`, and proves the swap cannot
+  reach the glyph widgets.
+
 ### Changed
 
 - Under `DefaultTheme` (and any theme that sets the new `Focus` role), a
