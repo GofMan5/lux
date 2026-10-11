@@ -17,6 +17,35 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `examples/13-logs`, the live log example: a bounded history view that
+  keeps reading positions stable under an unbounded stream. The history
+  is a capped ring — overflow trims the oldest lines and counts every
+  drop (`+N dropped` in the status, never a silent loss) — and each
+  line carries a monotonic `seq` identity, so a trim cannot hide behind
+  an index shift. A follow-tail pins the newest line while the user
+  follows, pauses the instant the user scrolls away (arriving lines
+  keep the same rows under the cursor: the anchor entry holds its
+  screen row), and resumes only when the cursor is back on the newest
+  line (`end`, or scrolling to the bottom). The filter matches level
+  and message case-insensitively, rebuilds the view rune by rune from
+  a `/` app-scope jump, Enter commits and hands focus back, Escape
+  over a live query clears it instead of quitting, and narrowing
+  re-anchors exactly like the table: a surviving anchor keeps the
+  cursor, an excluded one clamps to a valid row and re-anchors, an
+  empty match keeps the identity so widening restores it. Warn and
+  error lines paint amber and red (the theme has neither, so the
+  example owns them), the selected line reverses, empty views state
+  why (`waiting for lines` / `no lines match "q"`), lines longer than
+  the window clip at the edge, and the footer degrades to the escape
+  hint. The stream runs through the command seam — a poll command
+  rescheduled after each batch, never polling past `ctx` cancellation,
+  never touching the model from the worker side. Pinned by
+  `TestLogsFollowTailPausesOnScrollAndBoundsHistory`,
+  `TestLogsFilterNarrowsWidensAndKeepsAnchor`,
+  `TestLogsFilterBackspaceNarrowsIncrementally`,
+  `TestLogsPaintsLevelsStatusAndFooter`,
+  `TestLogsEmptyFilterPaintsHint`, `TestLogsTinyTerminalGuards`, and
+  an end-to-end stream/scroll/click/filter/quit run.
 - `examples/04-table` grows data workflows: stable row identity and a
   live filter. The cursor's identity is the record it selected, not the
   view index, so header sorts re-order the view and the cursor follows
