@@ -115,7 +115,12 @@ type catalog struct {
 	load     []float64
 	loadStep int
 	lastLoad time.Time
-	observe  chan catalogState
+	// keys counts the key events Update has seen. The report carries it
+	// so a test can prove a keystroke reached the model — routed against
+	// whatever routing state existed at that moment — instead of guessing
+	// from clock timing.
+	keys    int
+	observe chan catalogState
 }
 
 type catalogState struct {
@@ -128,6 +133,7 @@ type catalogState struct {
 	tab      int
 	treeSel  int
 	treeOpen int
+	keys     int
 }
 
 func newCatalog() *catalog {
@@ -157,6 +163,9 @@ func newCatalog() *catalog {
 }
 
 func (app *catalog) Update(next event.Event) lux.Command {
+	if next.Kind == event.Key {
+		app.keys++
+	}
 	if action, handled := app.ui.Handle(next); handled {
 		switch action.Target {
 		case "widgets-table":
@@ -339,6 +348,7 @@ func (app *catalog) report() {
 		tab:      app.pages.Selected,
 		treeSel:  app.tree.Selected,
 		treeOpen: open,
+		keys:     app.keys,
 	}:
 	default:
 	}

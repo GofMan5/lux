@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -240,16 +241,29 @@ func (*interactiveBackend) Close() error              { return nil }
 func waitStateWhere(t *testing.T, states <-chan procsState, done <-chan error, match func(procsState) bool) procsState {
 	t.Helper()
 	deadline := time.After(hangTimeout)
+	seen := 0
+	var last procsState
 	for {
 		select {
 		case state := <-states:
+			seen++
+			last = state
 			if match(state) {
 				return state
 			}
 		case err := <-done:
 			t.Fatalf("run ended before the state arrived: %v", err)
 		case <-deadline:
-			t.Fatalf("matching state timeout; want %v", "state")
+			// CI run 38099373704 (commit 1444a2d) timed out in this
+			// helper with nothing but "want state" to show for it: no
+			// count of what the app did report, no last state, and no
+			// goroutine dump, so the stall could not be attributed
+			// either way. The failure now carries the same evidence
+			// the other interactive suites print.
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching state timeout after %d states; last: phase=%v rows=%d selected=%d confirm=%d filter=%q notice=%q err=%q; goroutine dump follows\n%s",
+				seen, last.phase, last.rows, last.selected, last.confirm, last.filter, last.notice, last.errText, stack)
 		}
 	}
 }
@@ -260,7 +274,9 @@ func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	case frame := <-frames:
 		return frame
 	case <-time.After(hangTimeout):
-		t.Fatal("frame timeout")
+		stack := make([]byte, 1<<20)
+		stack = stack[:runtime.Stack(stack, true)]
+		t.Fatalf("frame timeout; goroutine dump follows\n%s", stack)
 		return nil
 	}
 }

@@ -301,6 +301,20 @@ func TestKeystrokeBeforeFirstCommitIsDropped(t *testing.T) {
 	app := newCatalog()
 	app.observe = make(chan catalogState, 64)
 	done := make(chan error, 1)
+	// The keystroke is queued before Run starts, and the proof that it
+	// was routed is the model's own key counter, never clock timing.
+	// CI run 38099373704 (commit 1444a2d) failed this test the other
+	// way: the key was sent after the first wait, and a
+	// scheduler-starved run loop could reach its select with the frame
+	// timer already due, lose the random pick to the timer, render two
+	// more Views, and leave the key queued past close(release) — so the
+	// "dropped" keystroke was routed against the committed table and
+	// moved the selection. Now the test cannot open the gate until a
+	// report shows Update has seen exactly the pre-queued key, and the
+	// writer stays parked in its gated first Present until then: the
+	// routing happened against the empty snapshot, which drops the key,
+	// no matter how the runner schedules goroutines.
+	backend.events <- event.KeyPress(event.KeyDown, 0)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 	released := false
 	defer func() {
@@ -322,18 +336,25 @@ func TestKeystrokeBeforeFirstCommitIsDropped(t *testing.T) {
 		}
 	}()
 
-	// View #1 reports the initial state from inside the View — before the
-	// writer, parked inside its gated first Present, has run any commit
-	// callback at all.
+	// View #1 reports the initial state from inside the View — before
+	// the writer, parked inside its gated first Present, has run any
+	// commit callback at all. The pre-queued key may already have been
+	// dequeued by then (Run's first select sees both the zero timer and
+	// the key ready and picks randomly), which is still pre-commit and
+	// fine: either interleave reports selected 0.
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
-	backend.events <- event.KeyPress(event.KeyDown, 0)
 
-	// Views #2 and #3 prove the keystroke was consumed while nothing was
-	// committed: after View #1 the run loop arms the frame timer and
-	// selects, the events channel is the only ready case, and the loop
-	// renders two more Views from its remaining surfaces while the writer
-	// stays gated.
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
+	// The decisive wait: a report must show the key reached Update
+	// (keys == 1) while the selection still has not moved. The gate is
+	// still closed — the writer is parked in the gated first Present —
+	// so the key was routed against the empty snapshot and dropped.
+	// Waiting on the counter, not on the clock, is what makes the drop
+	// provable: the test cannot proceed past this point until the model
+	// itself says the keystroke was consumed.
+	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.keys == 1 })
+
+	// One more report settles while gated — the writer still has not
+	// committed anything, and the dropped key stays dropped.
 	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
 
 	// Open the gate: the first Present finishes, its callbacks commit the
