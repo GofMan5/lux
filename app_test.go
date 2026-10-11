@@ -118,8 +118,9 @@ func (m *testModel) View(frame *Frame) {
 // lets the runtime suppress the farewell frame before the command's
 // goroutine is ever scheduled.
 func TestQuitSentinelRecognition(t *testing.T) {
-	if !isQuit(Quit()) || !isQuit(Quit()) {
-		t.Fatal("Quit() must be recognized as the canonical sentinel")
+	first, second := Quit(), Quit()
+	if !isQuit(first) || !isQuit(second) {
+		t.Fatal("every Quit() call must be recognized as the canonical sentinel")
 	}
 	if isQuit(nil) {
 		t.Fatal("nil command must not be recognized as the sentinel")
