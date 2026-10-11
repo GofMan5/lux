@@ -454,8 +454,13 @@ func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
 	}()
 
 	// Warm-up: the open sequence repaints a few times, then the settled page
-	// goes quiet; the newest buffer is the first thing the user sees.
-	start := backend.lastFrame(150 * time.Millisecond)
+	// goes quiet; the newest buffer is the first thing the user sees. The
+	// window is generous on purpose: the first frame is a cold start
+	// (process spin-up plus the first paint), and a slow shared CI runner
+	// under -race has once outlived a 150ms window with nothing else
+	// changed. A liveness barrier must bound a dead runtime, not a busy
+	// one; every content assertion below is untouched.
+	start := backend.lastFrame(2 * time.Second)
 	if start == nil {
 		t.Fatal("no frame presented during warm-up")
 	}
@@ -527,7 +532,8 @@ func TestWidgetsPageSortsFeatureTable(t *testing.T) {
 		done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240))
 	}()
 
-	if backend.lastFrame(150*time.Millisecond) == nil {
+	// Generous cold-start window; see TestCompactWidgetsPageKeepsControlsReachable.
+	if backend.lastFrame(2*time.Second) == nil {
 		t.Fatal("no frame presented during warm-up")
 	}
 	for i := 0; i < 12; i++ {

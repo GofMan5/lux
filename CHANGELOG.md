@@ -17,6 +17,14 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- The `examples/08-tour` interaction tests' warm-up barrier gives a cold
+  `lux.Run` two seconds to present its first frame instead of 150
+  milliseconds. A slow shared CI runner under `-race` once outlived the
+  old window with nothing else changed — the lane failed at warm-up and
+  passed the rerun — because the first frame is a cold start (process
+  spin-up plus first paint). A liveness barrier must bound a dead
+  runtime, not a busy one; every content assertion is untouched and the
+  dead-runtime case still fails.
 - `ui.TableState` no longer treats a header click as a row read: when the
   context turns a mouse press+release on an Activatable region into an
   `Activate` action, an activation whose Y lands on the header rows is
