@@ -17,6 +17,38 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Select component and popover recipe (`ui`, `examples/11-select`): a
+  dropdown control whose popup is placed by the new exported
+  `ui.SelectPlacement(anchor, state, count, canvasHeight)` — below the
+  anchor when it fits in the viewport, above when the bottom would clip
+  and the anchor leaves room, and on the anchor itself when neither
+  fits, so every popup is reachable. The component tracks its flip in
+  an unexported `anchorRow`, and because the hit-test region now
+  registers the full anchor-plus-popup rectangle the pointer math
+  translates a press through the same flip: a below-popup press reads
+  `Y-1` (the anchor row is not an option), a flipped-above popup reads
+  `Y` from its own first row, and the derived index is bounds-checked
+  against the option count before anything activates. The recipe is a
+  settings screen with four dropdowns — one that flips above near the
+  bottom edge, one on a right column reached by the mouse alone —
+  raw `BeginModal`/`EndModal` around `ui.Select` with the placement
+  helper deciding geometry, Escape and an outside press both arriving
+  as the one Dismiss action that reverts to the snapshotted pre-open
+  choice, and a commit updating the status line. Focus restores to the
+  anchor after dismissal, Tab traps inside the open modal, and with
+  nothing open Escape still quits. The interactive tests pin the whole
+  journey — keyboard open/navigate/commit, flip-above placement with
+  the pointer, below placement, mouse-only right-column flow, outside
+  dismissal with revert, the Tab trap and its clean release, and the
+  tiny-canvas degenerate placement — and re-learn the barrier lesson
+  twice more: a routed key after a modal-changing event needs the
+  committed frame in between (an Escape that meets the pre-modal tree
+  reaches the app-scope quit shortcut instead of dismissing; a Tab
+  that meets a still-committed modal tree traps a second time), and
+  the popup's last row sits at `anchor+4`, not `anchor+5` — a frame
+  predicate off by one row waits forever for a frame that will never
+  match. The widget's placement and press-translation rules are pinned
+  separately in `ui/select_test.go`.
 - Forms recipe (`examples/10-form`): a connection-profile editor that
   assembles a complete form from the plain widgets that already exist —
   labeled `ui.Input` fields with hints, a per-field validator that runs

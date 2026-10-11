@@ -267,6 +267,119 @@ func TestSelectDrawClipsPopupAndOptions(t *testing.T) {
 	}
 }
 
+// TestSelectDrawFlipsPopupAboveNearBottom pins the near-bottom placement:
+// when the popup does not fit below the anchor, it flips above the anchor
+// (keeping the anchor row) rather than clipping its options away. The rows
+// above the anchor map onto the same Offset viewport, so press rows and
+// drawn rows stay one rectangle.
+func TestSelectDrawFlipsPopupAboveNearBottom(t *testing.T) {
+	options := selectOptions()
+	buffer := render.NewBuffer(20, 10)
+	canvas := render.NewCanvas(buffer)
+	var ctx Context
+	ctx.begun = true
+	state := SelectState{Open: true, Selected: 2}
+	// Anchor at row 8: below needs 8+1+8 = 17 > 10 rows, above fits (8 >= 8).
+	ctx.Select("flip", canvas, render.Rect{X: 0, Y: 8, W: 20, H: 1}, &state, options, SelectStyle{})
+	region := ctx.building[0]
+	if region.bounds.Y != 0 || region.bounds.H != 9 {
+		t.Fatalf("open bounds = %#v; want {0 0 20 9} (popup above the anchor)", region.bounds)
+	}
+	if region.contentHeight != 9 {
+		t.Fatalf("open contentHeight = %d; want 9", region.contentHeight)
+	}
+	if got := bufferRow(buffer, 8); !strings.HasPrefix(got, " charlie ") || !strings.HasSuffix(got, "▾") {
+		t.Fatalf("anchor row = %q; want ` charlie ` prefix with ▾ at the last cell", got)
+	}
+	if got := bufferRow(buffer, 0); got != "   alpha" {
+		t.Fatalf("option row 0 = %q; want `   alpha`", got)
+	}
+	if got := bufferRow(buffer, 2); got != " > charlie" {
+		t.Fatalf("option row 2 = %q; want ` > charlie` (selected prefix)", got)
+	}
+	if got := bufferRow(buffer, 7); got != "   hotel" {
+		t.Fatalf("option row 7 = %q; want `   hotel` (last popup row above the anchor)", got)
+	}
+}
+
+// TestSelectStatePressPicksOptionsInFlippedPopup pins the press geometry of
+// the flipped placement: the draw sets anchorRow, and Apply maps the rows
+// above the anchor through Offset — the anchor row itself stays inert.
+func TestSelectStatePressPicksOptionsInFlippedPopup(t *testing.T) {
+	options := selectOptions()
+	buffer := render.NewBuffer(20, 10)
+	canvas := render.NewCanvas(buffer)
+	var ctx Context
+	ctx.begun = true
+	state := SelectState{Open: true, Selected: 5}
+	ctx.Select("flip", canvas, render.Rect{X: 0, Y: 8, W: 20, H: 1}, &state, options, SelectStyle{})
+	if state.anchorRow != 8 {
+		t.Fatalf("anchorRow = %d; want 8 (anchor last in the flipped rect)", state.anchorRow)
+	}
+	// Region row 0 is the first option above the anchor.
+	if changed, _ := state.Apply(selectMouse(Scroll, event.MousePress, event.MouseLeft, 0, 0), len(options)); !changed || state.Selected != 0 {
+		t.Fatalf("row 0 press: changed=%v selected=%d; want true 0", changed, state.Selected)
+	}
+	// The anchor row is inert wherever it sits.
+	if changed, _ := state.Apply(selectMouse(Scroll, event.MousePress, event.MouseLeft, 0, 8), len(options)); changed || state.Selected != 0 {
+		t.Fatalf("anchor press: changed=%v selected=%d; want false 0", changed, state.Selected)
+	}
+	// Past the region rect the press is inert.
+	if changed, _ := state.Apply(selectMouse(Scroll, event.MousePress, event.MouseLeft, 0, 9), len(options)); changed || state.Selected != 0 {
+		t.Fatalf("past-end press: changed=%v selected=%d; want false 0", changed, state.Selected)
+	}
+	// A scrolled viewport maps deeper rows through Offset.
+	state.Offset = 2
+	if changed, _ := state.Apply(selectMouse(Scroll, event.MousePress, event.MouseLeft, 0, 1), len(options)); !changed || state.Selected != 3 {
+		t.Fatalf("row 1 at offset 2: changed=%v selected=%d; want true 3", changed, state.Selected)
+	}
+	// The release arrives as Activate and commits the picked option.
+	if changed, activated := state.Apply(selectMouse(Activate, event.MouseRelease, event.MouseLeft, 0, 1), len(options)); !changed || !activated || state.Open {
+		t.Fatalf("release: changed=%v activated=%v open=%v; want true true false", changed, activated, state.Open)
+	}
+}
+
+// TestSelectPlacement pins the placement decision table the draw and the
+// modal-wrapper recipe both consume.
+func TestSelectPlacement(t *testing.T) {
+	options := selectOptions()
+	anchor := render.Rect{X: 2, Y: 4, W: 10, H: 1}
+	cases := []struct {
+		name  string
+		state SelectState
+		want  render.Rect
+	}{
+		{"closed returns the anchor", SelectState{}, anchor},
+		{"below fits", SelectState{Open: true}, render.Rect{X: 2, Y: 4, W: 10, H: 9}},
+		{"near bottom flips above", SelectState{Open: true}, render.Rect{X: 2, Y: 0, W: 10, H: 9}},
+		{"neither side fits stays below", SelectState{Open: true}, render.Rect{X: 2, Y: 6, W: 10, H: 9}},
+		{"popup rows override", SelectState{Open: true, PopupRows: 2}, render.Rect{X: 2, Y: 4, W: 10, H: 3}},
+	}
+	for _, test := range cases {
+		canvasHeight := 13
+		anchorY := 4
+		switch test.name {
+		case "near bottom flips above":
+			anchorY, canvasHeight = 8, 10 // below needs 17 > 10, above fits
+		case "neither side fits stays below":
+			anchorY, canvasHeight = 6, 7 // below 15 > 7, above 6 < 8
+		case "popup rows override":
+			anchorY, canvasHeight = 6, 7 // rows 2: below 6+1+2=9 > 7, above 6 >= 2
+		}
+		probe := anchor
+		probe.Y = anchorY
+		if got := SelectPlacement(probe, &test.state, len(options), canvasHeight); got != test.want {
+			t.Fatalf("%s: SelectPlacement = %#v; want %#v", test.name, got, test.want)
+		}
+	}
+	if got := SelectPlacement(anchor, nil, len(options), 13); got != anchor {
+		t.Fatalf("nil state: SelectPlacement = %#v; want the anchor %#v", got, anchor)
+	}
+	if got := SelectPlacement(anchor, &SelectState{Open: true}, 0, 13); got != anchor {
+		t.Fatalf("zero options: SelectPlacement = %#v; want the anchor (rows clamp to 0)", got)
+	}
+}
+
 // BenchmarkSelectDrawOpen prices the open dropdown repaint: anchor row plus
 // eight option rows with prefix clipping.
 func BenchmarkSelectDrawOpen(b *testing.B) {

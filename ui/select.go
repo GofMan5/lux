@@ -17,6 +17,14 @@ type SelectState struct {
 	Offset    int
 	Open      bool
 	PopupRows int
+
+	// anchorRow is the anchor row's offset inside the rect the open popup
+	// registered: 0 when the popup opens below the anchor, rows when it
+	// flipped above. Select sets it every draw and Apply reads it to
+	// translate press rows, so the press geometry and the drawn geometry
+	// are always one rectangle. The zero value is the below placement,
+	// which keeps a hand-built state pressable.
+	anchorRow int
 }
 
 // SelectStyle defines the closed box and the open popup states. Zero values
@@ -48,6 +56,28 @@ func (s *SelectState) popupRows(count int) int {
 		rows = defaultSelectPopupRows
 	}
 	return min(rows, max(count, 0))
+}
+
+// SelectPlacement returns the rect an open select occupies, anchor row
+// included: below the anchor when the popup fits there, above it when only
+// that fits, and below (canvas-clipped) when neither does. canvasHeight is
+// the height of the same canvas the select draws into, so the decision
+// matches the committed region exactly. A closed or nil state returns the
+// anchor itself. ui.Select registers this rect, and an application that
+// wraps its open popup in a modal — for capture, outside-click dismissal,
+// and focus restore — passes the same arguments to get the same geometry.
+func SelectPlacement(anchor render.Rect, state *SelectState, count, canvasHeight int) render.Rect {
+	if state == nil || !state.Open {
+		return anchor
+	}
+	rows := state.popupRows(count)
+	if rows <= 0 {
+		return anchor
+	}
+	if anchor.Y+1+rows <= canvasHeight || anchor.Y < rows {
+		return render.Rect{X: anchor.X, Y: anchor.Y, W: anchor.W, H: 1 + rows}
+	}
+	return render.Rect{X: anchor.X, Y: anchor.Y - rows, W: anchor.W, H: 1 + rows}
 }
 
 // Apply handles one routed action. The closed box opens on activation or on
@@ -127,9 +157,19 @@ func (s *SelectState) Apply(action Action, count int) (changed, activated bool) 
 					// for its release, which arrives as Activate and opens.
 					break
 				}
-				if action.Y >= 1 {
-					if index := s.Offset + action.Y - 1; action.Y-1 < rows && index < count {
-						s.Selected = index
+				// The anchor row is inert wherever the placement put it;
+				// every other row maps through Offset. With the popup
+				// flipped above, the options start at region row 0 and the
+				// anchor ends the rect.
+				first := 1
+				if s.anchorRow > 0 {
+					first = 0
+				}
+				if action.Y != s.anchorRow {
+					if row := action.Y - first; row >= 0 && row < rows {
+						if index := s.Offset + row; index >= 0 && index < count {
+							s.Selected = index
+						}
 					}
 				}
 			}
@@ -149,11 +189,14 @@ func (s *SelectState) Apply(action Action, count int) (changed, activated bool) 
 }
 
 // Select registers and draws a dropdown. Closed, it is one row showing the
-// current option; open, the same id registers the anchor row plus the popup
-// below it, drawn over whatever it overlaps — register the select after its
-// neighbours so the popup wins pointer hits. The popup never auto-flips
-// above the anchor; Escape and click-outside close are the application's
-// to handle (plain Escape is not routed to regions).
+// current option; open, the same id registers the anchor row plus the
+// popup, drawn over whatever it overlaps — register the select after its
+// neighbours so the popup wins pointer hits. The popup prefers the space
+// below the anchor and flips above it when only that fits;
+// SelectPlacement is that decision, shared so an application can wrap the
+// open popup in a modal of its own. Escape and click-outside close are the
+// application's to handle: plain Escape is not routed to regions, and a
+// press outside the region routes elsewhere or nowhere.
 func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state *SelectState, options []string, style SelectStyle) {
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
@@ -172,11 +215,15 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 		flags |= Disabled
 	}
 
-	visible := bounds
-	if state.Open {
-		visible = render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: 1 + rows}
-	}
+	visible := SelectPlacement(bounds, state, count, canvas.Bounds().H)
 	visible = visible.Intersect(canvas.Bounds())
+	state.anchorRow = 0
+	if state.Open {
+		// Relative to the committed region, so press rows and drawn rows
+		// agree; clamped because a degenerate anchor above the canvas
+		// still starts the options at row 0.
+		state.anchorRow = max(bounds.Y-visible.Y, 0)
+	}
 	if state.Open {
 		c.RegionWithOptions(id, canvas, visible, flags, RegionOptions{
 			ContentHeight: 1 + min(rows, max(count-state.Offset, 0)),
@@ -211,17 +258,22 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 	case c.Hovered(id):
 		visual = fallbackStyle(style.Hovered, visual)
 	}
-	canvas.Fill(render.Rect{X: visible.X, Y: visible.Y, W: visible.W, H: 1}, " ", visual)
+	anchorY := visible.Y + state.anchorRow
+	canvas.Fill(render.Rect{X: visible.X, Y: anchorY, W: visible.W, H: 1}, " ", visual)
 	text := clipTextEllipsis(current, max(visible.W-2, 0), canvas.WidthPolicy(), "…")
-	canvas.Text(visible.X+1, visible.Y, text, visual)
+	canvas.Text(visible.X+1, anchorY, text, visual)
 	if visible.W > 1 {
-		canvas.Text(visible.X+visible.W-1, visible.Y, marker, visual)
+		canvas.Text(visible.X+visible.W-1, anchorY, marker, visual)
 	}
 
 	if !state.Open {
 		return
 	}
 	popup := render.Rect{X: visible.X, Y: visible.Y + 1, W: visible.W, H: rows}
+	if state.anchorRow > 0 {
+		// Flipped above: the options fill the rows the anchor ends.
+		popup = render.Rect{X: visible.X, Y: visible.Y, W: visible.W, H: state.anchorRow}
+	}
 	if popup.Empty() {
 		return
 	}
