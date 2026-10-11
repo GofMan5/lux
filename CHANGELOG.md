@@ -27,6 +27,20 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `examples/12-async`, the async feedback example: a feeds app whose loads
+  are commands, not calls — chunked streaming with partial rows on screen,
+  stale-previous-answer on refresh, cancellation, deferred refresh replay
+  after the first replay finishes, a cancellable background index job with
+  a progress gauge, table select/sort/read, error phases with mouse retry
+  through the always-in-place Reload button, and a tiny-terminal guard.
+  The notice row follows the newest event (an index rebuilt replaces an
+  older load failure; the failure itself stays in the status verdict and
+  the empty-state body until a reload succeeds), and the footer degrades
+  to the escape hint below its width budget. Six tests cover the run
+  loop's routing (stream lifecycle, failure/retry, job progress) and,
+  separately, every phase painted directly — skeleton, partial, ready,
+  stale, failure, gauged, rebuilt — asserting the header, button, notice,
+  and footer rows never move.
 - The `examples/10-form` interactive tests now ride the committed-state
   beacon too: the same conversion proven on CI run 38119579494 for
   09-procs and 11-select. `newFormApp` takes a committed channel,
