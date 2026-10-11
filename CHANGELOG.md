@@ -185,6 +185,20 @@ semver: breaking changes land only in a new major.
   Text, Selected reads Accent, DisabledStyle reads Danger), keeping the
   whole control set on one resolution rule.
 
+- The `examples/09-procs` reference app now styles its table through the
+  theme instead of a hand-set `TableStyle`: `newProcsApp` installs the
+  app palette once with `Context.UseTheme` (Text/Muted for body and
+  header, Accent for a selection without focus, Focus for the focused
+  selected row), and the `View` call passes a zero `TableStyle`, so
+  every table state resolves through those roles. Rendering is
+  unchanged — the explicit styles the theme replaces were the same
+  colors — but restyling the app is now a single theme swap instead of
+  per-widget style blocks, and a test pins both directions: the roles
+  the app actually shows, and the zero-`Focus` opt-out falling back to
+  `Accent`. Chrome that is not a widget state (borders, the red kill
+  ask, status and detail text) keeps explicit styles by design, and
+  `Danger` stays unset because the app shows no disabled rows.
+
 ### Changed
 
 - Under `DefaultTheme` (and any theme that sets the new `Focus` role), a

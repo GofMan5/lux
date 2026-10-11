@@ -254,6 +254,12 @@ reverse disabled), so the built-in look survives monochrome terminals and
 redirected output while color themes stay opt-in, and focus stays visible
 next to a selection without any hue — `ui.DefaultTheme()` is a function,
 so restyling means passing your own value, never mutating a shared one.
+`examples/09-procs` runs the recipe for real: its constructor installs
+the app palette through `UseTheme`, the table is drawn with a zero
+`TableStyle`, and a test pins that swapping the palette restyles the
+table with no style block to edit — while layout chrome (borders, the
+kill ask, status lines) keeps explicit styles, because those are facts
+of the layout rather than themeable control states.
 
 The window title is a lifecycle claim, not a per-frame one. `lux.WithTitle`
 writes the title through OSC 0 bracketed by the XTWINOPS title stack — the

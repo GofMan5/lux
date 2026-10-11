@@ -704,6 +704,52 @@ func TestProcessSourceListsRealProcesses(t *testing.T) {
 	}
 }
 
+// TestProcsPaletteFlowsThroughTheme pins the stage-3 recipe: the app
+// names its palette once, through Context.UseTheme, and the table's
+// zero-value styles resolve through the roles. The first paint checks
+// the roles this app actually shows — Focus for the selected row of the
+// focused table, Text for body rows, Muted (underlined) for the header.
+// The second paint swaps the palette with zero Focus — the zero-role
+// opt-out — so the focused selected row falls back to the Accent role
+// live: restyling is a theme swap, not an edit to any style block.
+func TestProcsPaletteFlowsThroughTheme(t *testing.T) {
+	app := newProcsApp(nil, nil)
+	app.width, app.height = 80, 24
+	app.phase = phaseData
+	app.rows = seedProcs(4)
+	app.rebuildOrder()
+
+	paint := func() *render.Buffer {
+		frame := &lux.Frame{Canvas: render.NewCanvas(render.NewBuffer(80, 24)), Capabilities: capability.Set{Interactive: true, Unicode: true, Color: capability.TrueColor}}
+		app.View(frame)
+		return frame.Canvas.Buffer()
+	}
+
+	painted := paint()
+	if got := painted.Cell(2, 3).Style; got.Foreground != background || got.Background != cyan {
+		t.Fatalf("focused selected row must paint the theme Focus role: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+	if got := painted.Cell(2, 4).Style; got.Foreground != ink {
+		t.Fatalf("body row must paint the theme Text role: fg=%v", got.Foreground)
+	}
+	if got := painted.Cell(2, 2).Style; got.Foreground != muted || got.Attrs&render.AttrUnderline == 0 {
+		t.Fatalf("header must paint the theme Muted role underlined: fg=%v attrs=%v", got.Foreground, got.Attrs)
+	}
+
+	app.ui.UseTheme(ui.Theme{
+		Text:   render.Style{Foreground: muted},
+		Muted:  render.Style{Foreground: ink},
+		Accent: render.Style{Foreground: background, Background: violet},
+	})
+	painted = paint()
+	if got := painted.Cell(2, 3).Style; got.Background != violet {
+		t.Fatalf("zero Focus role must fall back to Accent for the selected row: bg=%v", got.Background)
+	}
+	if got := painted.Cell(2, 4).Style; got.Foreground != muted {
+		t.Fatalf("restyled body row must paint the swapped Text role: fg=%v", got.Foreground)
+	}
+}
+
 func TestProcessSourceKillMissingPidFails(t *testing.T) {
 	source, err := newProcessSource()
 	if err != nil {

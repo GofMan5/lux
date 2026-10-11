@@ -121,7 +121,23 @@ type procsState struct {
 }
 
 func newProcsApp(source processSource, observe chan procsState) *procsApp {
-	return &procsApp{source: source, observe: observe}
+	app := &procsApp{source: source, observe: observe}
+	// The palette is named once, here, and the widgets resolve it: the
+	// table below draws with a zero TableStyle, so its cells read the
+	// Text role, its header the Muted role (underlined by the widget),
+	// its focused selected row the Focus role, and its unfocused
+	// selection the Accent role. Danger stays zero — this app shows no
+	// disabled rows, and an empty role is an opt-out, not a promise.
+	// Chrome that is not a widget state (borders, the red kill ask,
+	// status lines, the detail pane) keeps its explicit styles: those
+	// are facts of the layout, not themeable control states.
+	app.ui.UseTheme(ui.Theme{
+		Text:   render.Style{Foreground: ink, Background: background},
+		Muted:  render.Style{Foreground: muted, Background: background},
+		Accent: render.Style{Foreground: background, Background: violet},
+		Focus:  render.Style{Foreground: background, Background: cyan},
+	})
+	return app
 }
 
 // issueLoad starts a load for the current filter, or defers it while one
@@ -444,12 +460,10 @@ func (app *procsApp) View(frame *lux.Frame) {
 		canvas.Text(11, 1, filterText, render.Style{Foreground: ink, Background: background})
 	}
 
-	style := ui.TableStyle{
-		Normal:   render.Style{Foreground: ink, Background: background},
-		Header:   render.Style{Foreground: muted, Background: background, Attrs: render.AttrUnderline},
-		Selected: render.Style{Foreground: background, Background: violet},
-		Focused:  render.Style{Foreground: background, Background: cyan},
-	}
+	// The table's styles are all theme roles now: a zero TableStyle
+	// means cells, header, selection, and focus resolve through the
+	// palette newProcsApp installed.
+	var style ui.TableStyle
 	body := render.Rect{X: 2, Y: 2, W: area.W - 4, H: area.H - 10}
 	switch app.phase {
 	case phaseLoading:
