@@ -20,12 +20,16 @@ import (
 	"github.com/GofMan5/lux/ui"
 )
 
+// The palette moved to the library after two real screens converged on
+// it: ui.ReferencePalette is now the single source, and the local names
+// below alias it so the chrome and glyph styles stay short.
 var (
-	ink        = render.RGBColor(229, 231, 235)
-	muted      = render.RGBColor(107, 114, 128)
-	violet     = render.RGBColor(139, 92, 246)
-	cyan       = render.RGBColor(34, 211, 238)
-	background = render.RGBColor(8, 10, 18)
+	palette    = ui.ReferencePalette()
+	ink        = palette.Ink
+	muted      = palette.Muted
+	violet     = palette.Violet
+	cyan       = palette.Cyan
+	background = palette.Background
 )
 
 // tableColumns is package-level so the routed Apply and the draw call share
@@ -141,19 +145,14 @@ func newCatalog() *catalog {
 	for i := 0; i < 16; i++ {
 		app.load = append(app.load, .5+.5*math.Sin(float64(i)*2*math.Pi/16))
 	}
-	// The palette is named once, as a theme: every selection widget below
-	// (table, tabs, checkbox, radio, select, tree) resolves its zero
-	// styles through the roles — Text body, Muted structure, Accent
-	// selection, Focus focus. The glyph widgets (gauge, spinner,
-	// sparkline) keep explicit styles in View: their colors are data,
-	// not selection. Danger stays unset: this screen has no disabled
-	// controls to show.
-	app.ui.UseTheme(ui.Theme{
-		Text:   render.Style{Foreground: ink, Background: background},
-		Muted:  render.Style{Foreground: muted, Background: background},
-		Accent: render.Style{Foreground: background, Background: violet},
-		Focus:  render.Style{Foreground: background, Background: cyan},
-	})
+	// The palette is named once, in the library, as a theme: every
+	// selection widget below (table, tabs, checkbox, radio, select,
+	// tree) resolves its zero styles through the roles — Text body,
+	// Muted structure, Accent selection, Focus focus. The glyph widgets
+	// (gauge, spinner, sparkline) keep explicit styles in View: their
+	// colors are data, not selection. Danger stays unset: this screen
+	// has no disabled controls to show.
+	app.ui.UseTheme(palette.Theme())
 	return app
 }
 

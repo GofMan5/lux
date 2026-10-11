@@ -223,6 +223,25 @@ semver: breaking changes land only in a new major.
   zero `Focus` role falls back to `Accent`, and proves the swap cannot
   reach the glyph widgets.
 
+- The shared palette is now a library value: `ui.Palette` is a named
+  color set (Background/Ink/Muted/Violet/Cyan — the vocabulary the two
+  reference screens converged on), `ui.ReferencePalette()` returns that
+  palette, and `Palette.Theme()` maps it onto the roles: Text and Muted
+  paint their color on the background, Accent and Focus paint the
+  background on the fill color, and Danger stays the zero opt-out. It
+  is a function, not a variable, for the same reason `DefaultTheme` is
+  — restyling means passing your own value, never mutating a shared
+  one — and it is one proven palette, not the start of a preset
+  registry. `examples/09-procs` and `examples/05-widgets` no longer
+  define the five colors themselves: their local names alias
+  `ui.ReferencePalette()`, and their constructors install
+  `palette.Theme()`, so one edit to the library palette restyles the
+  theme roles and the explicit chrome of both screens. Two `ui` tests
+  pin the extraction — the palette values with the exact role mapping,
+  and a different palette mapping through the same recipe (the mapping
+  is a pure function of its value) — while the per-app palette tests,
+  unchanged, still pin the live rendering path each screen shows.
+
 ### Changed
 
 - Under `DefaultTheme` (and any theme that sets the new `Focus` role), a

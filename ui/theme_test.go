@@ -186,3 +186,63 @@ func TestThemeDefaultPaintsBoldSelectedTabs(t *testing.T) {
 		t.Fatalf("unselected tab under DefaultTheme should be dim, got %#v", muted.Style)
 	}
 }
+
+func TestReferencePalettePinsTheSharedScreenColors(t *testing.T) {
+	want := Palette{
+		Background: render.RGBColor(8, 10, 18),
+		Ink:        render.RGBColor(229, 231, 235),
+		Muted:      render.RGBColor(107, 114, 128),
+		Violet:     render.RGBColor(139, 92, 246),
+		Cyan:       render.RGBColor(34, 211, 238),
+	}
+	if got := ReferencePalette(); got != want {
+		t.Fatalf("ReferencePalette() = %#v, want the palette both reference screens run on %#v", got, want)
+	}
+
+	theme := ReferencePalette().Theme()
+	if theme.Text != (render.Style{Foreground: want.Ink, Background: want.Background}) {
+		t.Fatalf("Text role = %#v, want ink on background", theme.Text)
+	}
+	if theme.Muted != (render.Style{Foreground: want.Muted, Background: want.Background}) {
+		t.Fatalf("Muted role = %#v, want muted on background", theme.Muted)
+	}
+	if theme.Accent != (render.Style{Foreground: want.Background, Background: want.Violet}) {
+		t.Fatalf("Accent role = %#v, want background on violet", theme.Accent)
+	}
+	if theme.Focus != (render.Style{Foreground: want.Background, Background: want.Cyan}) {
+		t.Fatalf("Focus role = %#v, want background on cyan", theme.Focus)
+	}
+	if theme.Danger != (render.Style{}) {
+		t.Fatalf("Danger role = %#v, want the zero opt-out: the reference screens show no disabled controls", theme.Danger)
+	}
+}
+
+func TestPaletteThemeIsAPureRecipe(t *testing.T) {
+	// A different palette must map through the same recipe, not the
+	// shared constants: selection and focus paint the palette's own
+	// background on its fill color, proving Theme() derives from the
+	// value it is called on.
+	p := Palette{
+		Background: render.RGBColor(1, 2, 3),
+		Ink:        render.RGBColor(4, 5, 6),
+		Muted:      render.RGBColor(7, 8, 9),
+		Violet:     render.RGBColor(10, 11, 12),
+		Cyan:       render.RGBColor(13, 14, 15),
+	}
+	theme := p.Theme()
+	if theme.Text != (render.Style{Foreground: p.Ink, Background: p.Background}) {
+		t.Fatalf("Text recipe = %#v", theme.Text)
+	}
+	if theme.Muted != (render.Style{Foreground: p.Muted, Background: p.Background}) {
+		t.Fatalf("Muted recipe = %#v", theme.Muted)
+	}
+	if theme.Accent != (render.Style{Foreground: p.Background, Background: p.Violet}) {
+		t.Fatalf("Accent recipe = %#v", theme.Accent)
+	}
+	if theme.Focus != (render.Style{Foreground: p.Background, Background: p.Cyan}) {
+		t.Fatalf("Focus recipe = %#v", theme.Focus)
+	}
+	if theme.Danger != (render.Style{}) {
+		t.Fatalf("Danger recipe = %#v, want zero (palette carries no disabled color)", theme.Danger)
+	}
+}

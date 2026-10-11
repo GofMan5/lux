@@ -22,13 +22,17 @@ import (
 	"github.com/GofMan5/lux/ui"
 )
 
+// The palette moved to the library after two real screens converged on
+// it: ui.ReferencePalette is now the single source, and the local names
+// below alias it so the chrome calls stay short and readable.
 var (
-	ink        = render.RGBColor(229, 231, 235)
-	muted      = render.RGBColor(107, 114, 128)
-	violet     = render.RGBColor(139, 92, 246)
-	cyan       = render.RGBColor(34, 211, 238)
+	palette    = ui.ReferencePalette()
+	ink        = palette.Ink
+	muted      = palette.Muted
+	violet     = palette.Violet
+	cyan       = palette.Cyan
+	background = palette.Background
 	red        = render.RGBColor(248, 113, 113) // the destructive ask, never data rows
-	background = render.RGBColor(8, 10, 18)
 )
 
 // tableColumns is package-level so the routed Apply and the draw call share
@@ -122,21 +126,16 @@ type procsState struct {
 
 func newProcsApp(source processSource, observe chan procsState) *procsApp {
 	app := &procsApp{source: source, observe: observe}
-	// The palette is named once, here, and the widgets resolve it: the
-	// table below draws with a zero TableStyle, so its cells read the
-	// Text role, its header the Muted role (underlined by the widget),
-	// its focused selected row the Focus role, and its unfocused
-	// selection the Accent role. Danger stays zero — this app shows no
-	// disabled rows, and an empty role is an opt-out, not a promise.
-	// Chrome that is not a widget state (borders, the red kill ask,
-	// status lines, the detail pane) keeps its explicit styles: those
-	// are facts of the layout, not themeable control states.
-	app.ui.UseTheme(ui.Theme{
-		Text:   render.Style{Foreground: ink, Background: background},
-		Muted:  render.Style{Foreground: muted, Background: background},
-		Accent: render.Style{Foreground: background, Background: violet},
-		Focus:  render.Style{Foreground: background, Background: cyan},
-	})
+	// The palette is named once, in the library, and the widgets
+	// resolve it: the table below draws with a zero TableStyle, so its
+	// cells read the Text role, its header the Muted role (underlined
+	// by the widget), its focused selected row the Focus role, and its
+	// unfocused selection the Accent role. Danger stays zero — this app
+	// shows no disabled rows, and an empty role is an opt-out, not a
+	// promise. Chrome that is not a widget state (borders, the red kill
+	// ask, status lines, the detail pane) keeps its explicit styles:
+	// those are facts of the layout, not themeable control states.
+	app.ui.UseTheme(palette.Theme())
 	return app
 }
 

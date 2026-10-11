@@ -255,17 +255,21 @@ redirected output while color themes stay opt-in, and focus stays visible
 next to a selection without any hue — `ui.DefaultTheme()` is a function,
 so restyling means passing your own value, never mutating a shared one.
 `examples/09-procs` and `examples/05-widgets` run the recipe for real on
-two screens: each constructor installs the app palette through
-`UseTheme`, every selection widget (the table, tabs, checkbox, radio
-group, select, tree) is drawn with a zero style struct, and a test pins
-that swapping the palette restyles all of them with no style block to
-edit. Two deliberate boundaries: layout chrome (borders, labels, status
-lines) keeps explicit styles, because those are facts of the layout
-rather than themeable control states; and the glyph widgets — gauge,
-spinner, sparkline — keep explicit styles too, because their colors are
-data painted as fg-colored glyphs, and a role would invert the fg/bg
-semantics (an Accent gauge fill would draw dark blocks on a violet
-background).
+two screens — and since both converged on the same colors, that palette
+now lives in the library: `ui.ReferencePalette()` returns the shared
+`ui.Palette`, `Palette.Theme()` maps it onto the roles, and each
+screen's constructor installs it with `UseTheme` while its local color
+names alias the same value, so one edit restyles the theme roles and
+the explicit chrome of both screens. Every selection widget (the table,
+tabs, checkbox, radio group, select, tree) is drawn with a zero style
+struct, and a test pins that swapping the palette restyles all of them
+with no style block to edit. Two deliberate boundaries: layout chrome
+(borders, labels, status lines) keeps explicit styles, because those
+are facts of the layout rather than themeable control states; and the
+glyph widgets — gauge, spinner, sparkline — keep explicit styles too,
+because their colors are data painted as fg-colored glyphs, and a role
+would invert the fg/bg semantics (an Accent gauge fill would draw dark
+blocks on a violet background).
 
 The window title is a lifecycle claim, not a per-frame one. `lux.WithTitle`
 writes the title through OSC 0 bracketed by the XTWINOPS title stack — the
