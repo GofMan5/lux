@@ -126,3 +126,55 @@ func TestControlsTinyAndDisabledAreSafe(t *testing.T) {
 		t.Fatalf("disabled regions = %#v", ctx.building)
 	}
 }
+
+// TestListDisabledAtRows pins the per-row disabled contract: rows the
+// callback marks disabled paint DisabledStyle even when selected, while
+// the selection marker stays on the selected row and enabled rows keep
+// their own styling; the region itself is not flag-disabled, because
+// whether an activation runs is the model's call.
+func TestListDisabledAtRows(t *testing.T) {
+	normal := render.Style{Foreground: render.RGBColor(1, 2, 3)}
+	selected := render.Style{Foreground: render.RGBColor(4, 5, 6)}
+	disabled := render.Style{Foreground: render.RGBColor(7, 8, 9)}
+	buffer := render.NewBuffer(16, 4)
+	canvas := render.NewCanvas(buffer)
+	var ctx Context
+	ctx.begun = true
+
+	style := ListStyle{Normal: normal, Selected: selected, DisabledStyle: disabled}
+	style.DisabledAt = func(index int) bool { return index == 1 }
+
+	state := ListState{Selected: 1}
+	ctx.List("list", canvas, render.Rect{X: 0, Y: 0, W: 16, H: 4}, &state,
+		[]string{"alpha", "beta", "gamma"}, style)
+	if got := buffer.Cell(4, 1).Style.Foreground; got != disabled.Foreground {
+		t.Fatalf("disabled selected row fg = %v; want %v", got, disabled.Foreground)
+	}
+	if got := buffer.Cell(0, 1).Grapheme; got != ">" {
+		t.Fatalf("disabled selected row must keep its marker: %q", got)
+	}
+	if flags := ctx.building[0].flags; flags&Disabled != 0 {
+		t.Fatalf("per-row disabled must not flag the region: %v", flags)
+	}
+	if got := buffer.Cell(0, 0).Style.Foreground; got != normal.Foreground {
+		t.Fatalf("enabled row fg = %v; want %v", got, normal.Foreground)
+	}
+	if got := buffer.Cell(0, 2).Style.Foreground; got != normal.Foreground {
+		t.Fatalf("unselected row fg = %v; want %v", got, normal.Foreground)
+	}
+
+	// A disabled row outside the selection paints the same way; only the
+	// marker distinguishes the selected row. A fresh Context stands in
+	// for the next frame.
+	state = ListState{Selected: 0}
+	ctx = Context{}
+	ctx.begun = true
+	ctx.List("list", canvas, render.Rect{X: 0, Y: 0, W: 16, H: 4}, &state,
+		[]string{"alpha", "beta", "gamma"}, style)
+	if got := buffer.Cell(4, 1).Style.Foreground; got != disabled.Foreground {
+		t.Fatalf("disabled unselected row fg = %v; want %v", got, disabled.Foreground)
+	}
+	if got := buffer.Cell(0, 0).Grapheme; got != ">" {
+		t.Fatalf("enabled selected row must show its marker: %q", got)
+	}
+}

@@ -158,7 +158,14 @@ type ListStyle struct {
 	Hovered       render.Style
 	DisabledStyle render.Style
 	Disabled      bool
-	Marker        string
+	// DisabledAt marks individual rows disabled; nil keeps every row
+	// enabled. A disabled row paints DisabledStyle even when selected,
+	// while the selection marker still shows which row is active, and
+	// whether an activation runs stays the model's call. The first
+	// consumer is a command palette whose unavailable commands gray out
+	// with their reasons shown nearby.
+	DisabledAt func(index int) bool
+	Marker     string
 }
 
 // List registers and draws a focusable, scrollable list. Apply its routed
@@ -197,7 +204,7 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 			break
 		}
 		visual := body
-		if style.Disabled {
+		if style.Disabled || style.DisabledAt != nil && style.DisabledAt(index) {
 			visual = themedStyle(style.DisabledStyle, theme.Danger, fallbackStyle(style.DisabledStyle, visual))
 		} else if index == state.Selected {
 			visual = themedStyle(style.Selected, theme.Accent, fallbackStyle(style.Selected, visual))

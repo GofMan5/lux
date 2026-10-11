@@ -17,6 +17,27 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Command palette in the process explorer (`examples/09-procs`, `ui`):
+  Ctrl+P opens a centered modal listing the app's commands — kill
+  selected, refresh, clear filter, quit — with a case-insensitive
+  substring filter over the labels, Up/Down selection, and Enter
+  running the highlighted command through the app's existing update
+  seams; the palette owns no separate pipeline, closes after running
+  a command, and Escape or a click outside dismisses it. To make
+  unavailable commands honest, `ui.ListStyle` gained a per-row
+  `DisabledAt` callback: rows it marks paint `DisabledStyle` even
+  when selected — the selection marker stays, and whether an
+  activation actually runs remains the model's call, with a disabled
+  command explaining its reason in the palette footer instead of
+  running. The interactive tests pin the whole journey — open,
+  filter, disabled painting and inertness, commands changing real
+  state, close-by-escape and close-by-outside-click — and encode the
+  writer-goroutine commit discipline as a reusable `commitFrames`
+  barrier: a keystroke after a palette-driven state change waits for
+  a frame on the wire, because the writer presents and commits frames
+  sequentially, and a state observed mid-View can otherwise route the
+  next key against a stale committed snapshot.
+
 - Application-result seam (`event.Message` and `event.Event.Data`): a
   Command can now report application-level results back to
   `Model.Update` as an `event.Message` event whose `Data` payload is

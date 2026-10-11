@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -291,6 +292,23 @@ func drainFrames(frames <-chan *render.Buffer) {
 			return
 		}
 	}
+}
+
+// commitFrames drains the frame backlog, provokes one repaint, and waits
+// for a frame on the wire. waitStateWhere observes the state from inside
+// View — before the writer goroutine presents the frame and runs its
+// OnPresented commit — so a keystroke sent right after a matching state
+// can still route against the previous snapshot: an 'n' typed right
+// after a palette-run lands in the just-closed palette's input instead
+// of the confirm ask. The writer is sequential, so a frame on the wire
+// proves the preceding frame's commit ran; F6 is bound nowhere, and
+// every event dirties the model, so the press repaints without touching
+// any state under test.
+func commitFrames(t *testing.T, backend *interactiveBackend) *render.Buffer {
+	t.Helper()
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	return waitFrame(t, backend.frames)
 }
 
 func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
@@ -894,5 +912,354 @@ func TestProcsResizeGateKeepsTasksAndFocus(t *testing.T) {
 		}
 	case <-time.After(hangTimeout):
 		t.Fatal("escape did not quit")
+	}
+}
+
+// ctrlP synthesizes the palette chord the way a real terminal delivers
+// it: Ctrl riding a rune press.
+func ctrlP() event.Event {
+	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: event.KeyRune, Rune: 'p', Mod: event.ModCtrl}}
+}
+
+// findRow returns the first painted row containing text, failing the
+// test when nothing matches.
+func findRow(t *testing.T, painted *render.Buffer, text string) int {
+	t.Helper()
+	for y := 0; y < painted.Bounds().H; y++ {
+		if strings.Contains(rowText(painted, y), text) {
+			return y
+		}
+	}
+	t.Fatalf("no painted row contains %q", text)
+	return -1
+}
+
+// forbidRow asserts no painted row contains text.
+func forbidRow(t *testing.T, painted *render.Buffer, text string) {
+	t.Helper()
+	for y := 0; y < painted.Bounds().H; y++ {
+		if strings.Contains(rowText(painted, y), text) {
+			t.Fatalf("painted row %d must not contain %q: %q", y, text, rowText(painted, y))
+		}
+	}
+}
+
+// TestCommandPaletteLifecycle drives the palette through its interactive
+// surface: open with Ctrl+P, live filtering, the no-result state, inert
+// Enter on a no-match and on a disabled command with its reason, close
+// with Escape and an outside click, filter reset on reopen, and focus
+// handing back to the table.
+func TestCommandPaletteLifecycle(t *testing.T) {
+	full := seedProcs(40)
+	source := newScriptedSource(scriptStep{delay: 40 * time.Millisecond, rows: full})
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newProcsApp(source, make(chan procsState, 64))
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+
+	waitFrame(t, backend.frames)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
+	// The F6 dance: a second frame on the wire proves the first frame's
+	// present callbacks ran, so the Ctrl+P shortcut is committed.
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrame(t, backend.frames)
+
+	// Ctrl+P opens the palette with all commands listed; only "Clear
+	// filter" is disabled, because the table filter is empty.
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.palette && state.paletteRows == 4 && state.paletteSelected == 0
+	})
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted := waitFrame(t, backend.frames)
+	titleRow := findRow(t, painted, "command palette")
+	if findRow(t, painted, "type to filter commands") != titleRow+1 {
+		t.Fatalf("filter placeholder must sit on the row under the title: %q", rowText(painted, titleRow+1))
+	}
+	for _, want := range []string{"Kill selected process", "Refresh process list", "Clear filter", "Quit"} {
+		findRow(t, painted, want)
+	}
+	if killRow := findRow(t, painted, "Kill selected process"); !strings.Contains(rowText(painted, killRow), "enter") {
+		t.Fatalf("kill row must carry its shortcut hint: %q", rowText(painted, killRow))
+	}
+	if refreshRow := findRow(t, painted, "Refresh process list"); !strings.Contains(rowText(painted, refreshRow), "F5") {
+		t.Fatalf("refresh row must carry its shortcut hint: %q", rowText(painted, refreshRow))
+	}
+	findRow(t, painted, " enter run  up/down move  esc close ")
+	// The table stays painted behind the modal.
+	findRow(t, painted, "PID")
+
+	// Typing filters live; the runes feed the palette's input, so the
+	// table's filter and its loads stay untouched.
+	for _, r := range "refresh" {
+		backend.events <- event.RuneKey(r, 0)
+	}
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.palette && state.paletteRows == 1 && state.rows == 40 && state.filter == ""
+	})
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	findRow(t, painted, "Refresh process list")
+	forbidRow(t, painted, "Kill selected process")
+	forbidRow(t, painted, "type to filter commands")
+
+	// A filter that matches nothing paints the no-result line; Enter
+	// stays inert instead of inventing an outcome.
+	backend.events <- event.RuneKey('z', 0)
+	backend.events <- event.RuneKey('z', 0)
+	backend.events <- event.RuneKey('z', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 0 })
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	findRow(t, painted, "no matching commands")
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	findRow(t, painted, "command palette") // still open: Enter on nothing is a no-op
+	if got := source.filters(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("filter log = %q; palette typing and dead Enter must not issue loads", got)
+	}
+
+	// Backspace edits the filter like any text field.
+	for i := 0; i < 3; i++ {
+		backend.events <- event.KeyPress(event.KeyBackspace, 0)
+	}
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 1 })
+
+	// Escape closes; Ctrl+P reopens with the filter reset.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	findRow(t, painted, "type to filter commands")
+
+	// Down twice lands on "Clear filter", disabled because the table
+	// filter is empty: the row paints disabled and the footer replaces
+	// the key hints with the reason.
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.palette && state.paletteRows == 4 && state.paletteSelected == 2
+	})
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	findRow(t, painted, "the filter is empty")
+	clearRow := findRow(t, painted, "Clear filter")
+	// The modal paints over the table and the detail pane, so the row
+	// carries background runes beside the list; the marker proves
+	// selection only next to the command it marks.
+	if clear := rowText(painted, clearRow); !strings.Contains(clear, "> Clear filter") {
+		t.Fatalf("selected disabled row must keep its marker: %q", clear)
+	}
+	disabledPainted := false
+	for x := 0; x < painted.Bounds().W; x++ {
+		if cell := painted.Cell(x, clearRow); cell.Grapheme == "C" && cell.Style.Foreground == red {
+			disabledPainted = true
+		}
+	}
+	if !disabledPainted {
+		t.Fatalf("disabled row must paint in the disabled color: %q", rowText(painted, clearRow))
+	}
+
+	// Enter on a disabled command is inert: the palette stays open and
+	// no load runs.
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	findRow(t, painted, "command palette")
+	if got := source.filters(); len(got) != 1 {
+		t.Fatalf("filter log = %q; a disabled command must not run", got)
+	}
+
+	// Escape closes the palette and hands focus back to the table: the
+	// next Down moves the table's selection.
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	painted = waitFrame(t, backend.frames)
+	forbidRow(t, painted, "command palette")
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.selected == 1 && state.phase == phaseData
+	})
+
+	// Ctrl+P toggles both ways; a click outside the open palette
+	// dismisses it.
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrame(t, backend.frames) // the modal is committed, so the click routes against it
+	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+		Action: event.MousePress, Button: event.MouseLeft, X: 1, Y: 15,
+	}}
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return !state.palette })
+
+	// The mouse press closed the palette, but that closing frame must
+	// commit before Escape or the key dismisses the already-closed
+	// modal instead of quitting.
+	commitFrames(t, backend)
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("escape did not quit")
+	}
+	if got := source.filters(); len(got) != 1 || got[0] != "" {
+		t.Fatalf("filter log = %q; the palette must never touch the table's loads", got)
+	}
+}
+
+// TestCommandPaletteRunsCommands proves the palette's commands change
+// real state: kill opens the existing confirm ask, refresh reloads
+// through the app's load seam, clear-filter edits the table filter, and
+// quit ends the run.
+func TestCommandPaletteRunsCommands(t *testing.T) {
+	full := seedProcs(40)
+	refreshed := seedProcs(38)
+	afterKill := seedProcs(39)
+	cleared := seedProcs(37)
+	source := newScriptedSource(
+		scriptStep{delay: 40 * time.Millisecond, rows: full},      // initial load
+		scriptStep{delay: 30 * time.Millisecond, rows: refreshed}, // palette refresh
+		scriptStep{delay: 30 * time.Millisecond, rows: afterKill}, // post-kill auto-refresh
+		scriptStep{delay: 30 * time.Millisecond, rows: full},      // typed 'r' filter
+		scriptStep{delay: 30 * time.Millisecond, rows: cleared},   // palette clear-filter
+	)
+	source.killDelay = 30 * time.Millisecond
+	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
+	app := newProcsApp(source, make(chan procsState, 64))
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+
+	waitFrame(t, backend.frames)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
+	// The F6 dance: a second frame on the wire proves the first frame's
+	// present callbacks ran, so the Ctrl+P shortcut is committed.
+	commitFrames(t, backend)
+
+	// Run the kill command from the palette: the palette closes and the
+	// existing inline confirm ask names the selected row. Cancelling
+	// with 'n' leaves the table alone.
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
+	// The palette's shortcuts are modal-scoped: Enter routes against the
+	// palette only once its frame is committed.
+	commitFrames(t, backend)
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.confirm == 1000
+	})
+	// Running the command closed the palette as a side effect; that
+	// closing frame must commit before 'n' or the rune routes into the
+	// dead palette input instead of the confirm ask.
+	commitFrames(t, backend)
+	backend.events <- event.RuneKey('n', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.confirm == 0 && state.rows == 40
+	})
+
+	// Refresh from the palette: the command reuses the app's load seam,
+	// the palette owns no separate pipeline.
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
+	// Down and Enter are modal-scoped here too.
+	commitFrames(t, backend)
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.phase == phaseLoading
+	})
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.phase == phaseData && state.rows == 38
+	})
+
+	// Kill again, this time confirming: the pid dies, the notice lands,
+	// and the post-kill auto-refresh repaints the shorter table.
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette })
+	commitFrames(t, backend)
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.confirm == 1000
+	})
+	// Same closing race as the 'n' step: the 'y' must answer the ask,
+	// not the dead palette input.
+	commitFrames(t, backend)
+	backend.events <- event.RuneKey('y', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return strings.Contains(state.notice, "terminated pid 1000") && state.rows == 39
+	})
+
+	// A typed table filter makes "Clear filter" runnable; running it
+	// clears the filter and reloads through the same seam. Of the 40
+	// seeded rows, "r" matches the relay and worker names: 20.
+	backend.events <- event.RuneKey('r', 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.filter == "r" && state.phase == phaseData && state.rows == 20
+	})
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
+	painted := commitFrames(t, backend)
+	forbidRow(t, painted, "the filter is empty")
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	backend.events <- event.KeyPress(event.KeyDown, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return state.palette && state.paletteSelected == 2
+	})
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.filter == "" && state.phase == phaseLoading
+	})
+	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+		return !state.palette && state.filter == "" && state.phase == phaseData && state.rows == 37
+	})
+
+	// Quit runs from the palette: filter down to one command, Enter ends
+	// the run cleanly.
+	backend.events <- ctrlP()
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
+	// The runes feed the palette's input; its frame must be committed
+	// first or they fall through to the table's filter.
+	commitFrames(t, backend)
+	for _, r := range "quit" {
+		backend.events <- event.RuneKey(r, 0)
+	}
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 1 })
+	backend.events <- event.KeyPress(event.KeyEnter, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("palette quit did not end the run")
+	}
+
+	// The commands ran through the app's own seams: five loads with the
+	// exact filters the table state dictated, one kill.
+	want := []string{"", "", "", "r", ""}
+	if filters := source.filters(); !slices.Equal(filters, want) {
+		t.Fatalf("filter log = %q; want %q", filters, want)
+	}
+	if kills := source.killList(); len(kills) != 1 || kills[0] != 1000 {
+		t.Fatalf("kills = %v; want [1000]", kills)
 	}
 }

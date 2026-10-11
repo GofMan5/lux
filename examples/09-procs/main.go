@@ -109,19 +109,25 @@ type procsApp struct {
 	rows           []processRow
 	order          []int
 	errText        string
+	paletteOpen    bool         // the command palette is on screen
+	paletteFilter  ui.TextInput // the palette's own filter input
+	paletteList    ui.ListState // the palette's command selection
 }
 
 // procsState is what the tests observe from View; the channel is drained
 // non-blockingly so it can never steer the run loop.
 type procsState struct {
-	phase    phase
-	rows     int
-	filter   string
-	errText  string
-	selected int
-	detail   string
-	notice   string
-	confirm  int // pid pending a kill confirmation, 0 when the ask is off
+	phase           phase
+	rows            int
+	filter          string
+	errText         string
+	selected        int
+	detail          string
+	notice          string
+	confirm         int  // pid pending a kill confirmation, 0 when the ask is off
+	palette         bool // the command palette is open
+	paletteRows     int  // matching commands, 0 while closed
+	paletteSelected int  // selected command index, clamped into the matches
 }
 
 func newProcsApp(source processSource, observe chan procsState) *procsApp {
@@ -359,6 +365,12 @@ func (app *procsApp) Update(next event.Event) lux.Command {
 		if action.Target == "table" {
 			app.applyTable(action)
 		}
+		// The palette owns its routing: every one of its targets lands in
+		// applyPalette, so no palette state mutates outside Update.
+		switch action.Target {
+		case "palette-toggle", "palette-run", "palette-filter", "palette-list", "palette":
+			return app.applyPalette(action)
+		}
 		return nil
 	}
 	switch next.Kind {
@@ -435,6 +447,9 @@ func (app *procsApp) View(frame *lux.Frame) {
 	app.ui.Begin(frame)
 	defer app.ui.End(frame)
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyEscape}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	// Priority so Ctrl+P toggles the palette even while the modal scope
+	// is open — closing it with the same key that opened it.
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: 'p', Mod: event.ModCtrl}, Target: "palette-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 
 	if area.W < 44 || area.H < 14 {
 		canvas.Text(0, 0, "LUX procs - enlarge terminal", render.Style{Foreground: violet})
@@ -495,6 +510,11 @@ func (app *procsApp) View(frame *lux.Frame) {
 		footer = " esc quit "
 	}
 	canvas.Text(max((area.W-canvas.TextWidth(footer))/2, 0), area.H-1, footer, render.Style{Foreground: muted})
+	// The palette paints last, over the table, so the app behind it
+	// stays fully drawn for the moment the palette closes.
+	if app.paletteOpen {
+		app.drawPalette(canvas, area)
+	}
 	app.report()
 }
 
@@ -519,8 +539,7 @@ func (app *procsApp) report() {
 	if len(app.order) > 0 {
 		detail = app.rows[app.order[app.table.Selected]].name
 	}
-	select {
-	case app.observe <- procsState{
+	state := procsState{
 		phase:    app.phase,
 		rows:     len(app.order),
 		filter:   app.filter,
@@ -529,7 +548,17 @@ func (app *procsApp) report() {
 		detail:   detail,
 		notice:   app.notice,
 		confirm:  app.confirmRow.pid,
-	}:
+	}
+	if app.paletteOpen {
+		matches := app.paletteMatches()
+		state.palette = true
+		state.paletteRows = len(matches)
+		if len(matches) > 0 {
+			state.paletteSelected = min(app.paletteList.Selected, len(matches)-1)
+		}
+	}
+	select {
+	case app.observe <- state:
 	default:
 	}
 }
