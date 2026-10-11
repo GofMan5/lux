@@ -52,6 +52,16 @@ semver: breaking changes land only in a new major.
   dialed — and one more `commitFrames` lesson: after a state observed
   mid-View, a pointer retry must wait for the frame to commit, or the
   press routes against the stale disabled snapshot and falls through.
+  The dial's transient states get a generous observation budget (the
+  400 ms the scripted source can spend between paint and present under
+  a saturated CI runner), the close of a dialed connection is now
+  explicitly discarded (`_ = conn.Close()`) so errcheck agrees the
+  recipe owns it, and the commit gate itself was sharpened: a single
+  post-drain frame read only proves that OLDER frames were presented,
+  because frames painted before a state change can still sit queued in
+  the writer, so the retry gates read frames until the failure notice
+  itself is painted (`commitFrameWhere`) instead of trusting whichever
+  frame arrives first.
 - Command palette in the process explorer (`examples/09-procs`, `ui`):
   Ctrl+P opens a centered modal listing the app's commands — kill
   selected, refresh, clear filter, quit — with a case-insensitive
@@ -71,7 +81,19 @@ semver: breaking changes land only in a new major.
   barrier: a keystroke after a palette-driven state change waits for
   a frame on the wire, because the writer presents and commits frames
   sequentially, and a state observed mid-View can otherwise route the
-  next key against a stale committed snapshot.
+  next key against a stale committed snapshot. CI then sharpened the
+  barrier doctrine: a single post-drain read only proves that frames
+  painted BEFORE it were presented — frames painted before a state
+  change can still be queued in the writer, so the read can predate
+  the change and re-arm a dead modal (a stale palette-open frame made
+  the quitting Escape dismiss the already-closed modal instead, and
+  the run never ended). The state gates now read frames until the
+  target content itself is painted — `commitFrameWhere` with
+  open-palette, closed-palette, and armed-ask predicates — while
+  first-commit gates, where the target frame is the first frame and
+  any read is at-or-after it, keep the single-read form; transient
+  loading-phase expectations were folded into durable outcome waits
+  so a starved, coalesced runner cannot starve the tests.
 
 - Application-result seam (`event.Message` and `event.Event.Data`): a
   Command can now report application-level results back to

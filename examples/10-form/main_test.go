@@ -271,18 +271,43 @@ func drainFrames(frames <-chan *render.Buffer) {
 }
 
 // commitFrames drains the frame backlog, provokes one repaint, and waits
-// for a frame on the wire. waitStateWhere observes the state from inside
-// View — before the writer goroutine presents the frame and runs its
-// OnPresented commit — so a keystroke sent right after a matching state
-// can still route against the previous snapshot: keys must wait for the
-// commit of whatever frame they need to act on. F6 is bound nowhere; every
-// event dirties the model, and the writer is sequential, so a frame on the
-// wire proves the previous frame's commit ran.
+// for a frame on the wire. The writer presents asynchronously and
+// sequentially, so that frame's arrival proves every frame painted
+// BEFORE it was presented and committed. That is a proof about the
+// past: it is the right tool for first-commit gates, where the target
+// is the first frame and any read frame is at-or-after it. It proves
+// NOTHING about frames painted after a state change: those may still
+// be queued in the writer, so the read frame can predate the change
+// and the next keystroke or click routes against a dead snapshot. An
+// input that must route against the NEW state needs commitFrameWhere.
+// F6 is bound nowhere; every event dirties the model, and the writer
+// is sequential.
 func commitFrames(t *testing.T, backend *interactiveBackend) *render.Buffer {
 	t.Helper()
 	drainFrames(backend.frames)
 	backend.events <- event.KeyPress(event.KeyF6, 0)
 	return waitFrame(t, backend.frames)
+}
+
+// commitFrameWhere is commitFrames as a state gate and for content
+// asserts. The writer presents frames asynchronously and the channel
+// is ordered by paint time, so a frame painted before the state change
+// can land after the drain and before the frame the forced repaint
+// provoked: the first frame after a drain can still be stale. The
+// model already holds the state the test observed, so every frame
+// painted from the forced repaint on carries it; the loop keeps
+// reading until one does. A wrong expectation hangs into waitFrame's
+// dump, exactly like the single-shot wait did.
+func commitFrameWhere(t *testing.T, backend *interactiveBackend, pred func(*render.Buffer) bool) *render.Buffer {
+	t.Helper()
+	drainFrames(backend.frames)
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	for {
+		frame := waitFrame(t, backend.frames)
+		if pred(frame) {
+			return frame
+		}
+	}
 }
 
 func typeRunes(backend *interactiveBackend, text string) {
@@ -296,9 +321,15 @@ func ctrlS(backend *interactiveBackend) {
 }
 
 func TestFormEndToEndValidationSubmitAndConnect(t *testing.T) {
+	// The dial delays are a budget, not realism: the test must reliably
+	// observe the in-flight phase (state and painted frame) before the
+	// result lands. Under coverage instrumentation and parallel package
+	// load the runner can be starved for tens of milliseconds, and a
+	// short delay lets the result coalesce with the submit event — the
+	// connecting View would never paint and the waits would hang.
 	source := newScriptedFormSource(
-		connectStep{delay: 60 * time.Millisecond, err: errors.New("dial tcp 203.0.113.7:5900: connection refused")},
-		connectStep{delay: 40 * time.Millisecond},
+		connectStep{delay: 400 * time.Millisecond, err: errors.New("dial tcp 203.0.113.7:5900: connection refused")},
+		connectStep{delay: 400 * time.Millisecond},
 	)
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
 	app := newFormApp(source, make(chan formState, 64))
@@ -334,9 +365,11 @@ func TestFormEndToEndValidationSubmitAndConnect(t *testing.T) {
 	if state.errors[0] != "" || state.connecting || state.attempts != 0 {
 		t.Fatalf("unexpected state after invalid submit: %+v", state)
 	}
-	if painted := commitFrames(t, backend); !strings.Contains(rowText(painted, hostHintRow), "required") {
-		t.Fatalf("host error missing on the wire: %q", rowText(painted, hostHintRow))
-	}
+	// The stale frames predating the submit show the plain hint; the
+	// read skips them and lands on the error frame itself.
+	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+		return strings.Contains(rowText(painted, hostHintRow), "required")
+	})
 
 	// Typing the host clears its own error inline; the port error survives.
 	typeRunes(backend, "relay")
@@ -368,9 +401,11 @@ func TestFormEndToEndValidationSubmitAndConnect(t *testing.T) {
 	if !strings.Contains(state.notice, "connecting to relay:5900") {
 		t.Fatalf("in-flight notice missing: %q", state.notice)
 	}
-	if painted := commitFrames(t, backend); !strings.Contains(rowText(painted, buttonRow), "connecting") {
-		t.Fatalf("in-flight button label missing on the wire: %q", rowText(painted, buttonRow))
-	}
+	// Frames predating the submit still show the idle Connect button;
+	// the loop skips them and lands on the in-flight frame.
+	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+		return strings.Contains(rowText(painted, buttonRow), "connecting")
+	})
 
 	// The scripted dial fails: the run survives, the notice explains, and
 	// the draft stays dirty (a connect is not proven until it succeeds).
@@ -381,8 +416,12 @@ func TestFormEndToEndValidationSubmitAndConnect(t *testing.T) {
 	// The failure state arrived from inside View, before the writer
 	// presented that frame: until it commits, the button's committed
 	// snapshot still carries the in-flight Disabled flag and a pointer
-	// press falls through it. Wait for the commit, then click.
-	commitFrames(t, backend)
+	// press falls through it. A single post-drain read is not enough —
+	// frames painted before the failure can still be queued in the
+	// writer — so gate on the failure notice being painted, then click.
+	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+		return strings.Contains(rowText(painted, statusRow), "connect failed")
+	})
 
 	// Retry through the button: a mouse press focuses it, the release
 	// activates it, and only the release reaches submit.
@@ -434,9 +473,12 @@ func TestFormEndToEndUnsavedChangesGuard(t *testing.T) {
 	waitStateWhere(t, app.observe, done, func(state formState) bool {
 		return state.ask
 	})
-	if painted := commitFrames(t, backend); !strings.Contains(rowText(painted, statusRow), "unsaved") {
-		t.Fatalf("ask line missing on the wire: %q", rowText(painted, statusRow))
-	}
+	// Frames predating the ask show the plain " unsaved " status word,
+	// which would also match a substring check; the ask line carries
+	// the full question, so the predicate pins that.
+	commitFrameWhere(t, backend, func(painted *render.Buffer) bool {
+		return strings.Contains(rowText(painted, statusRow), "unsaved changes")
+	})
 
 	// 'n' keeps editing: the run continues, the draft survives.
 	backend.events <- event.RuneKey('n', 0)

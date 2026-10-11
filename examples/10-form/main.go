@@ -88,7 +88,9 @@ func (d dialSource) Connect(ctx context.Context, p profile) (time.Duration, erro
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(p.host, p.port))
 	elapsed := time.Since(start)
 	if conn != nil {
-		conn.Close()
+		// The connection only proves the endpoint is dialable; the
+		// close error carries no signal anyone acts on.
+		_ = conn.Close()
 	}
 	return elapsed, err
 }
