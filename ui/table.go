@@ -116,6 +116,14 @@ func (s *TableState) Apply(action Action, columns []TableColumn, count int) (cha
 
 	switch action.Kind {
 	case Activate:
+		// A mouse click that lands on the header row is a sort, not a
+		// read: the press already requested the sort, and the release
+		// completing the same click must not activate the selection.
+		// Keyboard activation (Enter/Space) carries no mouse position
+		// and always activates.
+		if action.Event.Kind == event.Mouse && action.Y < tableHeaderRows(columns) {
+			break
+		}
 		activated = true
 	case Scroll:
 		switch action.Event.Kind {

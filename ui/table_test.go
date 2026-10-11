@@ -307,6 +307,24 @@ func TestTableStateCountZeroResets(t *testing.T) {
 	}
 }
 
+func TestTableStateHeaderClickDoesNotActivate(t *testing.T) {
+	// A click on the header cell is a sort request; the release that
+	// completes it must not read the selected row.
+	state := TableState{Selected: 2}
+	header := tableAction(Activate, event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+		Action: event.MouseRelease, Button: event.MouseLeft,
+	}}, 40, 8, 7, 0)
+	if _, activated, _ := state.Apply(header, tableColumns(), 50); activated {
+		t.Fatal("header click activated the table")
+	}
+	body := tableAction(Activate, event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
+		Action: event.MouseRelease, Button: event.MouseLeft,
+	}}, 40, 8, 7, 3)
+	if _, activated, _ := state.Apply(body, tableColumns(), 50); !activated {
+		t.Fatal("body click failed to activate")
+	}
+}
+
 func TestTableStateNilReceiver(t *testing.T) {
 	var state *TableState
 	if changed, activated, sorted := state.Apply(tableAction(Scroll, event.KeyPress(event.KeyDown, 0), 40, 8, 0, 0), tableColumns(), 10); changed || activated || sorted {

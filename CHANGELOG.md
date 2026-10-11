@@ -15,6 +15,16 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+### Fixed
+
+- `ui.TableState` no longer treats a header click as a row read: when the
+  context turns a mouse press+release on an Activatable region into an
+  `Activate` action, an activation whose Y lands on the header rows is
+  dropped — the press already sorted, and the release completing the same
+  click must not also announce the selected row. Keyboard activation
+  (Enter/Space) carries no mouse position and still always activates.
+  Pinned by `TestTableStateHeaderClickDoesNotActivate`.
+
 ### Added
 
 - The `examples/10-form` interactive tests now ride the committed-state
