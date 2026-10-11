@@ -885,12 +885,27 @@ func TestProcsResizeGateKeepsTasksAndFocus(t *testing.T) {
 	// the new size. Reports leave View before Present, so a stale
 	// pre-resize frame can still be in flight; the bounds filter skips
 	// those instead of trusting the drain.
+	//
+	// A frame on the wire proves only the PREVIOUS frame's commit: the
+	// writer pushes the buffer to Present before running its presented
+	// callbacks, so the resized frame's region re-registration can still
+	// be pending when its paint is read. resizeLocked clears the
+	// committed regions on the way in, and a keystroke routed through an
+	// empty snapshot is dropped by design — returning the moment the
+	// paint arrives would race the next input against the commit. One
+	// forced repaint after the match is the barrier: its arrival proves
+	// the resized frame's presented callbacks (the commit) already ran,
+	// because the writer presents surfaces sequentially.
 	resize := func(w, h int) *render.Buffer {
 		drainFrames(backend.frames)
 		backend.events <- event.ResizeTo(w, h)
 		for {
 			painted := waitFrame(t, backend.frames)
 			if bw, bh := painted.Bounds().W, painted.Bounds().H; bw == w && bh == h {
+				// F6 is bound nowhere; it only forces the repaint that
+				// certifies the commit above.
+				backend.events <- event.KeyPress(event.KeyF6, 0)
+				waitFrame(t, backend.frames)
 				return painted
 			}
 		}
@@ -1103,7 +1118,7 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 0 })
 	drainFrames(backend.frames)
 	backend.events <- event.KeyPress(event.KeyF6, 0)
-	painted = waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
+	waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
 		return hasRow(painted, "no matching commands")
 	})
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
@@ -1128,7 +1143,7 @@ func TestCommandPaletteLifecycle(t *testing.T) {
 	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.palette && state.paletteRows == 4 })
 	drainFrames(backend.frames)
 	backend.events <- event.KeyPress(event.KeyF6, 0)
-	painted = waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
+	waitFrameWhere(t, backend.frames, func(painted *render.Buffer) bool {
 		return hasRow(painted, "type to filter commands")
 	})
 

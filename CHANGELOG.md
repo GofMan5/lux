@@ -347,6 +347,27 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Resize commit window in the process explorer's size-gate test
+  (`examples/09-procs`): the test read the first frame painted at the
+  new size and immediately sent the keystrokes that must route through
+  the resized layout — but a frame on the wire only proves that the
+  PREVIOUS frame's commit ran (the writer pushes the buffer to
+  `Present` before running its presented callbacks), and `ui.Context`
+  deliberately empties the committed regions on the way into a resize
+  so no key routes against stale coordinates. A keystroke that arrived
+  inside that window — CI's Go 1.23.x/ubuntu lane under `-race`
+  starved the writer between the push and the commit — fell through
+  `handleKeyLocked` unhandled and was silently dropped, leaving the
+  model one key short with the runner idle: the 45 s state gate timed
+  out at selected=11 of 12. The `resize` helper now forces one
+  unbound-F6 repaint after finding the matching frame: the barrier
+  frame's arrival proves the resized frame's presented callbacks — the
+  commit that re-registers the regions and re-derives focus — already
+  ran, because the writer presents surfaces sequentially. Two
+  `ineffassign` findings in the same file (frame results assigned but
+  never read where the predicate does the asserting) were dropped, and
+  the local gate gained the missing `golangci-lint` battery that would
+  have caught them before the push.
 - Farewell frame after quit (`lux` runtime): a `Model.Update` that returned
   `Quit()` handed the command to a goroutine, so the quit event's delivery
   depended on the scheduler — and the run loop meanwhile re-armed the
