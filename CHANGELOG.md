@@ -17,6 +17,41 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Forms recipe (`examples/10-form`): a connection-profile editor that
+  assembles a complete form from the plain widgets that already exist —
+  labeled `ui.Input` fields with hints, a per-field validator that runs
+  inline while typing (errors replace the hint they invalidate, and
+  clear when the value passes again), a first-invalid focus jump on
+  submit, a read-only `ui.Input` preview of the derived endpoint
+  (tab-reachable and selectable, but not editable), and a themed
+  `ui.Button` whose label and Disabled flag track the submit state.
+  Submitting goes through the Command/Message seam: a valid draft
+  launches a single-flight connect whose Command closure captures
+  everything it needs by value, a second Ctrl+S or button activation
+  while one is in flight is swallowed, the result crosses back as an
+  `event.Message` payload guarded by an attempt id so late or superseded
+  results are ignored, and a failed connect is data — a notice plus the
+  reason — while a successful one makes the proven draft the baseline.
+  While connecting, every field is drawn Disabled so the recipe turns
+  fully inert, and keys that raced the disabled frame's commit are
+  stopped in `Update` as well. Dirty tracking is derived, not
+  accumulated: the draft is compared against the baseline profile, so
+  an edit that restores the saved value un-dirties the form on its own.
+  Quitting over a dirty draft raises an unsaved-changes ask — y discards
+  and quits, n or Escape keeps editing — whose answer runes are
+  intercepted before routing, because a 'y' that reached `ui.Handle`
+  would type into the focused field first. Ctrl+S registers as an
+  app-scope Priority shortcut so it outranks the focused Editable's
+  claim on the key. The field state lives in the example layer, not a
+  new ui module: a form builder is deliberately deferred until a second
+  real form converges on the same shape. The interactive tests pin the
+  whole journey — paint, empty-submit validation with the focus jump,
+  inline clearing, submit, double-submit inertness, failure and retry
+  through the mouse (press focuses, only the release activates), the
+  unsaved-changes guard on Escape, and the exact profiles each attempt
+  dialed — and one more `commitFrames` lesson: after a state observed
+  mid-View, a pointer retry must wait for the frame to commit, or the
+  press routes against the stale disabled snapshot and falls through.
 - Command palette in the process explorer (`examples/09-procs`, `ui`):
   Ctrl+P opens a centered modal listing the app's commands — kill
   selected, refresh, clear filter, quit — with a case-insensitive
