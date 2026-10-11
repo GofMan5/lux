@@ -376,6 +376,17 @@ func (c *Context) Focused(id ID) bool {
 	return id != "" && c.focused == id
 }
 
+// ModalOpen reports whether the last presented frame carries a modal scope.
+// It reads the router's committed snapshot — the state key routing is
+// decided against — rather than the model, so a modal transition is visible
+// here only after its frame has actually been presented. Waiting on it is
+// how callers outside View prove the router caught up.
+func (c *Context) ModalOpen() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.committed.modal.id != ""
+}
+
 // Hovered reports whether the pointer is over id in the last presented frame.
 func (c *Context) Hovered(id ID) bool {
 	c.mu.Lock()

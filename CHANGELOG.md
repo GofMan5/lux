@@ -17,6 +17,18 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `ui.Context.ModalOpen()`, a read-only probe of the router's committed
+  modal scope — the missing half of the end-to-end barrier story.
+  Frames on the wire prove presentation, but the router snapshot
+  commits on the writer goroutine after `Present`, and a displaced
+  surface loses its callbacks entirely, so a keystroke sent after a
+  frame lands could still be routed against a stale snapshot and
+  swallowed by the modal-open rule — observed as a `-race`-only
+  timeout in the overlay walkthrough, where the test outlived the
+  commit it thought it had waited for. Waiting on `ModalOpen`, like
+  `Focused`, proves the snapshot key routing is decided against has
+  actually caught up. Pinned by
+  `TestContextModalOpenReportsCommittedScope`.
 - `examples/13-logs`, the live log example: a bounded history view that
   keeps reading positions stable under an unbounded stream. The history
   is a capped ring — overflow trims the oldest lines and counts every

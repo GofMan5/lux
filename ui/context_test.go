@@ -234,6 +234,36 @@ func TestModalTrapDismissAndRestore(t *testing.T) {
 	}
 }
 
+// TestContextModalOpenReportsCommittedScope pins the read-only probe that
+// end-to-end tests wait on between a modal transition and the next routed
+// key: ModalOpen reflects the last committed frame — the snapshot Handle
+// routes against — not the frame being built, so a wait on it proves the
+// router has actually caught up, not merely that the model state changed.
+func TestContextModalOpenReportsCommittedScope(t *testing.T) {
+	var ctx Context
+	if ctx.ModalOpen() {
+		t.Fatal("fresh context reported a modal")
+	}
+	base := []region{
+		{id: "base-a", bounds: render.Rect{W: 8, H: 2}, flags: Focusable},
+	}
+	presented(&ctx, base, modal{})
+	if ctx.ModalOpen() {
+		t.Fatal("non-modal frame reported a modal")
+	}
+	dialog := append(append([]region(nil), base...),
+		region{id: "modal-a", bounds: render.Rect{X: 5, Y: 3, W: 8, H: 1}, flags: Focusable | Editable, modal: "dialog"},
+	)
+	presented(&ctx, dialog, modal{id: "dialog", bounds: render.Rect{X: 4, Y: 2, W: 10, H: 6}})
+	if !ctx.ModalOpen() {
+		t.Fatal("modal frame did not report a modal")
+	}
+	presented(&ctx, base, modal{})
+	if ctx.ModalOpen() {
+		t.Fatal("closed modal still reported open")
+	}
+}
+
 // TestContextKeyReleasesAreInert pins the widget contract for kitty event
 // types: a release never activates, moves focus, scrolls, edits, or dismisses
 // a modal, while a repeat keeps routing exactly like a press.
