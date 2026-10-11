@@ -773,3 +773,110 @@ func TestProcessSourceKillMissingPidFails(t *testing.T) {
 		t.Fatalf("kill of a missing pid must fail fast, not exhaust the context: %v", err)
 	}
 }
+
+// TestProcsResizeGateKeepsTasksAndFocus pins the stage-3 size gate: the
+// real data app, driven through the live runtime, must keep its task
+// table and the focused selection through 240×80, 80×24, and 120×40 —
+// resize repaints the layout, it never drops the work the screen was
+// showing. The selected row is pushed down with real keystrokes first,
+// so the shrink is not the trivial top-of-list case: the table must
+// re-derive its viewport and keep row 12 both visible and focused.
+func TestProcsResizeGateKeepsTasksAndFocus(t *testing.T) {
+	source := newScriptedSource(scriptStep{delay: 20 * time.Millisecond, rows: seedProcs(40)})
+	backend := &interactiveBackend{events: make(chan event.Event, 64), frames: make(chan *render.Buffer, 64)}
+	app := newProcsApp(source, make(chan procsState, 64))
+	done := make(chan error, 1)
+	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+
+	waitFrame(t, backend.frames)
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
+	// Force one repaint so the writer's present callbacks have committed
+	// the table's focus: keystrokes below route to the focused table.
+	backend.events <- event.KeyPress(event.KeyF6, 0)
+	waitFrame(t, backend.frames)
+
+	// The gate sizes, one at a time: assert on the first frame painted at
+	// the new size. Reports leave View before Present, so a stale
+	// pre-resize frame can still be in flight; the bounds filter skips
+	// those instead of trusting the drain.
+	resize := func(w, h int) *render.Buffer {
+		drainFrames(backend.frames)
+		backend.events <- event.ResizeTo(w, h)
+		for {
+			painted := waitFrame(t, backend.frames)
+			if bw, bh := painted.Bounds().W, painted.Bounds().H; bw == w && bh == h {
+				return painted
+			}
+		}
+	}
+
+	painted := resize(240, 80)
+	if w, h := painted.Bounds().W, painted.Bounds().H; w != 240 || h != 80 {
+		t.Fatalf("resized frame is %d×%d; want 240×80", w, h)
+	}
+	if !strings.Contains(rowText(painted, 2), "PID") {
+		t.Fatalf("240×80 header missing: %q", rowText(painted, 2))
+	}
+	if !strings.Contains(rowText(painted, 3), "relay-00") || !strings.Contains(rowText(painted, 42), "worker-39") {
+		t.Fatalf("240×80 must show the deep task rows: %q / %q", rowText(painted, 3), rowText(painted, 42))
+	}
+	if got := painted.Cell(2, 3).Style; got.Foreground != background || got.Background != cyan {
+		t.Fatalf("240×80 focused row 0 must paint the Focus role: fg=%v bg=%v", got.Foreground, got.Background)
+	}
+
+	// Push the selection to row 12 with real routed keystrokes, on the
+	// large screen where all rows sit below the viewport-free top.
+	for i := 0; i < 12; i++ {
+		backend.events <- event.KeyPress(event.KeyDown, 0)
+	}
+	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.selected == 12 })
+
+	for _, probe := range []struct {
+		w, h int
+		name string
+	}{
+		{80, 24, "80×24"},
+		{120, 40, "120×40"},
+	} {
+		painted = resize(probe.w, probe.h)
+		if w, h := painted.Bounds().W, painted.Bounds().H; w != probe.w || h != probe.h {
+			t.Fatalf("%s frame is %d×%d", probe.name, w, h)
+		}
+		if strings.Contains(rowText(painted, 0), "enlarge terminal") {
+			t.Fatalf("%s must fit the real layout, not the tiny guard", probe.name)
+		}
+		if !strings.Contains(rowText(painted, 2), "PID") {
+			t.Fatalf("%s header missing: %q", probe.name, rowText(painted, 2))
+		}
+		if !strings.Contains(rowText(painted, 3), "relay-00") {
+			t.Fatalf("%s task rows missing: %q", probe.name, rowText(painted, 3))
+		}
+		// Row 12 stays both selected and focused: a solid focus block on
+		// the row the keystrokes chose, at body row 12 → screen row 15.
+		if got := painted.Cell(2, 15).Style; got.Foreground != background || got.Background != cyan {
+			t.Fatalf("%s focused row 12 must keep the Focus role: fg=%v bg=%v", probe.name, got.Foreground, got.Background)
+		}
+		if !strings.Contains(rowText(painted, 15), "relay-12") {
+			t.Fatalf("%s focused row text changed: %q", probe.name, rowText(painted, 15))
+		}
+		foundStatus := false
+		for y := probe.h - 8; y < probe.h; y++ {
+			if strings.Contains(rowText(painted, y), "data  40 rows  row 13 ") {
+				foundStatus = true
+			}
+		}
+		if !foundStatus {
+			t.Fatalf("%s status must still report row 13 of 40 tasks", probe.name)
+		}
+	}
+
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("run: %v", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("escape did not quit")
+	}
+}

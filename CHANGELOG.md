@@ -242,6 +242,22 @@ semver: breaking changes land only in a new major.
   is a pure function of its value) — while the per-app palette tests,
   unchanged, still pin the live rendering path each screen shows.
 
+- Terminal-size gate for the process explorer (`examples/09-procs`): the
+  real-data reference app is now pinned to survive resizes through the
+  live runtime. A new end-to-end test loads 40 scripted rows, moves the
+  selection to row 12 with routed keystrokes on a 240×80 screen, then
+  resizes down to 80×24 and 120×40: each size must paint the full
+  layout (no tiny-terminal guard at any gate size), keep the task table
+  filled (the deep `worker-39` row visible at 240×80), keep row 12
+  selected — the focus block stays on the keystroke-chosen row, the
+  status line still reports row 13 of 40 — and wait for the frame
+  painted at the new size, not a stale pre-resize one (reports leave
+  `View` before `Present`, so the test filters frames by bounds). The
+  table's viewport re-derivation on `keepRowVisible` and the app's
+  resize routing carry the gate; the layout math (table body, detail
+  pane, status, footer) is proven not to collide at the smallest gate
+  size.
+
 ### Changed
 
 - Under `DefaultTheme` (and any theme that sets the new `Focus` role), a
