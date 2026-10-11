@@ -368,6 +368,13 @@ semver: breaking changes land only in a new major.
   never read where the predicate does the asserting) were dropped, and
   the local gate gained the missing `golangci-lint` battery that would
   have caught them before the push.
+- Windows-only lint debt (`internal/terminal`): the pipe fixtures in
+  the windows input-reading tests closed their `os.Pipe` ends with
+  bare `defer reader.Close()`; `errcheck` on a windows host flags every
+  one, while CI's ubuntu lint never compiles the tagged file, so the
+  debt was invisible until the local lint battery ran on the windows
+  checkout. The deferred closes now discard the error explicitly — the
+  test owns the pipe, and a failed close at teardown carries no signal.
 - Farewell frame after quit (`lux` runtime): a `Model.Update` that returned
   `Quit()` handed the command to a goroutine, so the quit event's delivery
   depended on the scheduler — and the run loop meanwhile re-armed the

@@ -249,8 +249,8 @@ func TestReadInputReadsBytesFromPipeInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	if _, err := writer.Write([]byte("AB")); err != nil {
 		t.Fatal(err)
 	}
@@ -269,8 +269,8 @@ func TestReadInputWakesForBytesThatArriveLate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		if _, err := writer.Write([]byte("xy")); err != nil {
@@ -292,7 +292,7 @@ func TestReadInputReturnsEOFWhenPipeWriterCloses(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -311,8 +311,8 @@ func TestReadInputHonorsContextCancellationOnIdlePipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() {
@@ -338,8 +338,8 @@ func TestReadInputWaitsUntilDeadlineOnIdlePipe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	buffer := make([]byte, 8)
 	start := time.Now()
 	count, err := readInput(context.Background(), reader, buffer, 300*time.Millisecond)
