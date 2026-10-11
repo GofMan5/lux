@@ -269,6 +269,24 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- Farewell frame after quit (`lux` runtime): a `Model.Update` that returned
+  `Quit()` handed the command to a goroutine, so the quit event's delivery
+  depended on the scheduler — and the run loop meanwhile re-armed the
+  dirty-redraw timer (a ~4ms window at the default 240 fps cap). Whenever
+  the goroutine lost that race, the loop composed and presented one extra
+  "farewell" frame after the model had already quit, re-firing every
+  one-shot sideband `View` queues on each render: notifications, clipboard
+  writes, and progress announcements could appear twice at the terminal
+  (observed as a duplicated OSC 777 notify in CI), and the terminal's last
+  image was a frame the model never intended. The runtime now recognizes
+  the canonical `Quit()` before the command is ever scheduled — Go func
+  values are not comparable, so the sentinel is identified by its code
+  pointer — posts its event inline, and latches the redraw arm so no
+  further frame is composed while the quit is in flight. A model that
+  returns its own quit-flavored closure instead of `Quit()` keeps the old
+  behavior (the runtime cannot recognize it); two tests pin the sentinel
+  recognition and the exactly-one-render contract.
+
 - Blind and uncancellable pipe reads on Windows (`internal/terminal`):
   `readInput` waited on the input handle with `WaitForSingleObject`
   before every read, but that wait is only contractual for console

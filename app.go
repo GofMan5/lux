@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"runtime/debug"
 	"time"
 	"unicode"
@@ -30,8 +31,29 @@ type Command func(context.Context) event.Event
 // Emit turns a value into an immediate command.
 func Emit(next event.Event) Command { return func(context.Context) event.Event { return next } }
 
-// Quit asks the runtime to restore the terminal and return.
-func Quit() Command { return Emit(event.Event{Kind: event.Quit}) }
+// quitCommand is the single value behind every Quit() call. Function values
+// are not comparable in Go, so the runtime recognizes this one through its
+// code pointer — the only stable identity a func-typed Command carries — and
+// can act on the quit intent before the command is ever scheduled.
+var quitCommand Command = func(context.Context) event.Event {
+	return event.Event{Kind: event.Quit}
+}
+
+var quitCodePointer = reflect.ValueOf(quitCommand).Pointer()
+
+// isQuit reports whether command is the canonical Quit sentinel, without
+// running it. A model returning its own quit-flavored closure is not
+// recognized: use Quit() for the runtime's no-farewell-frame guarantee.
+func isQuit(command Command) bool {
+	return command != nil && reflect.ValueOf(command).Pointer() == quitCodePointer
+}
+
+// Quit asks the runtime to restore the terminal and return. Quit is special
+// to the runtime: once a model returns it from Update, no further frame is
+// composed, so one-shot sidebands queued in View (notifications, clipboard
+// writes) fire exactly once and the terminal's last image is the model's
+// last intended frame rather than a scheduler-dependent farewell.
+func Quit() Command { return quitCommand }
 
 // Metrics describes the current presentation path without affecting state.
 type Metrics struct {
@@ -461,8 +483,31 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 	pacer := newPacer(settings.maxFPS)
 	metrics := Metrics{TargetFPS: pacer.fps}
 
+	// quitting records that the model has asked to quit. From that point no
+	// further frame is composed: a farewell frame would race the quit event
+	// through the scheduler and could re-fire the one-shot sidebands
+	// (notifications, clipboard) that View queues on every render.
+	quitting := false
+
 	startCommand := func(command Command) {
 		if command == nil {
+			return
+		}
+		if isQuit(command) {
+			// The intent is known before the command's goroutine is even
+			// scheduled. The sentinel is runtime-owned and cannot block, so
+			// its event is computed and posted here, inline: the next select
+			// finds it ready and returns without depending on the scheduler.
+			// A full channel falls back to the goroutine path — the latch in
+			// arm still guarantees no farewell frame.
+			quitting = true
+			next := command(ctx)
+			select {
+			case commands <- next:
+				return
+			default:
+			}
+			executeCommand(ctx, command, commands)
 			return
 		}
 		executeCommand(ctx, command, commands)
@@ -477,6 +522,16 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 	dropped := uint64(0)
 
 	arm := func(now time.Time) {
+		if quitting {
+			// The model asked to quit and the quit event is already in
+			// flight. Composing another frame here would be a farewell frame
+			// whose presentation races the shutdown and whose one-shot
+			// sidebands could fire a second time, so the timer stays dead
+			// until the quit event is selected.
+			stopTimer(timer)
+			timerChannel = nil
+			return
+		}
 		var due time.Time
 		if dirty {
 			due = now

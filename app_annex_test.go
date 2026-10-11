@@ -213,3 +213,28 @@ func TestAnnexDroppedWithFailedFrame(t *testing.T) {
 		t.Fatalf("journal = %v, want [present:err]", backend.journal)
 	}
 }
+
+// TestNoFarewellFrameAfterQuit pins the quit latch: once the model returns
+// Quit, no further frame is composed whatever the scheduler does with the
+// quit event's delivery. The one-shot notification queued in View must fire
+// exactly once — the pre-latch runtime composed a farewell frame whenever
+// the quit command's goroutine lost the race against the dirty re-arm
+// timer, duplicating the sideband (and every other queued annex) once.
+func TestNoFarewellFrameAfterQuit(t *testing.T) {
+	backend := newAnnexBackend(40, 4)
+	model := &annexModel{notify: true}
+	if err := runAnnexModel(t, backend, model, WithNotifications(true)); err != nil {
+		t.Fatal(err)
+	}
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	if model.frames != 1 {
+		t.Fatalf("View calls = %d, want 1: no frame may be composed after the model quits", model.frames)
+	}
+	if len(backend.journal) != 2 || backend.journal[0] != "present" || backend.journal[1] != "annex" {
+		t.Fatalf("journal = %v, want [present annex]", backend.journal)
+	}
+	if len(backend.annexes) != 1 || string(backend.annexes[0]) != "\x1b]777;notify;Done;the build passed\x1b\\" {
+		t.Fatalf("annex = %q, want a single notification write", backend.annexes)
+	}
+}

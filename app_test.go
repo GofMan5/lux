@@ -111,6 +111,31 @@ func (m *testModel) View(frame *Frame) {
 	}
 }
 
+// TestQuitSentinelRecognition pins how the runtime recognizes the canonical
+// Quit without running it: every Quit() call yields the same sentinel value,
+// lookalikes built from Emit or hand-written closures stay unrecognized, and
+// the sentinel's own event contract is unchanged. The recognition is what
+// lets the runtime suppress the farewell frame before the command's
+// goroutine is ever scheduled.
+func TestQuitSentinelRecognition(t *testing.T) {
+	if !isQuit(Quit()) || !isQuit(Quit()) {
+		t.Fatal("Quit() must be recognized as the canonical sentinel")
+	}
+	if isQuit(nil) {
+		t.Fatal("nil command must not be recognized as the sentinel")
+	}
+	if isQuit(Emit(event.Event{Kind: event.Quit})) {
+		t.Fatal("an Emit lookalike must not be recognized as the sentinel")
+	}
+	custom := func(context.Context) event.Event { return event.Event{Kind: event.Quit} }
+	if isQuit(custom) {
+		t.Fatal("a hand-written quit closure must not be recognized as the sentinel")
+	}
+	if got := Quit()(context.Background()); got.Kind != event.Quit {
+		t.Fatalf("Quit() event kind = %v, want %v", got.Kind, event.Quit)
+	}
+}
+
 // TestDefaultBackendOptions pins the app-side wiring of the backend Run
 // constructs for itself: the base set always carries the pixel-mouse,
 // hyperlink, title, and progress opt-ins from the settings — the title is

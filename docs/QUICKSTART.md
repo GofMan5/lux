@@ -60,7 +60,11 @@ Three things to notice:
 - **Quitting is a command.** `Update` never calls `os.Exit` or touches the
   terminal; it returns `lux.Quit()` and the runtime does the restore. A panic
   in your code is funneled through the same path, so the terminal is never
-  left raw.
+  left raw. The runtime recognizes `Quit()` itself: once your model returns
+  it, no further frame is composed, one-shot sidebands (notifications,
+  clipboard) queued in `View` fire exactly once, and the terminal's last
+  image stays the frame your model intended — not an extra frame the
+  scheduler happened to draw on the way out.
 - **Keys arrive decoded.** `event.Key` carries a `Code` (`KeyUp`,
   `KeyEscape`, …) plus modifiers; printable keys are `KeyRune` with the rune
   in `Key.Rune`. Ctrl+letter is not a fake key — it is a rune with the
