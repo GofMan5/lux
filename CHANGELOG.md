@@ -15,6 +15,30 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+### Added
+
+- `examples/04-table` grows data workflows: stable row identity and a
+  live filter. The cursor's identity is the record it selected, not the
+  view index, so header sorts re-order the view and the cursor follows
+  its row (re-anchored and kept on screen) instead of silently selecting
+  whatever data inherits the old index; filters, which exclude rows the
+  same way, re-anchor too — a surviving row keeps the cursor, an excluded
+  row clamps it to a valid index and re-anchors onto the row it lands on,
+  an empty result keeps the anchor so widening restores it. A `/`
+  app-scope shortcut jumps to a filter input over name and state, typing
+  rebuilds the view rune by rune (the standing sort is served on the
+  narrowed view), Enter commits the query and hands focus back to the
+  results, and Escape over a live query clears the filter instead of
+  quitting. Empty results paint an honest "no rows match" hint and a
+  `0 match`/`row -` status instead of a dead blank. Horizontal scrolling
+  is deliberately absent: the five-column set fits the 44-cell floor, and
+  the plan calls for it only when a real column set outgrows the width.
+  Pinned by `TestTableSelectionSurvivesSort`,
+  `TestTableFilterNarrowsAndWidensView`,
+  `TestTableSelectionSurvivesFilter`,
+  `TestTableFilterPaintsQueryAndEmptyState`, and an extended
+  end-to-end keyboard, mouse, and filter run.
+
 ### Fixed
 
 - The `examples/08-tour` interaction tests' warm-up barrier gives a cold

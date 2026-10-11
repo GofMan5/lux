@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 
 	lux "github.com/GofMan5/lux"
 	"github.com/GofMan5/lux/event"
@@ -73,38 +74,112 @@ type tabledemo struct {
 	width, height int
 	ui            ui.Context
 	table         ui.TableState
+	filter        ui.TextInput
 	rows          []record
 	order         []int
-	observe       chan tabledemoState
+	// anchorID is the record id under the cursor. The view index is
+	// transient — sorts and filters re-order it — so identity lives here
+	// and every view rebuild re-anchors the cursor onto this row.
+	anchorID int
+	// viewRows is the body row count the last View painted; re-anchoring
+	// uses it to keep a visible row visible. Zero before the first paint.
+	viewRows int
+	observe  chan tabledemoState
 }
 
 type tabledemoState struct {
-	rows       int
-	selected   int
-	offset     int
-	sortActive bool
-	sortColumn int
-	sortDesc   bool
+	// rows is the total record count; matches is the live view size. They
+	// diverge once a filter narrows the view, and tests watch both.
+	rows        int
+	matches     int
+	selected    int
+	offset      int
+	anchor      int
+	filter      string
+	filterFocus bool
+	sortActive  bool
+	sortColumn  int
+	sortDesc    bool
 }
 
 func newTabledemo(count int) *tabledemo {
 	app := &tabledemo{
 		rows:    seedRows(count),
 		order:   make([]int, count),
+		filter:  ui.TextInput{Placeholder: "filter name or state"},
 		observe: make(chan tabledemoState, 16),
 	}
 	for i := range app.order {
 		app.order[i] = i
 	}
+	if count > 0 {
+		app.anchorID = app.rows[0].id
+	}
 	return app
 }
 
 // applyTable routes one action into the table state and re-sorts the view
-// when the widget reports a sort request.
+// when the widget reports a sort request. A sort re-orders the view, so the
+// cursor is re-anchored onto the row it selected; any other move keeps the
+// anchor in step with the cursor.
 func (app *tabledemo) applyTable(action ui.Action) {
+	anchor := app.anchorID
+	selected := app.table.Selected
 	if _, _, sortRequested := app.table.Apply(action, tableColumns, len(app.order)); sortRequested {
 		app.sortRows()
 		app.table.SortRequested = false // request served: keep the state clean
+		app.reanchor(anchor)
+		return
+	}
+	if app.table.Selected != selected && len(app.order) > 0 {
+		// An explicit navigation or click: identity follows the cursor.
+		app.anchorID = app.rows[app.order[app.table.Selected]].id
+	}
+}
+
+// reanchor restores the cursor onto the data row the user had selected —
+// identity is the row, the view index is transient. A row that left the
+// view cannot hold the cursor: the cursor clamps to a valid index and the
+// anchor becomes whatever row it lands on, because that is the row the
+// user now sees selected.
+func (app *tabledemo) reanchor(anchor int) {
+	for i, idx := range app.order {
+		if app.rows[idx].id == anchor {
+			app.table.Selected = i
+			app.anchorID = anchor
+			app.clampOffsetToSelection()
+			return
+		}
+	}
+	app.clampSelection()
+	if len(app.order) > 0 {
+		app.anchorID = app.rows[app.order[app.table.Selected]].id
+	}
+}
+
+// clampSelection bounds the cursor to the view; a shrink (filter applied,
+// rows leaving) can leave the old index past the end.
+func (app *tabledemo) clampSelection() {
+	if app.table.Selected >= len(app.order) {
+		app.table.Selected = max(len(app.order)-1, 0)
+	}
+	if app.table.Selected < 0 {
+		app.table.Selected = 0
+	}
+}
+
+// clampOffsetToSelection keeps the re-anchored cursor on screen: the user
+// was looking at the row they selected, and a re-sort must not scroll it
+// out from under them.
+func (app *tabledemo) clampOffsetToSelection() {
+	if app.viewRows <= 1 {
+		return
+	}
+	if app.table.Selected < app.table.Offset {
+		app.table.Offset = app.table.Selected
+	}
+	if last := app.table.Offset + app.viewRows - 1; app.table.Selected > last {
+		app.table.Offset = app.table.Selected - app.viewRows + 1
 	}
 }
 
@@ -170,13 +245,65 @@ func (app *tabledemo) row(index int) []string {
 	}
 }
 
+// refilter rebuilds the view around the current query — the filter first,
+// then the standing sort — and re-anchors the cursor onto its row, so
+// narrowing the view never steals the selection.
+func (app *tabledemo) refilter() {
+	app.order = app.order[:0]
+	query := strings.ToLower(app.filter.Value)
+	for i := range app.rows {
+		if filterMatches(app.rows[i], query) {
+			app.order = append(app.order, i)
+		}
+	}
+	if app.table.SortActive {
+		app.sortRows()
+	}
+	app.reanchor(app.anchorID)
+}
+
+// filterMatches reports whether a row survives a query. An empty query is
+// the absence of a filter, not a query for nothing: everything matches.
+func filterMatches(r record, query string) bool {
+	return query == "" ||
+		strings.Contains(strings.ToLower(r.name), query) ||
+		strings.Contains(strings.ToLower(r.state), query)
+}
+
+// setFilter installs a whole query at once (the Escape clear) and rebuilds
+// the view around it.
+func (app *tabledemo) setFilter(query string) {
+	app.filter.SetValue(query)
+	app.refilter()
+}
+
 func (app *tabledemo) Update(next event.Event) lux.Command {
 	if action, handled := app.ui.Handle(next); handled {
-		switch action.Target {
-		case "table":
-			app.applyTable(action)
-		case "quit":
+		switch {
+		case action.Target == "quit" && action.Kind == ui.Activate:
+			// Escape over a live query is a filter clear, not an exit —
+			// the user is refining a view, not leaving the app. Only a
+			// bare Escape on an empty query quits.
+			if app.filter.Value != "" {
+				app.setFilter("")
+				return nil
+			}
 			return lux.Quit()
+		case action.Target == "filter" && action.Kind == ui.Focus:
+			// The '/' shortcut asks for the field; focus movement is the
+			// app's own call, granted here.
+			app.ui.Focus("filter")
+		case action.Target == "filter" && action.Kind == ui.Input:
+			if app.filter.Apply(action) {
+				app.refilter()
+			}
+			if action.Event.Kind == event.Key && action.Event.Key.Code == event.KeyEnter {
+				// Enter commits the query and hands focus back to the
+				// results: navigation resumes.
+				app.ui.Focus("table")
+			}
+		case action.Target == "table":
+			app.applyTable(action)
 		}
 		return nil
 	}
@@ -199,6 +326,10 @@ func (app *tabledemo) View(frame *lux.Frame) {
 	defer app.ui.End(frame)
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyEscape}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 
+	// Horizontal scrolling is deliberately absent: the five-column set fits
+	// the 44-cell floor this guard already enforces, so the honest layout
+	// is a wider terminal, not a half-hidden row. Revisit only when a real
+	// column set outgrows the width.
 	if area.W < 44 || area.H < 12 {
 		canvas.Text(0, 0, "LUX table - enlarge terminal", render.Style{Foreground: violet})
 		app.report()
@@ -208,14 +339,36 @@ func (app *tabledemo) View(frame *lux.Frame) {
 	canvas.Border(render.Rect{X: 1, Y: 0, W: area.W - 2, H: area.H - 2}, render.RoundedBorder, render.Style{Foreground: violet, Background: background})
 	canvas.Text(3, 0, " LUX TABLE ", render.Style{Foreground: cyan, Background: background, Attrs: render.AttrBold})
 
+	// The table registers before the filter on purpose: the data is the
+	// primary surface, so it keeps the initial focus and the first Tab
+	// position, and refinement is one Tab away.
 	style := ui.TableStyle{
 		Normal:   render.Style{Foreground: ink, Background: background},
 		Header:   render.Style{Foreground: muted, Background: background, Attrs: render.AttrUnderline},
 		Selected: render.Style{Foreground: background, Background: violet},
 		Focused:  render.Style{Foreground: background, Background: cyan},
 	}
-	body := render.Rect{X: 2, Y: 1, W: area.W - 4, H: area.H - 5}
+	body := render.Rect{X: 2, Y: 2, W: area.W - 4, H: area.H - 6}
+	app.viewRows = max(body.H-1, 0) // minus the header row the table paints
 	app.ui.Table("table", canvas, body, &app.table, tableColumns, len(app.order), app.row, style)
+
+	filterStyle := ui.InputStyle{
+		Normal:      render.Style{Foreground: ink, Background: background},
+		Placeholder: render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim},
+	}
+	app.ui.Input("filter", canvas, render.Rect{X: 2, Y: 1, W: area.W - 4, H: 1}, &app.filter, filterStyle)
+	// '/' jumps to the filter from anywhere the table has focus; it is an
+	// app-scope binding without priority so a '/' typed into the query
+	// itself still reaches the editor as text.
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyRune, Rune: '/'}, Target: "filter", Kind: ui.Focus, Scope: ui.ScopeApp})
+
+	// An empty view tells the truth: it is the query that matched nothing,
+	// not a data outage, and the row under the cursor is gone.
+	if len(app.order) == 0 && app.filter.Value != "" {
+		hint := fmt.Sprintf(" no rows match %q ", app.filter.Value)
+		x := max((area.W-canvas.TextWidth(hint))/2, 2)
+		canvas.Text(x, 2, hint, render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim})
+	}
 
 	sortInfo := "unsorted"
 	if app.table.SortActive {
@@ -225,9 +378,18 @@ func (app *tabledemo) View(frame *lux.Frame) {
 		}
 		sortInfo = fmt.Sprintf("%s %s", tableColumns[app.table.SortColumn].Title, direction)
 	}
-	status := fmt.Sprintf(" %d rows  row %d  sort %s ", len(app.order), app.table.Selected+1, sortInfo)
+	// The row counter reads `1` for the first row, `0` for none, and `-`
+	// only when the view is empty and no cursor exists at all.
+	rowInfo := fmt.Sprintf("row %d", app.table.Selected+1)
+	if len(app.order) == 0 {
+		rowInfo = "row -"
+	}
+	status := fmt.Sprintf(" %d rows  %s  sort %s ", len(app.order), rowInfo, sortInfo)
+	if app.filter.Value != "" {
+		status = fmt.Sprintf(" %d match %q  %s  sort %s ", len(app.order), app.filter.Value, rowInfo, sortInfo)
+	}
 	canvas.Text(2, area.H-2, status, render.Style{Foreground: muted, Background: background})
-	footer := " up/down move  wheel scroll  click select  click header sort  esc quit "
+	footer := " up/down move  wheel scroll  click select  click header sort  / filter  esc quit "
 	if canvas.TextWidth(footer) > area.W-2 {
 		footer = " esc quit "
 	}
@@ -241,12 +403,16 @@ func (app *tabledemo) report() {
 	}
 	select {
 	case app.observe <- tabledemoState{
-		rows:       len(app.order),
-		selected:   app.table.Selected,
-		offset:     app.table.Offset,
-		sortActive: app.table.SortActive,
-		sortColumn: app.table.SortColumn,
-		sortDesc:   app.table.SortDesc,
+		rows:        len(app.rows),
+		matches:     len(app.order),
+		selected:    app.table.Selected,
+		offset:      app.table.Offset,
+		anchor:      app.anchorID,
+		filter:      app.filter.Value,
+		filterFocus: app.ui.Focused("filter"),
+		sortActive:  app.table.SortActive,
+		sortColumn:  app.table.SortColumn,
+		sortDesc:    app.table.SortDesc,
 	}:
 	default:
 	}
