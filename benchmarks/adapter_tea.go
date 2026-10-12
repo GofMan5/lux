@@ -92,6 +92,10 @@ func (l *teaLane) resetCounts() {
 	l.draws.Store(0)
 }
 
+// frameCPUs: tea coalesces paints behind its renderer flush rate, so
+// there is no per-frame presentation callback to sample CPU at.
+func (l *teaLane) frameCPUs() []float64 { return nil }
+
 func (l *teaLane) stop() error {
 	if l.prog != nil {
 		l.prog.Quit()

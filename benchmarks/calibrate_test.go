@@ -6,6 +6,7 @@ package main
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -154,6 +155,93 @@ func TestAggregateLaneNoOutputOmitsZeroLatency(t *testing.T) {
 	}
 }
 
+func TestAggregateLaneFrameCPUDistribution(t *testing.T) {
+	// 1..20 pooled from two rounds: p50 lands between the two 10s and
+	// interpolates to 10.5, p95 to 19.05, p99 to 20.0.
+	series := make([]float64, 0, 20)
+	for v := 1.0; v <= 20.0; v++ {
+		series = append(series, v)
+	}
+	runs := []*RunResult{
+		{Adapter: "lux", Scene: "static", Width: 120, Height: 40, Round: 1,
+			Paints: 20, Draws: 20, FrameCPUUs: series},
+		{Adapter: "lux", Scene: "static", Width: 120, Height: 40, Round: 2,
+			Paints: 20, Draws: 20, FrameCPUUs: series},
+	}
+	l := aggregateLane("lux", runs)
+	want := map[string]struct {
+		got, want float64
+	}{
+		"p50": {l.FrameCPUP50, 10.5},
+		"p95": {l.FrameCPUP95, 19.05},
+		"p99": {l.FrameCPUP99, 20.0},
+	}
+	for name, tc := range want {
+		if math.Abs(tc.got-tc.want) > 1e-6 {
+			t.Fatalf("frame CPU %s = %v, want %v", name, tc.got, tc.want)
+		}
+	}
+	if !(l.FrameCPUP50 <= l.FrameCPUP95 && l.FrameCPUP95 <= l.FrameCPUP99) {
+		t.Fatalf("frame CPU percentiles not ordered: %v/%v/%v",
+			l.FrameCPUP50, l.FrameCPUP95, l.FrameCPUP99)
+	}
+
+	// Lanes that cannot sample per-frame CPU report nothing, not zero.
+	tea := aggregateLane("tea", []*RunResult{
+		{Adapter: "tea", Scene: "static", Width: 120, Height: 40, Round: 1,
+			Paints: -1, Bursts: 4},
+	})
+	if tea.FrameCPUP50 != 0 || tea.FrameCPUP95 != 0 || tea.FrameCPUP99 != 0 {
+		t.Fatalf("tea frame CPU percentiles = %v/%v/%v, want 0 (not sampled)",
+			tea.FrameCPUP50, tea.FrameCPUP95, tea.FrameCPUP99)
+	}
+}
+
+func TestLuxLaneFrameCPUSamplerWindow(t *testing.T) {
+	lux := newLuxLane()
+
+	// The first sample after reset (or start) only establishes the CPU
+	// baseline: there is no previous present to subtract from yet.
+	lux.sampleFrameCPU()
+	if got := len(lux.frameCPUs()); got != 0 {
+		t.Fatalf("first sample recorded %d deltas, want 0 (baseline only)", got)
+	}
+
+	// The second sample records exactly one delta for the frame between
+	// the two presents. The value may be tiny on a fast host; the count
+	// is what pins the contract.
+	lux.sampleFrameCPU()
+	if got := len(lux.frameCPUs()); got != 1 {
+		t.Fatalf("after two samples, recorded %d deltas, want 1", got)
+	}
+
+	// resetCounts covers the whole measured window: samples from the
+	// warmup phase must not leak into the measured distribution, and the
+	// sampler must re-establish its baseline afterwards.
+	lux.resetCounts()
+	if got := len(lux.frameCPUs()); got != 0 {
+		t.Fatalf("resetCounts left %d frame CPU samples, want 0", got)
+	}
+	lux.sampleFrameCPU()
+	if got := len(lux.frameCPUs()); got != 0 {
+		t.Fatalf("sample right after reset recorded %d deltas, want 0 (new baseline)", got)
+	}
+	lux.sampleFrameCPU()
+	if got := len(lux.frameCPUs()); got != 1 {
+		t.Fatalf("after post-reset baseline, recorded %d deltas, want 1", got)
+	}
+
+	// frameCPUs must hand out a copy: mutating the returned slice cannot
+	// corrupt the lane's samples.
+	samples := lux.frameCPUs()
+	if len(samples) > 0 {
+		samples[0] = -1
+		if lux.frameCPUs()[0] == -1 {
+			t.Fatal("frameCPUs returned a slice aliasing lane state")
+		}
+	}
+}
+
 func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	spec := machineSpec{
@@ -166,7 +254,8 @@ func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 	}
 	runs := []*RunResult{
 		{Adapter: "lux", Scene: "inputburst", Width: 120, Height: 40, Round: 1,
-			Paints: 4, Draws: 4, NoOutput: 2, BatchLatMs: []float64{12.5}},
+			Paints: 4, Draws: 4, NoOutput: 2, BatchLatMs: []float64{12.5},
+			FrameCPUUs: []float64{2, 4, 6, 8, 10, 12, 14, 16, 18, 20}},
 	}
 	runsRaw, _ := json.Marshal(runs)
 	if err := os.WriteFile(filepath.Join(dir, "all-runs.json"), runsRaw, 0o644); err != nil {
@@ -183,12 +272,31 @@ func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 	if !strings.Contains(string(bench), "no_output_units=2") {
 		t.Fatalf("benchstat.txt missing no_output_units line:\n%s", bench)
 	}
+	// The per-frame CPU distribution must survive into the benchstat
+	// metrics: 10 samples 2..20 give p50 11.0, p95 19.1, p99 19.8.
+	for _, want := range []string{
+		"cpu_us_per_frame_p50=11.0",
+		"cpu_us_per_frame_p95=19.1",
+		"cpu_us_per_frame_p99=19.8",
+	} {
+		if !strings.Contains(string(bench), want) {
+			t.Fatalf("benchstat.txt missing %q:\n%s", want, bench)
+		}
+	}
 	report, err := os.ReadFile(filepath.Join(dir, "report.md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(report), "no-output units (latency omitted): 2") {
 		t.Fatalf("report.md missing the no-output note:\n%s", report)
+	}
+	// The report gains the per-frame CPU distribution column next to the
+	// mean, so tail frames are visible, not averaged away.
+	if !strings.Contains(string(report), "CPU p50/p95/p99 (us)") {
+		t.Fatalf("report.md missing the CPU distribution column header:\n%s", report)
+	}
+	if !strings.Contains(string(report), "11.0 / 19.1 / 19.8") {
+		t.Fatalf("report.md missing the frame CPU distribution values:\n%s", report)
 	}
 	// The measurement inputs must survive a rebuild untouched.
 	runsAfter, err := os.ReadFile(filepath.Join(dir, "all-runs.json"))

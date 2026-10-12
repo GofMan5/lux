@@ -25,6 +25,10 @@ type luxLane struct {
 
 	paints atomic.Int64
 	draws  atomic.Int64
+
+	frameCPUMu sync.Mutex
+	frameCPU   []float64 // per-frame process-CPU deltas (us), measured window
+	lastCPU    float64   // CPU clock at the previous present (0 = no baseline yet)
 }
 
 func newLuxLane() *luxLane {
@@ -84,6 +88,38 @@ func (l *luxLane) counts() (paints int64, draws int64) {
 func (l *luxLane) resetCounts() {
 	l.paints.Store(0)
 	l.draws.Store(0)
+	l.frameCPUMu.Lock()
+	l.frameCPU = l.frameCPU[:0]
+	l.lastCPU = 0
+	l.frameCPUMu.Unlock()
+}
+
+// sampleFrameCPU runs inside the presentation callback of each frame:
+// it reads the process CPU clock and records the delta since the
+// previous present. That delta covers exactly one frame pipeline —
+// input parse, update, view, compose, diff, encode, flush — plus any
+// background work the process did between the two presents. The first
+// sample after start or reset only establishes the baseline; there is
+// no earlier present to subtract from yet.
+func (l *luxLane) sampleFrameCPU() {
+	now, ok := processCPUMicros()
+	if !ok {
+		return
+	}
+	l.frameCPUMu.Lock()
+	defer l.frameCPUMu.Unlock()
+	if l.lastCPU == 0 {
+		l.lastCPU = now
+		return
+	}
+	l.frameCPU = append(l.frameCPU, now-l.lastCPU)
+	l.lastCPU = now
+}
+
+func (l *luxLane) frameCPUs() []float64 {
+	l.frameCPUMu.Lock()
+	defer l.frameCPUMu.Unlock()
+	return append([]float64(nil), l.frameCPU...)
 }
 
 func (l *luxLane) stop() error {
@@ -151,7 +187,10 @@ func (m *luxModel) View(f *lux.Frame) {
 		return
 	}
 	m.lane.draws.Add(1)
-	f.OnPresented(func() { m.lane.paints.Add(1) })
+	f.OnPresented(func() {
+		m.lane.paints.Add(1)
+		m.lane.sampleFrameCPU()
+	})
 
 	canvas := f.Canvas
 	w, h := canvas.Size()

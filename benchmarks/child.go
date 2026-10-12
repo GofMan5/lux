@@ -235,6 +235,7 @@ func childMeasurePhase(adapterName string, sc sceneID, w, h, round int, quick bo
 	paints, draws := adapter.counts()
 	res.Paints = paints
 	res.Draws = draws
+	res.FrameCPUUs = adapter.frameCPUs()
 
 	phase("adapter-stop")
 	if err := adapter.stop(); err != nil {

@@ -30,6 +30,12 @@ type adapter interface {
 	// which are also reset right after warmup.
 	resetCounts()
 
+	// frameCPUs returns one process-CPU delta (us) per presented frame,
+	// sampled at each presentation callback within the measured window.
+	// Lanes with no presentation hook return nil — the same honesty rule
+	// as counts(): a lane that cannot measure reports nothing, not zero.
+	frameCPUs() []float64
+
 	stop() error
 }
 

@@ -228,3 +228,18 @@ func snapshotUsage() usageSnapshot {
 		mallocs:   ms.Mallocs,
 	}
 }
+
+// processCPUMicros reads the same quantity (process CPU, user+system
+// across all threads) through CLOCK_PROCESS_CPUTIME_ID instead of
+// getrusage. The rusage microsecond fields are filled from scheduler
+// quanta, so sub-millisecond deltas — the size of a whole frame —
+// quantize away; the CPU clock resolves nanoseconds. Returns false only
+// if the clock cannot be read, in which case the caller records no
+// sample rather than a wrong one.
+func processCPUMicros() (float64, bool) {
+	var ts unix.Timespec
+	if err := unix.ClockGettime(unix.CLOCK_PROCESS_CPUTIME_ID, &ts); err != nil {
+		return 0, false
+	}
+	return float64(ts.Sec)*1e6 + float64(ts.Nsec)/1e3, true
+}

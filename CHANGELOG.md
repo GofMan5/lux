@@ -17,6 +17,31 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `benchmarks` now measures a per-frame CPU distribution, closing the
+  honesty debt where the report could only show a mean: the lux lane
+  samples the process CPU clock (`CLOCK_PROCESS_CPUTIME_ID`,
+  nanosecond resolution where `getrusage` quanta are microseconds)
+  inside its `OnPresented` callback, so every sample is the process CPU
+  burned between two consecutive presented frames — one full pipeline
+  of input parse, update, view, compose, diff, encode, and flush, plus
+  in-process background work. Raw per-frame deltas ship in
+  `results/all-runs.json` (`frame_cpu_us`); pooled p50/p95/p99 per
+  cell land in the report table and in the benchstat metrics
+  (`cpu_us_per_frame_p50/p95/p99`). Lanes without a presentation
+  callback (tea, tview) report `—` — the same honesty rule as
+  paints `-1`: a lane that cannot measure reports nothing, not zero.
+  The distribution also exposes what the mean was hiding: the mean's
+  window extends to the final settle, whose output-wait loop polls
+  every 2 ms, so a scene with no tail output (static, whose diff is
+  empty) accumulates seconds of harness wait CPU into the mean while
+  the samples telescope only between the first and last presented
+  frame and stay clean — quick static reads ~19.9 ms/frame mean
+  against a ~2.3 ms p50 in the same run. Pinned by
+  `TestAggregateLaneFrameCPUDistribution`,
+  `TestLuxLaneFrameCPUSamplerWindow`, and the extended
+  `TestRebuildOutputsRegeneratesArtifacts`, which regenerates
+  report.md and benchstat.txt from a raw run containing
+  `frame_cpu_us` samples without re-measuring.
 - `examples/08-tour` widgets page closes the stage-4 state demo: a
   "control states" block under the radio group shows a disabled
   checkbox, a disabled button, and an empty list side by side. The
