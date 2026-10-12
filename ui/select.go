@@ -194,9 +194,11 @@ func (s *SelectState) Apply(action Action, count int) (changed, activated bool) 
 // neighbours so the popup wins pointer hits. The popup prefers the space
 // below the anchor and flips above it when only that fits;
 // SelectPlacement is that decision, shared so an application can wrap the
-// open popup in a modal of its own. Escape and click-outside close are the
-// application's to handle: plain Escape is not routed to regions, and a
-// press outside the region routes elsewhere or nowhere.
+// open popup in a modal of its own. Popup rows the canvas's clip hides cost
+// nothing: their labels are skipped before any truncation. Escape and
+// click-outside close are the application's to handle: plain Escape is not
+// routed to regions, and a press outside the region routes elsewhere or
+// nowhere.
 func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state *SelectState, options []string, style SelectStyle) {
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
@@ -259,11 +261,17 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 		visual = fallbackStyle(style.Hovered, visual)
 	}
 	anchorY := visible.Y + state.anchorRow
-	canvas.Fill(render.Rect{X: visible.X, Y: anchorY, W: visible.W, H: 1}, " ", visual)
-	text := clipTextEllipsis(current, max(visible.W-2, 0), canvas.WidthPolicy(), "…")
-	canvas.Text(visible.X+1, anchorY, text, visual)
-	if visible.W > 1 {
-		canvas.Text(visible.X+visible.W-1, anchorY, marker, visual)
+	anchor := render.Rect{X: visible.X, Y: anchorY, W: visible.W, H: 1}
+	// Rows the clip hides cost nothing: a hidden anchor row skips its label
+	// truncation too, not just the fill and text the clip would reject.
+	anchorFirst, anchorLast := drawableRowBand(canvas, anchor)
+	if anchorFirst < anchorLast {
+		canvas.Fill(anchor, " ", visual)
+		text := clipTextEllipsis(current, max(visible.W-2, 0), canvas.WidthPolicy(), "…")
+		canvas.Text(visible.X+1, anchorY, text, visual)
+		if visible.W > 1 {
+			canvas.Text(visible.X+visible.W-1, anchorY, marker, visual)
+		}
 	}
 
 	if !state.Open {
@@ -274,13 +282,17 @@ func (c *Context) Select(id ID, canvas *render.Canvas, bounds render.Rect, state
 		// Flipped above: the options fill the rows the anchor ends.
 		popup = render.Rect{X: visible.X, Y: visible.Y, W: visible.W, H: state.anchorRow}
 	}
-	if popup.Empty() {
+	// The popup paints only its drawable rows: the band fill skips rows the
+	// clip hides and the row loop skips their label truncation instead of
+	// relying on per-cell rejection.
+	first, last := drawableRowBand(canvas, popup)
+	if first >= last {
 		return
 	}
 	popupStyle := themedStyle(style.Popup, theme.Muted, fallbackStyle(style.Popup, style.OptionNormal))
-	canvas.Fill(popup, " ", popupStyle)
+	canvas.Fill(render.Rect{X: popup.X, Y: popup.Y + first, W: popup.W, H: last - first}, " ", popupStyle)
 	optionNormal := themedStyle(style.OptionNormal, theme.Text, fallbackStyle(style.OptionNormal, style.Normal))
-	for row := 0; row < popup.H; row++ {
+	for row := first; row < last; row++ {
 		index := state.Offset + row
 		if index >= count {
 			break

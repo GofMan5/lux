@@ -111,6 +111,42 @@ func TestButtonListAndModalRendering(t *testing.T) {
 	}
 }
 
+// TestModalClippedDrawMatchesUnclipped pins reference equivalence: the modal
+// scope keeps the full rect, while the panel fill and the title follow the
+// drawable band — cells inside the clip are identical to an unclipped draw,
+// cells outside stay blank, and the returned interior keeps its full
+// geometry for the controls drawn inside.
+func TestModalClippedDrawMatchesUnclipped(t *testing.T) {
+	draw := func(canvas *render.Canvas) *render.Canvas {
+		var ctx Context
+		ctx.begun = true
+		inner := ctx.Modal("help", canvas, render.Rect{X: 4, Y: 2, W: 14, H: 8}, "Help", ModalStyle{})
+		ctx.EndModal()
+		return inner
+	}
+	full := render.NewBuffer(24, 14)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(24, 14)
+	clip := render.Rect{X: 0, Y: 6, W: 24, H: 6}
+	inner := draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 14; y++ {
+		for x := 0; x < 24; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+	if width, height := inner.Size(); width != 12 || height != 6 {
+		t.Fatalf("modal inner = %dx%d; want the full 12x6 interior", width, height)
+	}
+}
+
 func TestControlsTinyAndDisabledAreSafe(t *testing.T) {
 	buffer := render.NewBuffer(2, 1)
 	canvas := render.NewCanvas(buffer)

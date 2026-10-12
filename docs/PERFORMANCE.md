@@ -246,7 +246,9 @@ not grow with anything but the visible rows on the same machine
 rows, and `BenchmarkSelectDrawClosed`/`BenchmarkSelectDrawOpen` about
 5.4 µs and 7 µs with 1 alloc/op at 40 columns — the open popup pays only its
 own visible rows, never the option count, and one switch reuses the anchor
-row's region rectangle for the closed box.
+row's region rectangle for the closed box. (DrawOpen drew a closed box until
+its missing `Open` state was fixed alongside the drawable-band work below;
+the figures here predate that fix.)
 
 The stage 8 display widgets round out the same table (same machine,
 `-benchtime=2s`, `-count=1`): `BenchmarkTabsDraw` about 82 µs with 2
@@ -385,8 +387,37 @@ Visibility-aware scheduling is demonstrated in `examples/08-tour`: the
 gauge and spinner stop requesting animation frames while scrolled out of
 view, pinned by an end-to-end test (a hidden spinner requests zero
 recurring frames; revealing it resumes animation; reduced motion freezes
-decoration). Honestly still open in stage 5: `ui.Select`'s popup and
-`Modal` still price their full geometry against per-cell clipping.
+decoration).
+
+The same drawable-row band then closed the last two full-geometry widgets
+(parent commit 389561e as "before", six alternating rounds, benchstat,
+i5-10400F, Windows Go 1.25.5). `ui.Select`'s popup paints only its drawable
+rows: a hidden anchor row skips its label truncation, the popup fill covers
+the band instead of the whole rect, and each hidden option row skips its
+label clipping — while placement, flip, and press geometry stay on
+`SelectPlacement`'s decision against the canvas bounds, so the committed
+region is untouched and press rows still match drawn rows. `Modal` fills
+only the panel rows the clip can paint and skips a hidden title row's
+clipping; the modal scope and the returned interior keep the full
+`bounds∩canvas` rect, and the border keeps its full geometry so its corners
+stay where they belong (a shrunk border rect would move them). Equivalence
+is pinned by clipped-versus-unclipped cell comparisons for both placements
+(below-anchor and flipped above) and for the modal, plus a
+`testing.AllocsPerRun` gate: a select drawing six visible of twelve
+truncated options through the clip stays within the visible rows' budget
+while the six hidden rows cost no truncation.
+
+| `Benchmark…` | Before | After | sec/op | B/op | allocs/op |
+|---|---|---|---|---|---|
+| SelectDrawClippedHalf | 555.1 µs | 268.9 µs | −51.57% (p=0.002) | 2.277 Ki→1.143 Ki | 75→36 |
+| ModalDrawClippedHalf | 38.63 µs | 29.21 µs | −24.40% (p=0.002) | 105→105 | 2→2 |
+
+Geomean: −39.49%. The modal moves time only — its hidden-row cost was a
+fill walk, not an allocation — while the select's halved bytes and
+allocations are the skipped truncations. Output is byte-identical on every
+covered case, so no CHANGELOG-observable behavior changed. Still honestly
+open in stage 5: items 5–8 (allocation budgets, p95 per-frame timings,
+damage tracking, the regression report) wait for profile evidence.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

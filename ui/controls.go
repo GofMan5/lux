@@ -240,21 +240,30 @@ type ModalStyle struct {
 }
 
 // Modal draws a modal panel, begins its input scope, and returns its interior.
-// Call EndModal after registering all modal controls.
+// Call EndModal after registering all modal controls. The scope and the
+// returned interior keep the full rect; only painting follows the canvas's
+// clip, so rows it hides cost no fill walk and no title clipping.
 func (c *Context) Modal(id ID, canvas *render.Canvas, bounds render.Rect, title string, style ModalStyle) *render.Canvas {
 	if canvas == nil {
 		return nil
 	}
 	bounds = bounds.Intersect(canvas.Bounds())
 	c.BeginModal(id, canvas, bounds)
-	canvas.Fill(bounds, " ", style.Panel)
-	border := style.Frame
-	if border == (render.Border{}) {
-		border = render.RoundedBorder
-	}
-	canvas.Border(bounds, border, fallbackStyle(style.Border, style.Panel))
-	if bounds.W > 4 && title != "" {
-		canvas.Text(bounds.X+2, bounds.Y, " "+clipText(title, bounds.W-4, canvas.WidthPolicy())+" ", fallbackStyle(style.Title, style.Border))
+	drawable := bounds.Intersect(canvas.DrawableRect())
+	if !drawable.Empty() {
+		// Fill and title follow the drawable band. The border keeps the
+		// full rect so its corners stay where they belong; the clip still
+		// rejects its hidden cells per-cell.
+		canvas.Fill(drawable, " ", style.Panel)
+		border := style.Frame
+		if border == (render.Border{}) {
+			border = render.RoundedBorder
+		}
+		canvas.Border(bounds, border, fallbackStyle(style.Border, style.Panel))
+		titleFirst, titleLast := drawableRowBand(canvas, render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: 1})
+		if bounds.W > 4 && title != "" && titleFirst < titleLast {
+			canvas.Text(bounds.X+2, bounds.Y, " "+clipText(title, bounds.W-4, canvas.WidthPolicy())+" ", fallbackStyle(style.Title, style.Border))
+		}
 	}
 	return canvas.Subview(bounds.Inset(1, 1))
 }

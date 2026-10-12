@@ -236,6 +236,16 @@ Border не используется по умолчанию для каждог
 - Наблюдаемое поведение не изменилось (byte-identical по эквивалентности) — CHANGELOG не затронут. Render-level `BenchmarkPutMeasured` (ascii/wide/combining) добавлен для регресс-трекинга.
 - Осталось в stage 5 (осознанно): `ui.Select` popup и `ui.Modal` geometry; items 5–8 (бюджеты allocs, p95 per-frame тайминги, damage tracking, regression report) — по мере профильных подтверждений.
 
+**Этап 5, item 2 (финал) — Select popup и Modal в drawable band (2026-10-12, slice 41, закрывает два осознанных остатка slice 37/40):**
+
+- `ui.Select`: anchor-строка и popup рисуются только в drawable band — скрытая clip'ом anchor-строка пропускает своё `clipTextEllipsis` (усечение текущего значения), popup-`Fill` покрывает band вместо полного rect, цикл опций идёт по `drawableRowBand` и скрытые строки не платят усечение label/`themedStyle`. Геометрия PLACEMENT/флиппинга и регистрация региона не тронуты: решение остаётся на `SelectPlacement` против `canvas.Bounds()` (public API для modal-обёрток), `anchorRow`/press-rows контракт сохранён (нажатая строка == нарисованная).
+- `ui.Modal`: `Fill` только `bounds.Intersect(canvas.DrawableRect())`, title-строка — guard по band (скрытая title-строка не платит `clipText`), а `Border(bounds)` и `BeginModal`/`Subview(bounds.Inset(1,1))` — без изменений: scope модалки остаётся полным `bounds∩canvas.Bounds()`, рамка держит полный rect (сжатие rect сдвинуло бы углы). Скрытые ячейки по-прежнему отбрасываются per-cell.
+- Корректность: reference-equivalence тесты — клипованная отрисовка == неклипованная по ячейкам (внутри clip — identical, вне — `render.BlankCell`): Select в обоих placements (below-anchor и flipped), Modal с сохранением полного интерьера 12×6 из Subview; alloc-gate `TestSelectClippedHiddenRowsCostNoTruncation` (`AllocsPerRun`): 12 опций с усечением, 6 видимых из 12 — budget ≤ 40 allocs (до конверсии 65: ~5 allocs на каждое из 13 усечений).
+- Попутно закрыт пре-существующий дефект: `BenchmarkSelectDrawOpen` мерил ЗАКРЫТЫЙ select (`Open:false` при комментарии про открытый popup) — теперь `Open:true`.
+- A/B, 6 чередующихся раундов (benchstat, i5-10400F, Windows Go 1.25.5, before = parent commit 389561e в отдельном worktree; bench-файл скопирован в before-tree, только публичный API): SelectDrawClippedHalf 555.1→268.9 µs −51.57% (p=0.002; B/op 2.277 Ki→1.143 Ki, allocs 75→36 — половина усечений скрытых строк исчезла); ModalDrawClippedHalf 38.63→29.21 µs −24.40% (p=0.002; B/op 105→105, allocs 2→2 — скрытая стоимость была fill-walk'ом, не аллокацией); geomean −39.49%.
+- Наблюдаемое поведение не изменилось (byte-identical) — CHANGELOG не затронут. С этим срезом family drawable-row-band полностью закрыта: Table/Tree/List/RadioGroup (slice 37) + Select popup/Modal (slice 41).
+- Осталось в stage 5: items 5–8 (бюджеты allocs, p95 per-frame тайминги, damage tracking, regression report) — по мере профильных подтверждений.
+
 
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.
 

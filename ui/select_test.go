@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -10,6 +11,14 @@ import (
 
 func selectOptions() []string {
 	return []string{"alpha", "bravo", "charlie", "delta", "echo", "foxtrot", "golf", "hotel", "india", "juliet"}
+}
+
+func selectLongLabels(count int) []string {
+	options := make([]string, count)
+	for i := range options {
+		options[i] = "label long enough to need truncation " + strconv.Itoa(i)
+	}
+	return options
 }
 
 func selectKey(kind ActionKind, code event.KeyCode) Action {
@@ -380,6 +389,88 @@ func TestSelectPlacement(t *testing.T) {
 	}
 }
 
+// TestSelectClippedDrawMatchesUnclipped pins reference equivalence for the
+// below-anchor placement: option labels for popup rows the active clip hides
+// are skipped, cells inside the clip are identical to an unclipped draw, and
+// cells outside stay blank.
+func TestSelectClippedDrawMatchesUnclipped(t *testing.T) {
+	options := selectLongLabels(8)
+	draw := func(canvas *render.Canvas) {
+		var ctx Context
+		ctx.begun = true
+		state := SelectState{Selected: 2, Open: true, PopupRows: 8}
+		ctx.Select("motion", canvas, render.Rect{X: 0, Y: 0, W: 24, H: 1}, &state, options, SelectStyle{})
+	}
+	full := render.NewBuffer(24, 11)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(24, 11)
+	clip := render.Rect{X: 0, Y: 2, W: 24, H: 4}
+	draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 11; y++ {
+		for x := 0; x < 24; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+}
+
+// TestSelectClippedFlippedDrawMatchesUnclipped pins the same equivalence on
+// the flipped placement, where the popup fills the rows the anchor ends.
+func TestSelectClippedFlippedDrawMatchesUnclipped(t *testing.T) {
+	options := selectLongLabels(6)
+	draw := func(canvas *render.Canvas) {
+		var ctx Context
+		ctx.begun = true
+		state := SelectState{Selected: 4, Open: true, PopupRows: 6}
+		ctx.Select("motion", canvas, render.Rect{X: 0, Y: 7, W: 24, H: 1}, &state, options, SelectStyle{})
+	}
+	full := render.NewBuffer(24, 9)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(24, 9)
+	clip := render.Rect{X: 0, Y: 1, W: 24, H: 3}
+	draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 9; y++ {
+		for x := 0; x < 24; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+}
+
+// TestSelectClippedHiddenRowsCostNoTruncation pins the band's pricing: the
+// six popup rows the clip hides cost no label truncation, so the whole draw
+// stays within the six visible rows' allocations. Region registration is
+// outside the pin — the draw runs unbegun, like the clipped benchmarks.
+func TestSelectClippedHiddenRowsCostNoTruncation(t *testing.T) {
+	options := selectLongLabels(12)
+	buffer := render.NewBuffer(24, 13)
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 1, W: 24, H: 6})
+	ctx := Context{focused: "motion"}
+	state := SelectState{Selected: 3, Open: true, PopupRows: 12}
+	allocs := testing.AllocsPerRun(200, func() {
+		ctx.Select("motion", canvas, render.Rect{X: 0, Y: 0, W: 24, H: 1}, &state, options, SelectStyle{})
+	})
+	// Six visible truncations cost roughly thirty allocations; re-adding the
+	// six hidden ones (plus the hidden anchor label) pushes past sixty.
+	if allocs > 40 {
+		t.Fatalf("allocs = %.0f; want <= 40 (six visible truncations)", allocs)
+	}
+}
+
 // BenchmarkSelectDrawOpen prices the open dropdown repaint: anchor row plus
 // eight option rows with prefix clipping.
 func BenchmarkSelectDrawOpen(b *testing.B) {
@@ -387,7 +478,7 @@ func BenchmarkSelectDrawOpen(b *testing.B) {
 	buffer := render.NewBuffer(30, 12)
 	canvas := render.NewCanvas(buffer)
 	ctx := Context{focused: "motion"}
-	state := SelectState{Selected: 2}
+	state := SelectState{Selected: 2, Open: true}
 	b.ReportAllocs()
 	for range b.N {
 		ctx.Select("motion", canvas, render.Rect{X: 0, Y: 0, W: 30, H: 1}, &state, options, SelectStyle{})
