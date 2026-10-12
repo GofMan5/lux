@@ -129,6 +129,7 @@ type procsState struct {
 	palette         bool // the command palette is open
 	paletteRows     int  // matching commands, 0 while closed
 	paletteSelected int  // selected command index, clamped into the matches
+	w, h            int  // canvas the state was drawn on; the resize gate's committed beacon keys on it
 }
 
 func newProcsApp(source processSource, observe, committed chan procsState) *procsApp {
@@ -472,7 +473,7 @@ func (app *procsApp) View(frame *lux.Frame) {
 
 	if area.W < 44 || area.H < 14 {
 		canvas.Text(0, 0, "LUX procs - enlarge terminal", render.Style{Foreground: violet})
-		state = app.report()
+		state = app.report(area)
 		return
 	}
 
@@ -534,7 +535,7 @@ func (app *procsApp) View(frame *lux.Frame) {
 	if app.paletteOpen {
 		app.drawPalette(canvas, area)
 	}
-	state = app.report()
+	state = app.report(area)
 }
 
 // drawDetail renders the master-detail pane for the selected row.
@@ -550,7 +551,7 @@ func (app *procsApp) drawDetail(canvas *render.Canvas, area render.Rect) {
 	canvas.Text(4, area.H-6, fmt.Sprintf(" cpu %.1f   mem %s   state %s ", r.cpu, memString(r.mem), r.state), render.Style{Foreground: muted, Background: background})
 }
 
-func (app *procsApp) report() procsState {
+func (app *procsApp) report(area render.Rect) procsState {
 	detail := ""
 	if len(app.order) > 0 {
 		detail = app.rows[app.order[app.table.Selected]].name
@@ -564,6 +565,8 @@ func (app *procsApp) report() procsState {
 		detail:   detail,
 		notice:   app.notice,
 		confirm:  app.confirmRow.pid,
+		w:        area.W,
+		h:        area.H,
 	}
 	if app.paletteOpen {
 		matches := app.paletteMatches()

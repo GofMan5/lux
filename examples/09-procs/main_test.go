@@ -370,28 +370,27 @@ func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
 		scriptStep{delay: 30 * time.Millisecond, rows: full}, // retry with "rel"
 	)
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64), nil)
+	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
 
-	// The state above arrived from inside the first View, before the
-	// writer's present callbacks committed the table's focus: a
-	// keystroke that beats the first commit is dropped on an empty focus
-	// table. F5 is refresh here, so F6 (bound nowhere) forces the
-	// repaint, and the writer is sequential: a second frame on the wire
-	// proves the first frame's commit ran.
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	waitFrame(t, backend.frames)
+	// The committed gate is the whole barrier: the beacon fires only
+	// after the frame's present callbacks committed the table's focus,
+	// so the runes below route against the drawn table, not against the
+	// loading frame's tree or an empty focus table. (F6-then-waitFrame
+	// was the old barrier here; a frame's arrival proves nothing about
+	// the callbacks that commit it, and offerLatest can displace the
+	// committing frame outright — see the beacon's comment above.)
 
 	// Typing "rel": the first keystroke issues a load, the next two
 	// coalesce behind it, and the replay lands the filtered set.
 	backend.events <- event.RuneKey('r', 0)
 	backend.events <- event.RuneKey('e', 0)
 	backend.events <- event.RuneKey('l', 0)
-	final := waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	final := waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.phase == phaseData && state.rows == 10 && state.filter == "rel"
 	})
 	if final.detail == "" || !strings.Contains(final.detail, "relay") {
@@ -400,7 +399,7 @@ func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
 
 	// A forced refresh fails: the error phase renders, the run survives.
 	backend.events <- event.KeyPress(event.KeyF5, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.phase == phaseError && state.errText == "list unavailable"
 	})
 	// The frames channel holds a backlog of phase transitions; drain it,
@@ -417,7 +416,7 @@ func TestProcsEndToEndFilterErrorRetryQuit(t *testing.T) {
 
 	// Retry recovers into the same filtered view.
 	backend.events <- event.KeyPress(event.KeyF5, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.phase == phaseData && state.rows == 10 && state.filter == "rel"
 	})
 
@@ -453,23 +452,23 @@ func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
 	)
 	source.killDelay = 30 * time.Millisecond
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64), nil)
+	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
-
-	// The keystroke must land after the table's focus commit: F6 forces a
-	// repaint and the writer is sequential, so a second frame on the wire
-	// proves the first frame's present callbacks ran.
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	waitFrame(t, backend.frames)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
 
 	// Enter on the focused table asks about the selected row (relay-00,
-	// pid 1000 in the seed).
+	// pid 1000 in the seed). The committed gate above is the whole
+	// barrier: the beacon fires only after the writer ran the frame's
+	// present callbacks, so Enter routes against the tree that drew the
+	// 40 rows. (F6-then-waitFrame was the old barrier; the writer pushes
+	// the buffer into Present before running those callbacks, and
+	// offerLatest can displace the committing frame outright — CI
+	// 38241010802 lost Enter exactly there.)
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	confirmState := waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.confirm == 1000 })
+	confirmState := waitCommittedWhere(t, app, done, func(state procsState) bool { return state.confirm == 1000 })
 	if confirmState.phase != phaseData || confirmState.filter != "" {
 		t.Fatalf("confirm state: phase=%v filter=%q", confirmState.phase, confirmState.filter)
 	}
@@ -486,21 +485,21 @@ func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
 	// While the ask is up, an unrelated rune is swallowed: it types
 	// nothing into the filter and does not answer the ask.
 	backend.events <- event.RuneKey('x', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.confirm == 1000 && state.filter == ""
 	})
 
 	// 'n' cancels the ask; the data is untouched.
 	backend.events <- event.RuneKey('n', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.confirm == 0 && state.filter == "" && state.rows == 40
 	})
 
 	// Enter re-asks, and Escape answers the ask — it does not exit the app.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.confirm == 1000 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.confirm == 1000 })
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.confirm == 0 && state.rows == 40
 	})
 
@@ -508,12 +507,12 @@ func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
 	// the in-flight state, then the outcome — and a success refreshes the
 	// data, so the gone row disappears from the table on its own.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.confirm == 1000 })
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.confirm == 1000 })
 	backend.events <- event.RuneKey('y', 0)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.confirm == 0 && strings.Contains(state.notice, "terminating pid 1000")
 	})
-	final := waitStateWhere(t, app.observe, done, func(state procsState) bool {
+	final := waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.phase == phaseData && state.rows == 39 && strings.Contains(state.notice, "terminated pid 1000")
 	})
 	if final.filter != "" {
@@ -706,12 +705,14 @@ func TestProcsStaleAndForeignResultsIgnored(t *testing.T) {
 func TestProcsQuitCancelsInFlightLoad(t *testing.T) {
 	source := newScriptedSource(scriptStep{delay: 8 * time.Second, rows: nil})
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
-	app := newProcsApp(source, make(chan procsState, 64), nil)
+	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseLoading })
+	// The loading frame's tree carries the Escape shortcut; routing
+	// against a tree whose commit has not run yet drops the keystroke.
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.phase == phaseLoading })
 
 	started := time.Now()
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
@@ -871,42 +872,37 @@ func TestProcessSourceKillMissingPidFails(t *testing.T) {
 func TestProcsResizeGateKeepsTasksAndFocus(t *testing.T) {
 	source := newScriptedSource(scriptStep{delay: 20 * time.Millisecond, rows: seedProcs(40)})
 	backend := &interactiveBackend{events: make(chan event.Event, 64), frames: make(chan *render.Buffer, 64)}
-	app := newProcsApp(source, make(chan procsState, 64), nil)
+	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
-	// Force one repaint so the writer's present callbacks have committed
-	// the table's focus: keystrokes below route to the focused table.
-	backend.events <- event.KeyPress(event.KeyF6, 0)
-	waitFrame(t, backend.frames)
+	waitCommittedWhere(t, app, done, func(state procsState) bool { return state.phase == phaseData && state.rows == 40 })
+	// The committed gate above is the whole barrier: the table's focus
+	// and regions are committed before the keystrokes below route.
 
 	// The gate sizes, one at a time: assert on the first frame painted at
 	// the new size. Reports leave View before Present, so a stale
 	// pre-resize frame can still be in flight; the bounds filter skips
 	// those instead of trusting the drain.
 	//
-	// A frame on the wire proves only the PREVIOUS frame's commit: the
-	// writer pushes the buffer to Present before running its presented
-	// callbacks, so the resized frame's region re-registration can still
-	// be pending when its paint is read. resizeLocked clears the
-	// committed regions on the way in, and a keystroke routed through an
-	// empty snapshot is dropped by design — returning the moment the
-	// paint arrives would race the next input against the commit. One
-	// forced repaint after the match is the barrier: its arrival proves
-	// the resized frame's presented callbacks (the commit) already ran,
-	// because the writer presents surfaces sequentially.
+	// A paint still proves nothing about its own commit: the writer
+	// pushes the buffer to Present before running that frame's presented
+	// callbacks, offerLatest can displace the frame outright, and
+	// resizeLocked clears the committed regions on the way in — a
+	// keystroke routed through an empty snapshot is dropped by design,
+	// so returning at paint time would race the next input against the
+	// commit. The committed beacon closes the window by construction:
+	// the beacon fires only after a frame drawn at this size committed
+	// its tree, and the newest frame always reports, so displacement
+	// cannot lose the proof either.
 	resize := func(w, h int) *render.Buffer {
 		drainFrames(backend.frames)
 		backend.events <- event.ResizeTo(w, h)
 		for {
 			painted := waitFrame(t, backend.frames)
 			if bw, bh := painted.Bounds().W, painted.Bounds().H; bw == w && bh == h {
-				// F6 is bound nowhere; it only forces the repaint that
-				// certifies the commit above.
-				backend.events <- event.KeyPress(event.KeyF6, 0)
-				waitFrame(t, backend.frames)
+				waitCommittedWhere(t, app, done, func(state procsState) bool { return state.w == w && state.h == h })
 				return painted
 			}
 		}
