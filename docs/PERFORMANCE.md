@@ -353,14 +353,40 @@ benchmarks −27.02%. The observable cost change is documented in the
 CHANGELOG: `rowAt` and `DisabledAt` callbacks are invoked only for rows the
 clip can paint.
 
+Single-measurement row painting landed on 2026-10-12 (production-plan
+stage 5, item 2 remainder). `TextArea.drawAreaRow`, `TextInput`'s `drawInput`, and
+`drawPlaceholder` used to measure each visible cluster once for layout
+(`Canvas.GraphemeWidth`) and then pay a second segmentation-and-measurement
+pass inside `Canvas.Put` — every visible cluster was priced twice, which is
+what `Text` stopped doing earlier in this stage. `Canvas.PutMeasured(x, y,
+grapheme, width, style)` writes one caller-measured cluster: the row
+painters keep their single `GraphemeWidth` call and hand the measured width
+straight to the painter. Zero-width combining clusters still merge into the
+preceding cell, control and invalid clusters still write nothing, and the
+`PutMeasured`-versus-`Put` equivalence is pinned by a reference battery
+(cluster set × 8 width policies × 6 canvas geometries, including clipped,
+seeded, and off-canvas cases) plus a fuzz row walk. Interleaved A/B
+microbenchmarks (six alternating rounds, benchstat, i5-10400F, Windows Go
+1.25.5, parent commit 60140f1 as "before"):
+
+| `Benchmark…` | Before | After | sec/op | B/op | allocs/op |
+|---|---|---|---|---|---|
+| TextAreaDrawClippedHalf | 89.34 µs | 75.98 µs | −14.96% (p=0.002) | 0→0 | 0→0 |
+| TextInputDraw | 81.00 µs | 79.24 µs | −2.18% (p=0.041) | 0→0 | 0→0 |
+
+TextInputDraw moves only marginally because its row is one line of ~40
+clusters — region registration, the caret-column pass, and window
+bookkeeping dominate that frame, so the removed re-measurement is real but
+small there. Geomean over the two benchmarks: −8.79%. The draw is
+byte-identical for every input the equivalence battery and fuzz walk
+cover, so no CHANGELOG-observable behavior changed.
+
 Visibility-aware scheduling is demonstrated in `examples/08-tour`: the
 gauge and spinner stop requesting animation frames while scrolled out of
 view, pinned by an end-to-end test (a hidden spinner requests zero
 recurring frames; revealing it resumes animation; reduced motion freezes
-decoration). Honestly still open in stage 5: the `TextArea.drawAreaRow`
-path duplicates the grapheme-width-then-put measurement that `Text` now
-shares, and `ui.Select`'s popup and `Modal` still price their full geometry
-against per-cell clipping.
+decoration). Honestly still open in stage 5: `ui.Select`'s popup and
+`Modal` still price their full geometry against per-cell clipping.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

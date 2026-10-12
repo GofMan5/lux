@@ -240,6 +240,27 @@ func (c *Canvas) PutCell(x, y int, cell Cell) int {
 	return c.put(x, y, cell.Grapheme, cell.Style, cell.Link)
 }
 
+// PutMeasured writes one grapheme cluster whose terminal width the caller
+// already measured under this canvas's policy — GraphemeWidth reports it.
+// Row painters that segment and style clusters one at a time use it so each
+// cluster is measured once instead of twice; Put and PutCell derive the
+// width themselves and stay the general entry points. grapheme must be a
+// single printable cluster and width exactly what GraphemeWidth would
+// report for it; a zero-width combining cluster merges into the preceding
+// cell like Put. Undefined input is undefined output.
+func (c *Canvas) PutMeasured(x, y int, grapheme string, width int, style Style) {
+	if c == nil || c.buffer == nil || grapheme == "" || !printable(grapheme) {
+		return
+	}
+	if width <= 0 {
+		if width == 0 {
+			c.appendCombining(x, y, grapheme)
+		}
+		return
+	}
+	c.putMeasured(x, y, grapheme, width, style, Link{})
+}
+
 func (c *Canvas) put(x, y int, grapheme string, style Style, link Link) int {
 	grapheme, width := firstGrapheme(grapheme, c.WidthPolicy())
 	if c == nil || c.buffer == nil || grapheme == "" || !printable(grapheme) {

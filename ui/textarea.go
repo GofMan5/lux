@@ -1007,14 +1007,14 @@ func drawAreaRow(canvas *render.Canvas, view render.Rect, y int, row string, sta
 				if x >= view.W {
 					return
 				}
-				canvas.Put(view.X+x, view.Y+y, " ", paint)
+				canvas.PutMeasured(view.X+x, view.Y+y, " ", 1, paint)
 				x++
 			}
 			continue
 		}
 		width := canvas.GraphemeWidth(grapheme)
 		if width == 0 {
-			canvas.Put(view.X+x, view.Y+y, grapheme, paint)
+			canvas.PutMeasured(view.X+x, view.Y+y, grapheme, 0, paint)
 			continue
 		}
 		if caretCol >= 0 && x <= caretCol && caretCol < x+width {
@@ -1023,11 +1023,11 @@ func drawAreaRow(canvas *render.Canvas, view render.Rect, y int, row string, sta
 		if x+width > view.W {
 			return
 		}
-		canvas.Put(view.X+x, view.Y+y, grapheme, paint)
+		canvas.PutMeasured(view.X+x, view.Y+y, grapheme, width, paint)
 		x += width
 	}
 	if caretCol >= 0 && caretCol == rowCellWidth(row, canvas.WidthPolicy()) && x < view.W {
-		canvas.Put(view.X+x, view.Y+y, " ", caretStyle)
+		canvas.PutMeasured(view.X+x, view.Y+y, " ", 1, caretStyle)
 	}
 }
 

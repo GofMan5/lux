@@ -17,6 +17,25 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `render.Canvas.PutMeasured(x, y, grapheme, width, style)`: writes one
+  grapheme cluster whose terminal width the caller already measured under
+  the canvas's policy — `GraphemeWidth` reports it. Row painters that
+  segment and style clusters one at a time (`TextArea.drawAreaRow`,
+  `TextInput`'s `drawInput` and `drawPlaceholder`) measure each visible
+  cluster once instead of paying a second segmentation/width pass inside
+  `Put`, the same single-measurement shape `Text` got. The contract is one
+  printable cluster and the exact measured width; a zero-width combining
+  cluster still merges into the preceding cell, control and invalid
+  clusters still write nothing, and `Put`/`PutCell` remain the general
+  derive-and-validate entry points. Equivalence is pinned by
+  `TestPutMeasuredMatchesPut` (cluster battery × 8 width policies × 6
+  canvas geometries × clipped/off-canvas origins, full-buffer cell
+  comparison) and `FuzzPutMeasuredMatchesPut` (fuzz row walk). Interleaved
+  A/B microbenchmarks (six alternating rounds, benchstat, i5-10400F,
+  Windows Go 1.25.5): `BenchmarkTextAreaDrawClippedHalf` −14.96%
+  (p=0.002), `BenchmarkTextInputDraw` −2.18% (p=0.041), allocations
+  unchanged at zero; drawn output is byte-identical for every covered
+  input.
 - `render.Canvas.DrawableRect()`: the drawable area of the canvas in the
   canvas's local coordinates — the active `ClipRect` intersected with the
   backing buffer, converted back through the canvas origin and clamped to

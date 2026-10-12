@@ -591,7 +591,7 @@ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal
 		cluster := graphemes.Str()
 		width := canvas.GraphemeWidth(cluster)
 		if width == 0 {
-			canvas.Put(line.X+x, line.Y, cluster, normal)
+			canvas.PutMeasured(line.X+x, line.Y, cluster, 0, normal)
 			continue
 		}
 		if x+width > line.W {
@@ -604,7 +604,7 @@ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal
 		if caretPending {
 			paint, caretPending = caret, false
 		}
-		canvas.Put(line.X+x, line.Y, cluster, paint)
+		canvas.PutMeasured(line.X+x, line.Y, cluster, width, paint)
 		x += width
 	}
 	if !focused || !caretPending && input.Cursor != len(input.Value) {
@@ -612,7 +612,7 @@ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal
 	}
 	cursorX := textCells(input.Value[input.Offset:input.Cursor], canvas.WidthPolicy())
 	if cursorX >= 0 && cursorX < line.W {
-		canvas.Put(line.X+cursorX, line.Y, " ", caret)
+		canvas.PutMeasured(line.X+cursorX, line.Y, " ", 1, caret)
 	}
 }
 
@@ -632,12 +632,12 @@ func drawPlaceholder(canvas *render.Canvas, line render.Rect, value string, plac
 		if focused && first {
 			paint = caret
 		}
-		canvas.Put(line.X+x, line.Y, cluster, paint)
+		canvas.PutMeasured(line.X+x, line.Y, cluster, width, paint)
 		x += width
 		first = false
 	}
 	if focused && first && line.W > 0 {
-		canvas.Put(line.X, line.Y, " ", caret)
+		canvas.PutMeasured(line.X, line.Y, " ", 1, caret)
 	}
 }
 
