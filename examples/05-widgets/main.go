@@ -131,6 +131,10 @@ type catalog struct {
 	// from clock timing.
 	keys    int
 	observe chan catalogState
+	// committed is the commit-time twin of observe, fed from the
+	// OnPresented beacon View registers: a state lands here only after
+	// the frame that painted it had its interaction tree committed.
+	committed chan catalogState
 }
 
 type catalogState struct {
@@ -155,8 +159,9 @@ func newCatalog() *catalog {
 		motion: ui.SelectState{Selected: 2, PopupRows: 3},
 		// The spinner runs on the wall clock; its glyph is a pure function
 		// of absolute time, so no frame counter is needed here.
-		spinner: ui.SpinnerState{Started: time.Now()},
-		observe: make(chan catalogState, 16),
+		spinner:   ui.SpinnerState{Started: time.Now()},
+		observe:   make(chan catalogState, 16),
+		committed: make(chan catalogState, 16),
 	}
 	for i := 0; i < 16; i++ {
 		app.load = append(app.load, .5+.5*math.Sin(float64(i)*2*math.Pi/16))
@@ -212,12 +217,30 @@ func (app *catalog) View(frame *lux.Frame) {
 	area := canvas.Bounds()
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
-	defer app.ui.End(frame)
+	// End registers the interaction-tree commit on this frame's presented
+	// queue; the beacon below registers after it, so the writer goroutine —
+	// which runs the queue in registration order — reports this View's
+	// state only once that commit has run. The pair is the commit-time twin
+	// of report(): waitStateWhere observes the model inside View,
+	// waitCommittedWhere observes the tree the next keystroke actually
+	// routes against. A nil channel never sends: the select below falls
+	// straight to default.
+	var state catalogState
+	defer func() {
+		app.ui.End(frame)
+		beacon := state
+		frame.OnPresented(func() {
+			select {
+			case app.committed <- beacon:
+			default:
+			}
+		})
+	}()
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyEscape}, Target: "quit", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 
 	if area.W < 62 || area.H < 16 {
 		canvas.Text(0, 0, "LUX widgets - enlarge terminal", render.Style{Foreground: violet})
-		app.report()
+		state = app.report()
 		return
 	}
 
@@ -344,7 +367,7 @@ func (app *catalog) View(frame *lux.Frame) {
 			frame.RequestFrameAt(deadline)
 		}
 	}
-	app.report()
+	state = app.report()
 }
 
 // nextChange reports the earliest wall-clock moment at which the visible
@@ -368,18 +391,14 @@ func (app *catalog) nextChange(now time.Time) (time.Time, bool) {
 	return deadline, true
 }
 
-func (app *catalog) report() {
-	if app.observe == nil {
-		return
-	}
+func (app *catalog) report() catalogState {
 	open := 0
 	for _, flag := range app.tree.Expanded {
 		if flag {
 			open++
 		}
 	}
-	select {
-	case app.observe <- catalogState{
+	state := catalogState{
 		selected: app.table.Selected,
 		offset:   app.table.Offset,
 		checked:  app.telemetry.Checked,
@@ -390,9 +409,14 @@ func (app *catalog) report() {
 		treeSel:  app.tree.Selected,
 		treeOpen: open,
 		keys:     app.keys,
-	}:
-	default:
 	}
+	if app.observe != nil {
+		select {
+		case app.observe <- state:
+		default:
+		}
+	}
+	return state
 }
 
 func main() {

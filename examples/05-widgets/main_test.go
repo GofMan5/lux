@@ -171,90 +171,90 @@ func TestCatalogEndToEndKeysClickAndQuit(t *testing.T) {
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
 	app := newCatalog()
 	app.observe = make(chan catalogState, 64)
+	app.committed = make(chan catalogState, 64)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
 	waitFrame(t, backend.frames)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 })
-	// The state above arrived from inside the first View, before the
-	// writer goroutine ran the present callbacks that commit the table's
-	// focus: ui.Context routes events against the last successfully
-	// presented snapshot, so a keystroke that beats the first commit
-	// finds an empty focus table and is dropped silently. Settling before
-	// the first input — not only before region changes — is what keeps
-	// this suite off the 2-vCPU CI lottery; TestKeystrokeBeforeFirstCommitIsDropped
-	// pins the contract deterministically.
-	settle(t, backend)
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.selected == 0 })
+	// The committed gate is the whole barrier: ui.Context routes events
+	// against the last successfully presented snapshot, so a keystroke
+	// that beats the first commit finds an empty focus table and is
+	// dropped silently — TestKeystrokeBeforeFirstCommitIsDropped pins
+	// that contract deterministically. The beacon fires only after the
+	// frame's present callbacks committed the table's focus, so every
+	// input below routes against a tree that is provably live.
 
 	// The focused table takes the arrow keys; each keystroke waits for its
-	// frame so the next input lands on a settled view.
+	// committed frame so the next input lands on a settled view.
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.selected == 1 })
 	backend.events <- event.KeyPress(event.KeyDown, 0)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 2 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.selected == 2 })
 
 	// A body click selects the row under the pointer: the header takes local
 	// row 0, so absolute Y 3 is body row 1.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 12, Y: 3}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.selected == 1 })
 
 	// The form widgets live on the tabs' second page: slot 2 ("form")
 	// spans panel-local X 7-12, so absolute X 48 with the strip at X 40
 	// lands inside it. The page switch changes the panel's regions, so
-	// settle proves the form controls committed before they are clicked.
+	// the committed gate proves the form controls are live before they
+	// are clicked.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
-	settle(t, backend)
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 1 })
 
 	// The checkbox toggles on the mouse release: press focuses, release
 	// activates.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 3}}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 3}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.checked })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.checked })
 
 	// A radio press picks the row under the pointer: local row 1 is violet.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 6}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.station == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.station == 1 })
 
 	// The closed select opens on its release, popup over the panel. The
 	// state is reported inside View, before Present commits the grown
-	// popup region, so settle waits for a frame whose follow-up proves the
-	// commit already ran.
+	// popup region, so the committed gate — not the observe wire — is
+	// what proves the popup region is live before it is clicked.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 10}}
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 10}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.open })
-	settle(t, backend)
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.open })
 
 	// Pressing a popup option picks it (row 11 is option index 0 under
 	// offset 0); the release commits and closes the dropdown. The popup
 	// geometry never moves, so the release lands on the same committed
-	// region without another settle.
+	// region.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 11}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.choice == 0 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.choice == 0 })
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MouseRelease, Button: event.MouseLeft, X: 42, Y: 11}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return !state.open && state.choice == 0 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return !state.open && state.choice == 0 })
 
 	// The select kept focus through its own activation, so the strip takes
 	// a press to hand focus back before the arrow keys page again. Pressing
-	// the already-selected form tab keeps the page and moves focus.
+	// the already-selected form tab keeps the page and moves focus; the
+	// committed gate proves the focus handoff before the arrows run.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 1 })
 	backend.events <- event.KeyPress(event.KeyRight, 0)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 2 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 2 })
 	backend.events <- event.KeyPress(event.KeyRight, 0)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 3 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 3 })
 
-	// The tree page registers its own region geometry, so settle proves the
-	// tree committed before the press. A press on panel row 1 selects the
-	// second visible row ("examples", Y 4 with the tree at Y 3).
-	settle(t, backend)
+	// The tree page registers its own region geometry, so the committed
+	// gate proves the tree is live before the press. A press on panel row
+	// 1 selects the second visible row ("examples", Y 4 with the tree at
+	// Y 3).
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 42, Y: 4}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.treeSel == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.treeSel == 1 })
 
 	// The press focused the tree, so Enter activates the selected row:
 	// "examples" has children, so its expansion set entry flips and the
-	// next view flattens one more level.
+	// next view flattens one more level. The committed gate proves the
+	// focus moved before Enter routes.
 	backend.events <- event.KeyPress(event.KeyEnter, 0)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.treeSel == 1 && state.treeOpen == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.treeSel == 1 && state.treeOpen == 1 })
 
 	// The priority Escape shortcut quits even while a widget holds focus.
 	backend.events <- event.KeyPress(event.KeyEscape, 0)
@@ -277,10 +277,10 @@ func TestCatalogIdlePagesGoQuiet(t *testing.T) {
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
 	app := newCatalog()
 	app.observe = make(chan catalogState, 64)
+	app.committed = make(chan catalogState, 64)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.tab == 0 })
-	settle(t, backend)
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.selected == 0 && state.tab == 0 })
 	// Warm-up absorbs the open-sequence repaints; then the idle window
 	// must be silent. Two frames, not zero, keep the assertion honest
 	// about a deadline straggler without licensing a stream.
@@ -294,7 +294,7 @@ func TestCatalogIdlePagesGoQuiet(t *testing.T) {
 	// The form tab (slot 2 spans panel-local X 7-12, absolute X 48): one
 	// repaint for the page switch, then quiet again.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 48, Y: 2}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 1 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 1 })
 	countFrames(backend.frames, 200*time.Millisecond)
 	if frames := countFrames(backend.frames, 400*time.Millisecond); frames > 2 {
 		t.Fatalf("static form page kept presenting: %d frames in 400ms of idle", frames)
@@ -307,7 +307,7 @@ func TestCatalogIdlePagesGoQuiet(t *testing.T) {
 	// animation with it, and tree is static again.
 	backend.events <- event.KeyPress(event.KeyRight, 0)
 	backend.events <- event.KeyPress(event.KeyRight, 0)
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 3 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 3 })
 	countFrames(backend.frames, 300*time.Millisecond)
 	if frames := countFrames(backend.frames, 400*time.Millisecond); frames > 2 {
 		t.Fatalf("static tree page kept presenting: %d frames in 400ms of idle", frames)
@@ -339,14 +339,15 @@ func TestMotionPageWaitsForGlyphDeadlines(t *testing.T) {
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
 	app := newCatalog()
 	app.observe = make(chan catalogState, 64)
+	app.committed = make(chan catalogState, 64)
 	done := make(chan error, 1)
 	go func() { done <- lux.Run(context.Background(), app, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.selected == 0 && state.tab == 0 })
-	settle(t, backend)
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.selected == 0 && state.tab == 0 })
 	// The motion tab is the strip's slot 3: panel-local X 14-19, so
-	// absolute X 55 lands inside it with the strip at X 40.
+	// absolute X 55 lands inside it with the strip at X 40. The committed
+	// gate proves the strip region is live before the press.
 	backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{Action: event.MousePress, Button: event.MouseLeft, X: 55, Y: 2}}
-	waitStateWhere(t, app.observe, done, func(state catalogState) bool { return state.tab == 2 })
+	waitCommittedWhere(t, app, done, func(state catalogState) bool { return state.tab == 2 })
 	// Warm-up: the page-switch repaint and the first glyph deadline land.
 	countFrames(backend.frames, 250*time.Millisecond)
 	// 1.6s at glyph deadlines is ~20 frames/s (12.5 spinner flips plus 10
@@ -508,6 +509,47 @@ func waitStateWhere(t *testing.T, states <-chan catalogState, done <-chan error,
 	}
 }
 
+// waitCommittedWhere blocks until a state lands on the committed beacon:
+// View registers its report on the frame's presented queue right after the
+// interaction-tree commit, and the writer runs that queue after Present
+// returns, so a state seen here proves the tree the next event routes
+// against is the tree that painted that state. The beacon is
+// displacement-proof: offerLatest can drop a pending frame — with its
+// callbacks — before the writer picks it up, but the newest frame always
+// reports, and it paints the same-or-newer state. This is the barrier the
+// E2E suite gates every input on: an observe state is model time (inside
+// View, pre-Present), and a frame on the wire is paint time (Present
+// returned, callbacks pending) — neither proves the commit. CI run
+// 38263082013 lost this lottery three times in 25 stress iterations: a
+// popup-option press and a tree-row press routed through uncommitted
+// trees, the model never saw them, and the state wait starved to its
+// 45s timeout. The retired settle(F5) barrier rode exactly the second
+// half of that hole: the frame it read could be the state's own frame,
+// pushed by Present before the callbacks ran.
+func waitCommittedWhere(t *testing.T, app *catalog, done <-chan error, match func(catalogState) bool) catalogState {
+	t.Helper()
+	deadline := time.After(hangTimeout)
+	seen := 0
+	var last catalogState
+	for {
+		select {
+		case state := <-app.committed:
+			seen++
+			last = state
+			if match(state) {
+				return state
+			}
+		case err := <-done:
+			t.Fatalf("run ended before the committed state arrived: %v", err)
+		case <-deadline:
+			stack := make([]byte, 1<<20)
+			stack = stack[:runtime.Stack(stack, true)]
+			t.Fatalf("matching committed state timeout after %d states; last: selected=%d checked=%t station=%d choice=%d open=%t tab=%d treeSel=%d treeOpen=%d keys=%d; goroutine dump follows\n%s",
+				seen, last.selected, last.checked, last.station, last.choice, last.open, last.tab, last.treeSel, last.treeOpen, last.keys, stack)
+		}
+	}
+}
+
 func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	t.Helper()
 	select {
@@ -516,27 +558,6 @@ func waitFrame(t *testing.T, frames <-chan *render.Buffer) *render.Buffer {
 	case <-time.After(hangTimeout):
 		t.Fatal("frame timeout")
 		return nil
-	}
-}
-
-// settle waits until the interaction snapshot of a freshly painted frame is
-// committed. ui.Context commits through Frame.OnPresented, which the runtime
-// runs immediately after a successful Present, and the writer presents in
-// FIFO order with the commits between presents, so the arrival of a frame
-// forced after a drain proves every earlier commit already ran. The catalog
-// no longer self-animates on static pages, so the proof frame is forced
-// with an inert keypress: F5 routes through the committed snapshot, no
-// widget consumes it, and the run loop repaints once. It returns the proof
-// frame.
-func settle(t *testing.T, backend *interactiveBackend) *render.Buffer {
-	t.Helper()
-	for {
-		select {
-		case <-backend.frames:
-		default:
-			backend.events <- event.KeyPress(event.KeyF5, 0)
-			return waitFrame(t, backend.frames)
-		}
 	}
 }
 
