@@ -36,7 +36,7 @@ func (c *Context) Button(id ID, canvas *render.Canvas, bounds render.Rect, label
 		flags |= Disabled
 	}
 	c.Region(id, canvas, bounds, flags)
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	theme := c.Theme()
@@ -170,6 +170,8 @@ type ListStyle struct {
 
 // List registers and draws a focusable, scrollable list. Apply its routed
 // actions in Model.Update; View is side-effect free except for bounds repair.
+// When the canvas's clip hides rows of bounds, those rows are neither drawn
+// nor priced through DisabledAt.
 func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *ListState, items []string, style ListStyle) {
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
@@ -187,18 +189,22 @@ func (c *Context) List(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		AtTop:         state.Selected <= 0,
 		AtBottom:      state.Selected >= len(items)-1,
 	})
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	drawable := bounds.Intersect(canvas.DrawableRect())
+	if drawable.Empty() {
 		return
 	}
 	canvas = canvas.Clip(bounds)
 	theme := c.Theme()
 	body := themedStyle(style.Normal, theme.Text, style.Normal)
-	canvas.Fill(bounds, " ", body)
+	canvas.Fill(drawable, " ", body)
 	marker := style.Marker
 	if marker == "" {
 		marker = "> "
 	}
-	for row := 0; row < bounds.H; row++ {
+	// Rows the clip hides cost nothing: DisabledAt and label clipping price
+	// drawable rows only.
+	rowFirst, rowLast := drawableRowBand(canvas, bounds)
+	for row := rowFirst; row < rowLast; row++ {
 		index := state.Offset + row
 		if index >= len(items) {
 			break
@@ -304,4 +310,21 @@ func clipText(text string, width int, policy render.WidthPolicy) string {
 		used += cells
 	}
 	return result.String()
+}
+
+// drawableRowBand returns the half-open range of local rows in bounds that
+// the canvas's active clip can still paint. Row-heavy controls use it to
+// restrict their loops to drawable rows, so callback and formatting work
+// (Table/Tree rowAt, List DisabledAt, label clipping) prices visible rows
+// only — an observable change for apps that supply virtual data. The full
+// [0, bounds.H) range means no clipping applies; an empty range means the
+// caller should return before any formatting work.
+func drawableRowBand(canvas *render.Canvas, bounds render.Rect) (first, last int) {
+	drawable := bounds.Intersect(canvas.DrawableRect())
+	if drawable.Empty() {
+		return 0, 0
+	}
+	first = max(drawable.Y-bounds.Y, 0)
+	last = min(bounds.H, drawable.Y+drawable.H-bounds.Y)
+	return first, last
 }

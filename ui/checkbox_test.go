@@ -289,3 +289,48 @@ func BenchmarkRadioGroupDraw(b *testing.B) {
 		ctx.RadioGroup("palette", canvas, render.Rect{W: 20, H: 3}, &state, []string{"ink", "violet", "muted"}, RadioStyle{})
 	}
 }
+
+// TestRadioGroupClippedDrawMatchesUnclipped pins reference equivalence:
+// labels for rows the active clip hides are skipped, and cells inside the
+// clip are identical to an unclipped draw while cells outside stay blank.
+func TestRadioGroupClippedDrawMatchesUnclipped(t *testing.T) {
+	labels := []string{"ink", "violet", "muted", "gold", "rust", "slate"}
+	draw := func(canvas *render.Canvas) {
+		var ctx Context
+		ctx.begun = true
+		state := RadioState{Selected: 2}
+		ctx.RadioGroup("palette", canvas, render.Rect{X: 0, Y: 0, W: 20, H: 6}, &state, labels, RadioStyle{})
+	}
+	full := render.NewBuffer(20, 6)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(20, 6)
+	clip := render.Rect{X: 0, Y: 2, W: 20, H: 3}
+	draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 6; y++ {
+		for x := 0; x < 20; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+}
+
+// BenchmarkRadioGroupDrawClippedHalf prices the ClipRect-aware band: a
+// six-option group painted through a clip exposing three rows.
+func BenchmarkRadioGroupDrawClippedHalf(b *testing.B) {
+	buffer := render.NewBuffer(20, 6)
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 2, W: 20, H: 3})
+	ctx := Context{focused: "palette"}
+	state := RadioState{Selected: 2}
+	b.ReportAllocs()
+	for range b.N {
+		ctx.RadioGroup("palette", canvas, render.Rect{W: 20, H: 6}, &state,
+			[]string{"ink", "violet", "muted", "gold", "rust", "slate"}, RadioStyle{})
+	}
+}

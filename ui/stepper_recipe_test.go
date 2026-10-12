@@ -131,7 +131,7 @@ func (c *Context) Stepper(id ID, canvas *render.Canvas, bounds render.Rect, stat
 		flags |= Disabled
 	}
 	c.Region(id, canvas, bounds, flags)
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	visual := style.Normal

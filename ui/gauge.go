@@ -45,7 +45,7 @@ func (c *Context) Gauge(canvas *render.Canvas, bounds render.Rect, state *GaugeS
 	if canvas == nil || bounds.Empty() {
 		return
 	}
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	theme := c.Theme()

@@ -26,6 +26,11 @@ The implementation already provides:
   measurement into the same guarded cell-writer path `Put` uses, and rows
   outside the canvas or the active clip skip cell writes while hidden
   lines still count toward the widest-input-line return;
+- widget draw paths that consult the canvas's drawable rectangle
+  (`Canvas.DrawableRect`): rows a tighter `ClipRect` hides are neither
+  formatted nor priced — `Table` and `Tree` `rowAt`, `List` `DisabledAt`,
+  `RadioGroup` labels — while region registration keeps the full logical
+  bounds so hit mapping and Tab reachability are unchanged;
 - an idle runtime that disarms its frame timer;
 - three reusable surfaces with a one-slot latest-frame queue;
 - adaptive presentation pacing through 60→30→20→10 FPS steps;
@@ -318,16 +323,44 @@ microbenchmark results above, the cross-session alarms are
 presentation-count artifacts, not an evidenced library regression. The
 lux-only `rtt` scene was outside the confirmation set, so its cross-session
 delta is adjudicated only by those microbenchmarks — recorded, not assumed.
+
+Widget-level clip awareness was measured on 2026-10-12 (production-plan
+stage 5, item 3). `Canvas.DrawableRect()` exposes the drawable area in the
+canvas's local coordinates; the row widgets (`Table`, `Tree`, `List`,
+`RadioGroup`) intersect their bounds with it, fill only the drawable part,
+and walk only the drawable row band, so `rowAt`, `DisabledAt`, and label
+formatting price visible rows only. Single-row and single-cell widgets
+(`Button`, `Checkbox`, `Gauge`, `Sparkline`, `Tabs`, `Spinner`) consult the
+same rectangle in their early return. Region registration still passes the
+full logical bounds — `GlobalRect` clips the published rect, `originY`
+keeps the unclipped origin, and content height caps at the clipped bottom —
+so hit mapping, Tab reachability, and scroll clamps are byte-identical; a
+reference-equivalence guard test class pins that a clipped draw matches an
+unclipped draw cell-for-cell inside the clip and leaves `render.BlankCell`
+outside. Interleaved A/B microbenchmarks (six alternating rounds, benchstat,
+i5-10400F, Windows Go 1.25.5, parent commit 690adbd as "before"):
+
+| `Benchmark…ClippedHalf` | Before | After | sec/op | B/op | allocs/op |
+|---|---|---|---|---|---|
+| RadioGroupDrawClippedHalf | 42.91 µs | 24.47 µs | −42.97% (p=0.002) | 160→128 | 7→4 |
+| TableDrawClippedHalf | 324.5 µs | 178.1 µs | −45.13% (p=0.002) | 1094→651 | 57→32 |
+| TreeDrawClippedHalf | 175.18 µs | 81.35 µs | −53.56% (p=0.002) | 396→218 | 11→5 |
+
+The unclipped baselines moved within noise in the same session:
+`RadioGroupDraw` 24.97→24.98 µs (p=0.699), `TableDraw` 1.700→1.707 ms
+(p=0.818), `TreeDraw` 197.6→204.4 µs (p=0.240); geomean over the six
+benchmarks −27.02%. The observable cost change is documented in the
+CHANGELOG: `rowAt` and `DisabledAt` callbacks are invoked only for rows the
+clip can paint.
+
 Visibility-aware scheduling is demonstrated in `examples/08-tour`: the
 gauge and spinner stop requesting animation frames while scrolled out of
 view, pinned by an end-to-end test (a hidden spinner requests zero
 recurring frames; revealing it resumes animation; reduced motion freezes
-decoration). Honestly still open in stage 5: `ui.Table` calls `rowAt` for
-rows inside its bounds but clipped by a tighter `ClipRect`, `ui.RadioGroup`
-formats and clips labels on hidden rows, most widgets early-return on an
-empty bounds intersect without consulting `ClipRect`, and the
-`TextArea.drawAreaRow` path duplicates the grapheme-width-then-put
-measurement that `Text` now shares.
+decoration). Honestly still open in stage 5: the `TextArea.drawAreaRow`
+path duplicates the grapheme-width-then-put measurement that `Text` now
+shares, and `ui.Select`'s popup and `Modal` still price their full geometry
+against per-cell clipping.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

@@ -210,7 +210,7 @@ func (c *Context) Tabs(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		AtTop:         state.Offset <= 0,
 		AtBottom:      atBottom,
 	})
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	theme := c.Theme()

@@ -152,6 +152,24 @@ func (c *Canvas) ClipRect() Rect {
 	return c.clip.Intersect(c.buffer.Bounds())
 }
 
+// DrawableRect reports the local rectangle drawing can currently land in:
+// the canvas bounds intersected with the active clip, translated into the
+// canvas's own coordinates. Row-heavy controls use it to skip formatting
+// work that per-cell clipping would discard anyway, so a scrolled container
+// only pays for the rows its clip exposes. An unclipped canvas reports its
+// full bounds, and hit testing is unaffected: GlobalRect clips published
+// regions on its own, so registering a region with full logical bounds
+// stays correct.
+func (c *Canvas) DrawableRect() Rect {
+	if c == nil || c.buffer == nil {
+		return Rect{}
+	}
+	local := c.clip.Intersect(c.buffer.Bounds())
+	local.X -= c.originX
+	local.Y -= c.originY
+	return local.Intersect(c.Bounds())
+}
+
 // Subview returns a canvas whose origin is rect's clipped top-left corner.
 func (c *Canvas) Subview(rect Rect) *Canvas {
 	if c == nil {

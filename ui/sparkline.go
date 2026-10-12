@@ -97,7 +97,7 @@ func (c *Context) Sparkline(canvas *render.Canvas, bounds render.Rect, state *Sp
 	if canvas == nil || bounds.Empty() || state == nil || len(state.Values) == 0 {
 		return
 	}
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	fill := themedStyle(style.Fill, c.Theme().Accent, style.Fill)

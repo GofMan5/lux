@@ -17,6 +17,13 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `render.Canvas.DrawableRect()`: the drawable area of the canvas in the
+  canvas's local coordinates — the active `ClipRect` intersected with the
+  backing buffer, converted back through the canvas origin and clamped to
+  `Bounds`. Widgets use it to price only the cells a clip can still paint;
+  because `Clip(bounds)` preserves local coordinates, the intersection is
+  valid whether taken before or after clipping. Pinned by
+  `TestCanvasDrawableRect`.
 - `benchmarks` now measures a per-frame CPU distribution, closing the
   honesty debt where the report could only show a mean: the lux lane
   samples the process CPU clock (`CLOCK_PROCESS_CPUTIME_ID`,
@@ -134,6 +141,20 @@ semver: breaking changes land only in a new major.
   `TestTableSelectionSurvivesFilter`,
   `TestTableFilterPaintsQueryAndEmptyState`, and an extended
   end-to-end keyboard, mouse, and filter run.
+
+### Changed
+
+- Row-walking widgets now consult the canvas clip before pricing their
+  rows: when a tighter `ClipRect` hides part of a widget's bounds,
+  `ui.Table` and `ui.Tree` call `rowAt`, `ui.List` calls `DisabledAt`,
+  and `ui.RadioGroup` formats labels only for rows the clip can paint.
+  Rows stay addressable — regions still register the full logical bounds
+  (hit mapping, Tab reachability, and scroll clamps are unchanged), and
+  single-cell widgets (`Button`, `Checkbox`, `Gauge`, `Sparkline`,
+  `Tabs`, `Spinner`) skip the draw entirely when the clip hides their
+  whole rectangle. Applications that count callback invocations see
+  fewer calls under a clip; applications that rely only on drawn output
+  and hit testing see no difference.
 
 ### Fixed
 
@@ -873,6 +894,25 @@ semver: breaking changes land only in a new major.
   as "accepted") now demands exactly one leave, the `!windows`
   lifecycle tests close the backend after the dispatch before counting,
   and the e2e lanes assert exactly one leave set on a real pty.
+
+### Performance
+
+- Widget draws are now clip-aware (stage-5 hidden-work elimination,
+  2026-10-12): `Table`, `Tree`, `List`, and `RadioGroup` intersect their
+  bounds with `Canvas.DrawableRect()`, fill only the drawable part, and
+  walk only the drawable row band, so row-source callbacks and label
+  formatting price visible rows only; `Button`, `Checkbox`, `Gauge`,
+  `Sparkline`, `Tabs`, and `Spinner` early-return through the same
+  rectangle. Correctness is pinned by a reference-equivalence guard test
+  class: a clipped draw matches an unclipped draw cell-for-cell inside
+  the clip, and cells outside equal `render.BlankCell`. Interleaved A/B
+  microbenchmarks (six alternating rounds, benchstat, i5-10400F, Windows
+  Go 1.25.5, parent commit 690adbd as "before"): `RadioGroupDrawClippedHalf`
+  42.91→24.47 µs (−42.97%, p=0.002, allocs/op 7→4), `TableDrawClippedHalf`
+  324.5→178.1 µs (−45.13%, p=0.002, allocs/op 57→32),
+  `TreeDrawClippedHalf` 175.18→81.35 µs (−53.56%, p=0.002, allocs/op
+  11→5); the unclipped baselines moved within run noise (p≥0.240), and
+  the geomean over the six benchmarks improved 27.02%.
 
 _Unreleased notes: the v0.1.0 cut below is the first tagged release; per the
 v0.x policy above, the next `0.2.0` may break API — watch this file._

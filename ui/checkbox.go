@@ -58,7 +58,7 @@ func (c *Context) Checkbox(id ID, canvas *render.Canvas, bounds render.Rect, sta
 		flags |= Disabled
 	}
 	c.Region(id, canvas, bounds, flags)
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	theme := c.Theme()
@@ -187,7 +187,9 @@ func (s *RadioState) Apply(action Action, count int) (changed, activated bool) {
 
 // RadioGroup registers and draws one radio group as a single focusable
 // region: each option is a row, the selected row carries the marker, and
-// pressing a row picks it.
+// pressing a row picks it. When the canvas's clip hides rows of bounds, the
+// hidden labels are skipped; the rows stay addressable because the region
+// holds the full logical bounds.
 func (c *Context) RadioGroup(id ID, canvas *render.Canvas, bounds render.Rect, state *RadioState, labels []string, style RadioStyle) {
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
@@ -202,13 +204,14 @@ func (c *Context) RadioGroup(id ID, canvas *render.Canvas, bounds render.Rect, s
 		AtTop:         state.Selected <= 0,
 		AtBottom:      state.Selected >= len(labels)-1,
 	})
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	drawable := bounds.Intersect(canvas.DrawableRect())
+	if drawable.Empty() {
 		return
 	}
 	theme := c.Theme()
 	body := themedStyle(style.Normal, theme.Text, style.Normal)
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", body)
+	canvas.Fill(drawable, " ", body)
 	marker, empty := style.Marker, style.Empty
 	if marker == "" {
 		marker = "(*)"
@@ -216,7 +219,10 @@ func (c *Context) RadioGroup(id ID, canvas *render.Canvas, bounds render.Rect, s
 	if empty == "" {
 		empty = "( )"
 	}
-	for row := 0; row < bounds.H; row++ {
+	// Labels the clip hides are neither priced nor drawn; the group's rows
+	// stay addressable because the region above holds the full bounds.
+	rowFirst, rowLast := drawableRowBand(canvas, bounds)
+	for row := rowFirst; row < rowLast; row++ {
 		if row >= len(labels) {
 			break
 		}

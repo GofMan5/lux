@@ -523,3 +523,99 @@ func BenchmarkTableDraw(b *testing.B) {
 		ctx.Table("table", canvas, render.Rect{W: 120, H: 40}, &state, columns, 1_000_000, rows, TableStyle{})
 	}
 }
+
+// TestTableSkipsRowsHiddenByClip pins the ClipRect-aware row band: rowAt is
+// priced only for rows the active clip can paint, while the region still
+// registers with the full logical bounds and content height (hit mapping
+// and Tab reachability do not follow the clip).
+func TestTableSkipsRowsHiddenByClip(t *testing.T) {
+	buffer := render.NewBuffer(24, 12)
+	// Clip exposes rows y3..8: the header (y0) and body rows y1,2 are hidden,
+	// so only local body rows 2..7 may price their cells.
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 3, W: 24, H: 6})
+	var ctx Context
+	ctx.begun = true
+	calls := 0
+	rowAt := func(index int) []string {
+		calls++
+		return []string{"row", "cell"}
+	}
+	state := TableState{Offset: 2}
+	ctx.Table("t", canvas, render.Rect{X: 0, Y: 0, W: 24, H: 12}, &state,
+		[]TableColumn{{Title: "A", Width: 8}, {Title: "B", Width: 12}}, 500, rowAt, TableStyle{})
+	if calls != 6 {
+		t.Fatalf("rowAt calls = %d; want 6", calls)
+	}
+	if len(ctx.building) != 1 {
+		t.Fatalf("regions = %d; want 1", len(ctx.building))
+	}
+	// Registration still carries the FULL logical bounds: GlobalRect clips
+	// the published rect on its own, originY keeps the unclipped origin so
+	// hit mapping preserves local row coordinates, and contentHeight only
+	// caps at the clipped bottom (12 → 9).
+	region := ctx.building[0]
+	if region.bounds != (render.Rect{X: 0, Y: 3, W: 24, H: 6}) {
+		t.Fatalf("region bounds = %#v; want GlobalRect-clipped rect", region.bounds)
+	}
+	if region.originY != 0 || region.originX != 0 {
+		t.Fatalf("region origin = %d,%d; want 0,0 (full logical origin)", region.originX, region.originY)
+	}
+	if region.contentHeight != 9 {
+		t.Fatalf("contentHeight = %d; want 9 (capped at clipped bottom)", region.contentHeight)
+	}
+}
+
+// TestTableClippedDrawMatchesUnclipped pins reference equivalence: with the
+// active clip restricting the visible band, every cell inside the clip is
+// byte-identical to the same table drawn unclipped, and every cell outside
+// the clip stays blank. Only skipped work changes, never output.
+func TestTableClippedDrawMatchesUnclipped(t *testing.T) {
+	columns := []TableColumn{{Title: "ID", Width: 6}, {Title: "Name"}}
+	rows := []string{
+		"one", "two", "three", "four", "five", "six",
+		"seven", "eight", "nine", "ten", "eleven",
+	}
+	draw := func(canvas *render.Canvas) {
+		var ctx Context
+		ctx.begun = true
+		state := TableState{Selected: 4}
+		ctx.Table("t", canvas, render.Rect{X: 0, Y: 0, W: 24, H: 12}, &state, columns,
+			len(rows), func(index int) []string { return []string{rows[index], "tag"} }, TableStyle{})
+	}
+	full := render.NewBuffer(24, 12)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(24, 12)
+	clip := render.Rect{X: 0, Y: 2, W: 24, H: 6}
+	draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 12; y++ {
+		for x := 0; x < 24; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+}
+
+// BenchmarkTableDrawClippedHalf prices the ClipRect-aware band end to end:
+// a 24×12 table painted through a clip that exposes only six rows. Before
+// the band, rowAt ran and every row was formatted for all twelve rows.
+func BenchmarkTableDrawClippedHalf(b *testing.B) {
+	buffer := render.NewBuffer(24, 12)
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 3, W: 24, H: 6})
+	ctx := Context{focused: "table"}
+	state := TableState{Selected: 500_000}
+	columns := []TableColumn{{Title: "ID", Width: 8}, {Title: "Name", Weight: 2}, {Title: "State"}}
+	rows := func(index int) []string {
+		return []string{"00000000", "a moderately long process name", "running"}
+	}
+	b.ReportAllocs()
+	for range b.N {
+		ctx.Table("table", canvas, render.Rect{W: 24, H: 12}, &state, columns, 1_000_000, rows, TableStyle{})
+	}
+}

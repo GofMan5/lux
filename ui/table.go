@@ -250,7 +250,10 @@ type TableStyle struct {
 // Table registers and draws a virtualized table. rowAt supplies the cells of
 // one row and is called only for the rows currently inside the viewport, so a
 // million-row table costs the same as a full one; count is the total row
-// count. Cells are clipped to their column at grapheme boundaries and
+// count. When the canvas's clip hides rows of bounds (a container scrolled
+// the table partly out of view), rowAt is called only for rows the clip can
+// still paint — virtual data follows the visible band, not the logical
+// bounds. Cells are clipped to their column at grapheme boundaries and
 // elided with Ellipsis when they do not fit. Register the same columns in
 // Apply so pointer hits map identically. View is side-effect free except for
 // bounds repair: the selection and offset clamps, and keeping the selected
@@ -282,13 +285,14 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 		AtTop:         state.Offset <= 0,
 		AtBottom:      state.Offset >= max(count-rows, 0),
 	})
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	drawable := bounds.Intersect(canvas.DrawableRect())
+	if drawable.Empty() {
 		return
 	}
 	theme := c.Theme()
 	body := themedStyle(style.Normal, theme.Text, style.Normal)
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", body)
+	canvas.Fill(drawable, " ", body)
 	policy := canvas.WidthPolicy()
 	ellipsis := style.Ellipsis
 	if ellipsis == "" {
@@ -296,7 +300,8 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 	}
 	widths := ColumnLayout(columns, bounds.W)
 
-	if header > 0 {
+	headerFirst, headerLast := drawableRowBand(canvas, render.Rect{X: bounds.X, Y: bounds.Y, W: bounds.W, H: header})
+	if headerLast > headerFirst {
 		// The header row is structure: it always underlines, and a zero
 		// Header style resolves through the theme's Muted before falling
 		// back to Normal.
@@ -333,7 +338,10 @@ func (c *Context) Table(id ID, canvas *render.Canvas, bounds render.Rect, state 
 		}
 	}
 
-	for row := 0; row < rows; row++ {
+	// Rows the clip hides cost nothing: rowAt prices drawable rows only,
+	// so virtual data follows the viewport, not the logical bounds.
+	rowFirst, rowLast := drawableRowBand(canvas, render.Rect{X: bounds.X, Y: bounds.Y + header, W: bounds.W, H: rows})
+	for row := rowFirst; row < rowLast; row++ {
 		index := state.Offset + row
 		if index >= count {
 			break

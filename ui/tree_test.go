@@ -312,3 +312,90 @@ func BenchmarkTreeDraw(b *testing.B) {
 			func(index int) TreeRow { return rows[index] }, TreeStyle{})
 	}
 }
+
+// TestTreeSkipsRowsHiddenByClip pins the ClipRect-aware row band: rowAt is
+// priced only for rows the active clip can paint, while the region still
+// registers with the full logical content height.
+func TestTreeSkipsRowsHiddenByClip(t *testing.T) {
+	buffer := render.NewBuffer(20, 10)
+	// Clip exposes rows y6..9, so only local rows 6..9 may price their rows.
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 6, W: 20, H: 4})
+	var ctx Context
+	ctx.begun = true
+	calls := 0
+	state := TreeState{Selected: 6}
+	ctx.Tree("tree", canvas, render.Rect{X: 0, Y: 0, W: 20, H: 10}, &state, 20,
+		func(index int) TreeRow {
+			calls++
+			return TreeRow{ID: "node", Label: "label"}
+		}, TreeStyle{})
+	if calls != 4 {
+		t.Fatalf("rowAt calls = %d; want 4", calls)
+	}
+	if len(ctx.building) != 1 {
+		t.Fatalf("regions = %d; want 1", len(ctx.building))
+	}
+	// Registration still carries the FULL logical bounds: GlobalRect clips
+	// the published rect, originY keeps the unclipped origin so hit mapping
+	// preserves local row coordinates, and content height stays logical.
+	region := ctx.building[0]
+	if region.bounds != (render.Rect{X: 0, Y: 6, W: 20, H: 4}) {
+		t.Fatalf("region bounds = %#v; want GlobalRect-clipped rect", region.bounds)
+	}
+	if region.originY != 0 || region.originX != 0 {
+		t.Fatalf("region origin = %d,%d; want 0,0 (full logical origin)", region.originX, region.originY)
+	}
+	if region.contentHeight != 10 {
+		t.Fatalf("contentHeight = %d; want 10", region.contentHeight)
+	}
+}
+
+// TestTreeClippedDrawMatchesUnclipped pins reference equivalence: cells
+// inside the active clip are identical to an unclipped draw, cells outside
+// stay blank.
+func TestTreeClippedDrawMatchesUnclipped(t *testing.T) {
+	rows := treeRows(&TreeState{Selected: 1, Expanded: map[string]bool{"ui": true}})
+	draw := func(canvas *render.Canvas) {
+		var ctx Context
+		ctx.begun = true
+		state := TreeState{Selected: 1, Expanded: map[string]bool{"ui": true}}
+		ctx.Tree("tree", canvas, render.Rect{X: 0, Y: 0, W: 20, H: 6}, &state, len(rows),
+			func(index int) TreeRow { return rows[index] }, TreeStyle{})
+	}
+	full := render.NewBuffer(20, 6)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(20, 6)
+	clip := render.Rect{X: 0, Y: 2, W: 20, H: 3}
+	draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 6; y++ {
+		for x := 0; x < 20; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+}
+
+// BenchmarkTreeDrawClippedHalf prices the ClipRect-aware band: a 40×10 tree
+// painted through a clip exposing four rows.
+func BenchmarkTreeDrawClippedHalf(b *testing.B) {
+	rows := make([]TreeRow, 30)
+	for i := range rows {
+		rows[i] = TreeRow{ID: string(rune('a'+i%26)) + string(rune('0'+i/26)), Label: "node-with-a-longer-name", Depth: i % 4}
+	}
+	buffer := render.NewBuffer(40, 10)
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 6, W: 40, H: 4})
+	ctx := Context{focused: "tree"}
+	state := TreeState{Selected: 5}
+	b.ReportAllocs()
+	for range b.N {
+		ctx.Tree("tree", canvas, render.Rect{X: 0, Y: 0, W: 40, H: 10}, &state, len(rows),
+			func(index int) TreeRow { return rows[index] }, TreeStyle{})
+	}
+}

@@ -178,3 +178,73 @@ func TestListDisabledAtRows(t *testing.T) {
 		t.Fatalf("enabled selected row must show its marker: %q", got)
 	}
 }
+
+// TestListSkipsRowsHiddenByClip pins the ClipRect-aware row band: rows the
+// active clip hides are neither painted nor priced through DisabledAt, and
+// the region still registers with the full logical content height.
+func TestListSkipsRowsHiddenByClip(t *testing.T) {
+	buffer := render.NewBuffer(16, 10)
+	// Clip exposes rows y2..7, so only local rows 2..7 may price anything.
+	canvas := render.NewCanvas(buffer).Clip(render.Rect{X: 0, Y: 2, W: 16, H: 6})
+	var ctx Context
+	ctx.begun = true
+	calls := 0
+	style := ListStyle{DisabledAt: func(index int) bool {
+		calls++
+		return index%2 == 0
+	}}
+	state := ListState{Selected: 4}
+	ctx.List("list", canvas, render.Rect{X: 0, Y: 0, W: 16, H: 10}, &state,
+		[]string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa"}, style)
+	if calls != 6 {
+		t.Fatalf("DisabledAt calls = %d; want 6", calls)
+	}
+	if len(ctx.building) != 1 {
+		t.Fatalf("regions = %d; want 1", len(ctx.building))
+	}
+	// Registration still carries the FULL logical bounds: GlobalRect clips
+	// the published rect, originY keeps the unclipped origin so hit mapping
+	// preserves local row coordinates, and contentHeight only caps at the
+	// clipped bottom (10 → 8).
+	region := ctx.building[0]
+	if region.bounds != (render.Rect{X: 0, Y: 2, W: 16, H: 6}) {
+		t.Fatalf("region bounds = %#v; want GlobalRect-clipped rect", region.bounds)
+	}
+	if region.originY != 0 || region.originX != 0 {
+		t.Fatalf("region origin = %d,%d; want 0,0 (full logical origin)", region.originX, region.originY)
+	}
+	if region.contentHeight != 8 {
+		t.Fatalf("contentHeight = %d; want 8 (capped at clipped bottom)", region.contentHeight)
+	}
+}
+
+// TestListClippedDrawMatchesUnclipped pins reference equivalence: cells
+// inside the active clip are identical to an unclipped draw, cells outside
+// stay blank.
+func TestListClippedDrawMatchesUnclipped(t *testing.T) {
+	items := []string{"alpha", "beta", "gamma", "delta", "epsilon", "zeta"}
+	draw := func(canvas *render.Canvas) {
+		var ctx Context
+		ctx.begun = true
+		state := ListState{Selected: 2}
+		ctx.List("list", canvas, render.Rect{X: 0, Y: 0, W: 16, H: 6}, &state, items, ListStyle{})
+	}
+	full := render.NewBuffer(16, 6)
+	draw(render.NewCanvas(full))
+	part := render.NewBuffer(16, 6)
+	clip := render.Rect{X: 0, Y: 2, W: 16, H: 3}
+	draw(render.NewCanvas(part).Clip(clip))
+	for y := 0; y < 6; y++ {
+		for x := 0; x < 16; x++ {
+			if x >= clip.X && x < clip.Right() && y >= clip.Y && y < clip.Bottom() {
+				if full.Cell(x, y) != part.Cell(x, y) {
+					t.Fatalf("clipped cell (%d,%d) = %#v; want %#v", x, y, part.Cell(x, y), full.Cell(x, y))
+				}
+				continue
+			}
+			if part.Cell(x, y) != render.BlankCell {
+				t.Fatalf("cell outside clip (%d,%d) = %#v; want blank", x, y, part.Cell(x, y))
+			}
+		}
+	}
+}

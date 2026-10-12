@@ -173,11 +173,14 @@ type TreeStyle struct {
 
 // Tree registers and draws a virtualized tree. rowAt supplies the visible
 // row at an index and is called only for rows inside the viewport; count is
-// the total visible row count. Rows are drawn as two spaces of indent per
-// Depth, the branch marker, one space, then the label, clipped to the width
-// like any text. Apply the same rowAt in Model.Update so activation
-// toggles the row the user actually sees. View is side-effect free except
-// for bounds repair (the selection and offset clamps).
+// the total visible row count. When the canvas's clip hides rows of bounds,
+// rowAt is called only for rows the clip can still paint, so a lazy row
+// provider follows the visible band, not the logical bounds. Rows are drawn
+// as two spaces of indent per Depth, the branch marker, one space, then the
+// label, clipped to the width like any text. Apply the same rowAt in
+// Model.Update so activation toggles the row the user actually sees. View is
+// side-effect free except for bounds repair (the selection and offset
+// clamps).
 func (c *Context) Tree(id ID, canvas *render.Canvas, bounds render.Rect, state *TreeState, count int, rowAt func(index int) TreeRow, style TreeStyle) {
 	if canvas == nil || state == nil || bounds.Empty() {
 		return
@@ -203,15 +206,19 @@ func (c *Context) Tree(id ID, canvas *render.Canvas, bounds render.Rect, state *
 		AtTop:         state.Offset <= 0,
 		AtBottom:      state.Offset >= max(count-bounds.H, 0),
 	})
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	drawable := bounds.Intersect(canvas.DrawableRect())
+	if drawable.Empty() {
 		return
 	}
 	theme := c.Theme()
 	body := themedStyle(style.Normal, theme.Text, style.Normal)
 	canvas = canvas.Clip(bounds)
-	canvas.Fill(bounds, " ", body)
+	canvas.Fill(drawable, " ", body)
 	policy := canvas.WidthPolicy()
-	for row := 0; row < bounds.H; row++ {
+	// Rows the clip hides cost nothing: rowAt prices drawable rows only, so
+	// lazy row providers follow the viewport, not the logical bounds.
+	rowFirst, rowLast := drawableRowBand(canvas, bounds)
+	for row := rowFirst; row < rowLast; row++ {
 		index := state.Offset + row
 		if index >= count {
 			break

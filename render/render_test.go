@@ -84,6 +84,28 @@ func TestCanvasGlobalPointPreservesClippedOrigin(t *testing.T) {
 	}
 }
 
+func TestCanvasDrawableRect(t *testing.T) {
+	if got := NewCanvas(NewBuffer(20, 10)).DrawableRect(); got != (Rect{W: 20, H: 10}) {
+		t.Fatalf("base canvas drawable = %#v; want full bounds", got)
+	}
+	view := NewCanvas(NewBuffer(20, 10)).Subview(Rect{X: 4, Y: 2, W: 10, H: 6})
+	if got := view.DrawableRect(); got != (Rect{W: 10, H: 6}) {
+		t.Fatalf("subview drawable = %#v; want full subview bounds", got)
+	}
+	clipped := view.Clip(Rect{X: 2, Y: 1, W: 5, H: 3})
+	if got := clipped.DrawableRect(); got != (Rect{X: 2, Y: 1, W: 5, H: 3}) {
+		t.Fatalf("clipped drawable = %#v; want clip in local coordinates", got)
+	}
+	over := view.Clip(Rect{X: 8, Y: 5, W: 10, H: 10})
+	if got := over.DrawableRect(); got != (Rect{X: 8, Y: 5, W: 2, H: 1}) {
+		t.Fatalf("clip past bounds drawable = %#v; want clamped to bounds", got)
+	}
+	var nilCanvas *Canvas
+	if got := nilCanvas.DrawableRect(); got != (Rect{}) {
+		t.Fatalf("nil canvas drawable = %#v; want empty", got)
+	}
+}
+
 func TestBufferResizeCloneDiffAndReset(t *testing.T) {
 	style := Style{Background: IndexedColor(42), Attrs: AttrItalic}
 	buffer := NewBuffer(4, 2)

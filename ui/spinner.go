@@ -66,7 +66,7 @@ func (c *Context) Spinner(canvas *render.Canvas, bounds render.Rect, state *Spin
 	if canvas == nil || bounds.Empty() {
 		return
 	}
-	if bounds.Intersect(canvas.Bounds()).Empty() {
+	if bounds.Intersect(canvas.DrawableRect()).Empty() {
 		return
 	}
 	frames := style.Frames
