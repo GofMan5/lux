@@ -415,9 +415,71 @@ while the six hidden rows cost no truncation.
 Geomean: −39.49%. The modal moves time only — its hidden-row cost was a
 fill walk, not an allocation — while the select's halved bytes and
 allocations are the skipped truncations. Output is byte-identical on every
-covered case, so no CHANGELOG-observable behavior changed. Still honestly
-open in stage 5: items 5–8 (allocation budgets, p95 per-frame timings,
-damage tracking, the regression report) wait for profile evidence.
+covered case, so no CHANGELOG-observable behavior changed.
+
+## Deterministic regression gates
+
+`TestWidgetDrawAllocationBudgets` in [ui/alloc_guard_test.go](../ui/alloc_guard_test.go)
+protects 20 warmed draw scenarios through ordinary `go test ./...`, including
+the existing Go 1.23/stable × Linux/macOS/Windows race matrix. Calibration
+on Windows/amd64, i5-10400F, Go 1.25.5 produced identical counts in five
+uncached repetitions (`AllocsPerRun(100)` per scenario):
+
+| Scenario | Measured allocs/draw | Ceiling |
+|---|---:|---:|
+| Button | 1 | 1 |
+| Checkbox | 2 | 2 |
+| RadioGroup, six rows | 7 | 8 |
+| RadioGroup, three clipped rows | 4 | 4 |
+| List, six rows | 2 | 2 |
+| Tabs, twelve labels | 2 | 2 |
+| Gauge | 1 | 1 |
+| Spinner | 1 | 1 |
+| Sparkline | 1 | 1 |
+| Select, closed | 1 | 1 |
+| Select, open (eight options) | 9 | 10 |
+| Select, seven clipped long options | 36 | 43 |
+| Modal, clipped panel | 2 | 2 |
+| Table, one-million-row source, 120×40 | 41 | 49 |
+| Table, six clipped rows, 24×12 | 32 | 38 |
+| Tree, ten rows | 11 | 13 |
+| Tree, four clipped rows | 5 | 6 |
+| TextArea, warm mixed-cluster clipped viewport | 0 | 0 |
+| Input, warm mixed-cluster window | 0 | 0 |
+| ScrollViewport, one-million-row range | 1 | 1 |
+
+Counts of four or fewer are pinned exactly; larger counts allow at most
+20% growth, rounded down to whole allocations. These are fixed upper
+bounds, not an automatically updated baseline or a timing test. A negative
+control that added ten escaping heap allocations to every measured draw
+failed all 20 subtests; it was removed before the passing repetitions.
+
+Scope matters: buffers, data, and editor layout are warmed before sampling.
+As in the draw benchmarks, region registration/commit is outside the loop
+(the modal includes its scope). The table includes the caller's fresh
+three-string slice per visible row. Edits, cold wrapping, application data
+loading, allocation bytes, and whole-frame lifetime costs are not covered
+by this widget-count gate. No runtime behavior or public API changed.
+
+The existing [renderer guards](../render/alloc_guard_test.go) and
+[encoder guards](../internal/terminal/alloc_guard_test.go) already require
+zero allocations for canvas painting, unchanged diff, scratch-reused
+encoding, and idle Present. Existing `TestEncoderFrameBudget`,
+`TestScrollBudgetIsIndependentOfScreenSize`, unchanged-frame encoder tests,
+and `TestANSIFrameExactDiffAndWideCells` pin output bytes;
+this slice reuses them rather than introducing another byte-budget system.
+Reproduce the widget calibration with:
+
+```sh
+go test ./ui -run '^TestWidgetDrawAllocationBudgets$' -count=5 -v
+```
+
+Still open in stage 5: phase-level profiling on reference application flows,
+p95 frame preparation excluding flush, and long-session bounded-memory
+checks. The comparative harness already publishes per-present process-CPU
+p50/p95/p99; those include in-process background work and are not a substitute
+for preparation-only timing. Existing dirty-row/diff mechanisms do not imply
+a need for a new damage-tracking API; add one only if profiling warrants it.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

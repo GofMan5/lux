@@ -205,7 +205,7 @@ Border не используется по умолчанию для каждог
 
 - Статичный UI: lux — 0 bytes/frame при 289 paints (unchanged frame реально не попадает в wire); idle lux 0.09–0.14% core (tea 0.67–1.46%, tview ~0.01%).
 - Причинная input→output latency (p95, 120×40 / 240×80): lux resize 3.7 / 11.6 ms; rtt 3.1 / 15.4 ms; inputburst 19.6 / 24.0 ms — в бюджете ≤50 ms. tea inputburst 160 / 709 ms, tview inputburst 676 / 3633 ms (сериализация QueueUpdateDraw — их реальное поведение, не наш blocker).
-- Mean CPU us/frame на paced-сценах 120×40 (lux): onecell 3.0, list 2.9, subcell 2.1, damage 3.2, full 3.9, static 6.0, egc 12.8 ms — egc и resize (59.5 ms CPU/repaint, отдельный budget сложных сцен) остаются кандидатами на profile-этап (§5). Замечание честности: harness сейчас даёт mean CPU на кадр, а не p95; per-frame p95-тайминги — часть этапа 5, не фиктивная приёмка по mean.
+- Исторический mean CPU/frame на paced-сценах 120×40 (lux): onecell 3.0, list 2.9, subcell 2.1, damage 3.2, full 3.9, static 6.0, egc 12.8 ms — это не p95 и не основание закрыть бюджет подготовки. В slice 35 (`05dc15a`) harness уже получил per-present process-CPU p50/p95/p99 (`frame_cpu_us`); дельта включает фоновой CPU между презентациями и не равна Update+layout+draw+encode без flush. Mean также включает CPU финального settle (особенно static). Подготовка-only p95 на reference flows и профили сложных сцен остаются открыты.
 - Carriage для сравнения A/B: benchstat.txt + raw/*.json закоммичены; повторяемость подтверждена 3 rounds на ячейку.
 
 **Этап 5, item 2 — измерено частично (2026-10-12, slice 36):**
@@ -234,7 +234,7 @@ Border не используется по умолчанию для каждог
 - Конверсия: `TextArea.drawAreaRow`, `TextInput.drawInput`, `TextInput.drawPlaceholder` — видимый кластер измеряется один раз (`GraphemeWidth`), ширина передаётся в `PutMeasured`. Семантика веток сохранена: `drawPlaceholder` пропускает zero-width, `drawAreaRow`/`drawInput` пишут их в merge-ветку; tab-стопы и trailing-caret пробелы — `PutMeasured(" ", 1)`. До этого каждый видимый кластер платил двойную сегментацию+измерение (`GraphemeWidth` + `firstGrapheme` внутри `Put`).
 - A/B, 6 чередующихся раундов (benchstat, i5-10400F, Windows Go 1.25.5, before = parent commit 60140f1 в отдельном worktree; bench-файлы скопированы в before-tree, только публичный API): TextAreaDrawClippedHalf 89.34→75.98 µs −14.96% (p=0.002; B/op 0→0, allocs 0→0); TextInputDraw 81.00→79.24 µs −2.18% (p=0.041; 0→0/0→0 — строка ~40 кластеров, доминируют фиксированные per-frame издержки: region-регистрация, caret-column проход, window bookkeeping); geomean −8.79%.
 - Наблюдаемое поведение не изменилось (byte-identical по эквивалентности) — CHANGELOG не затронут. Render-level `BenchmarkPutMeasured` (ascii/wide/combining) добавлен для регресс-трекинга.
-- Осталось в stage 5 (осознанно): `ui.Select` popup и `ui.Modal` geometry; items 5–8 (бюджеты allocs, p95 per-frame тайминги, damage tracking, regression report) — по мере профильных подтверждений.
+- На момент slice 40 оставались `ui.Select` popup и `ui.Modal` paint (закрыты slice 41), deterministic alloc/byte guards (расширены slice 42), phase-level profiling, p95 подготовки без flush, bounded-memory и финальный regression report. Это задачи бюджета/gate, не новая нумерация items 5–8 выше; отдельный damage API без профиля не требуется.
 
 **Этап 5, item 2 (финал) — Select popup и Modal в drawable band (2026-10-12, slice 41, закрывает два осознанных остатка slice 37/40):**
 
@@ -244,8 +244,17 @@ Border не используется по умолчанию для каждог
 - Попутно закрыт пре-существующий дефект: `BenchmarkSelectDrawOpen` мерил ЗАКРЫТЫЙ select (`Open:false` при комментарии про открытый popup) — теперь `Open:true`.
 - A/B, 6 чередующихся раундов (benchstat, i5-10400F, Windows Go 1.25.5, before = parent commit 389561e в отдельном worktree; bench-файл скопирован в before-tree, только публичный API): SelectDrawClippedHalf 555.1→268.9 µs −51.57% (p=0.002; B/op 2.277 Ki→1.143 Ki, allocs 75→36 — половина усечений скрытых строк исчезла); ModalDrawClippedHalf 38.63→29.21 µs −24.40% (p=0.002; B/op 105→105, allocs 2→2 — скрытая стоимость была fill-walk'ом, не аллокацией); geomean −39.49%.
 - Наблюдаемое поведение не изменилось (byte-identical) — CHANGELOG не затронут. С этим срезом family drawable-row-band полностью закрыта: Table/Tree/List/RadioGroup (slice 37) + Select popup/Modal (slice 41).
-- Осталось в stage 5: items 5–8 (бюджеты allocs, p95 per-frame тайминги, damage tracking, regression report) — по мере профильных подтверждений.
+- Drawable-row-band family закрыта, но это не закрытие всего stage 5: phase-level profiling на reference flows, p95 подготовки без flush, bounded-memory и итоговый regression report остаются. Deterministic alloc guards расширены следующим срезом; caller-reused storage/spatial index/new damage API — только при подтверждённой потребности.
 
+**Этап 5, Regression gate — deterministic allocation budgets (slice 42):**
+
+- `ui/alloc_guard_test.go`: `TestWidgetDrawAllocationBudgets`, 20 warmed draw-сценариев по 15 public draw-методам Context; обычный root `go test` включает guard в существующую Go 1.23/stable × 3 OS/race матрицу. Без новой CI-службы, dependencies или runtime/API изменений.
+- Калибровка Windows/amd64, i5-10400F, Go 1.25.5: Input/TextArea warm = 0; allocating-сценарии 1–41 allocs/draw; 5 uncached повторов с `AllocsPerRun(100)` дали идентичные counts. ≤4 — точный ceiling, большие counts допускают не более 20% роста с округлением вниз (пример: SelectClipped 36≤43, TableMillion 41≤49). Ceilings явные, baseline не переобновляется автоматически.
+- Negative control: временные 10 escaping allocations в каждом draw дали FAIL всех 20 subtests; инъекция удалена до зелёной батареи. Это проверка чувствительности gates, не исправление существующего дефекта и не A/B ускорение.
+- Scope: warm painting; Context unbegun (Modal включает scope); region registration/commit, edits, cold wrapping, loading данных, bytes allocated и whole-frame costs не заявлены покрытыми. Table включает fresh slice caller'а на видимую строку.
+- Уже существующие render/terminal guards (`alloc_guard_test.go`, frame/scroll/unchanged-byte тесты) переиспользуются: canvas paint, unchanged diff, reused-scratch encode, idle Present = 0 alloc, unchanged frame = 0 wire bytes. Они отдельно перепроверены в этом срезе; новые byte-тесты не дублируются.
+- Локальные гейты: `go vet ./...`, `go test -count=1 ./...`, `go test -race -count=1 ./ui ./render ./internal/terminal`, gofmt и golangci-lint — PASS. Cross-host/toolchain — только после push-CI verdict, не по локальному PASS.
+- Уточнены устаревшие подписи плана: per-present CPU p95 уже существует с slice 35; это не preparation-only p95. Фактический TextArea уже имеет dirty-range wrap-cache (content invalidation, width/mode/policy), поэтому новый generic cache не строится без профиля.
 
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.
 

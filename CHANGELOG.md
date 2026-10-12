@@ -17,6 +17,11 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Deterministic widget allocation guards: 20 warmed draw scenarios now
+  enforce fixed allocation-count ceilings in the root test suite alongside
+  the existing renderer/encoder allocation and wire-byte budgets. Cold
+  layout, edits, and frame registration are outside these draw-only gates;
+  runtime behavior and the public API are unchanged.
 - `render.Canvas.PutMeasured(x, y, grapheme, width, style)`: writes one
   grapheme cluster whose terminal width the caller already measured under
   the canvas's policy — `GraphemeWidth` reports it. Row painters that
