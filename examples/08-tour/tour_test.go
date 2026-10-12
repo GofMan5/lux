@@ -388,6 +388,49 @@ func (b *probeBackend) lastFrame(window time.Duration) *render.Buffer {
 	}
 }
 
+// frameWhere waits for the settled newest frame to satisfy want: frames
+// keep draining while the app still produces them, and once 150ms pass
+// without another frame the newest buffer is judged. A match returns it,
+// a quiet mismatch keeps waiting (a stalled runner can fake quiet mid
+// burst; only the window bounds the wait), and the window expiring with
+// no match returns nil. Post-input assertions poll for settled content
+// this way instead of trusting a fixed drain window: a wheel burst makes
+// the loop owe one frame per notch, the pacer spaces those at least 100ms
+// apart once it has degraded to its 10 FPS floor, and a cold shared CI
+// runner under -race has once pushed the first post-wheel frame of a
+// 17-notch burst past a 200ms cutoff. The quiet gap also matters for the
+// click sites: the router commits a frame's regions after Present returns,
+// so a press queued the instant a frame lands can route against the
+// previous snapshot, and coordinates read from a mid-burst frame can miss
+// a header the trailing notches still owe. Returning only a quieted frame
+// fixes both — the burst is exhausted and the commit has landed — while
+// the window still bounds a dead runtime.
+func (b *probeBackend) frameWhere(window time.Duration, want func(*render.Buffer) bool) *render.Buffer {
+	const quietFor = 150 * time.Millisecond
+	var newest *render.Buffer
+	bound := time.NewTimer(window)
+	defer bound.Stop()
+	quiet := time.NewTimer(quietFor)
+	defer quiet.Stop()
+	for {
+		select {
+		case frame := <-b.presented:
+			newest = frame
+			quiet.Reset(quietFor)
+		case <-quiet.C:
+			if newest != nil && want(newest) {
+				return newest
+			}
+			quiet.Reset(quietFor)
+		case <-bound.C:
+			if newest != nil && want(newest) {
+				return newest
+			}
+			return nil
+		}
+	}
+}
+
 // bufferRow flattens one buffer row into trimmed text.
 func bufferRow(buffer *render.Buffer, y int) string {
 	if buffer == nil {
@@ -476,15 +519,14 @@ func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
 			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
 		}}
 	}
-	bottom := backend.lastFrame(200 * time.Millisecond)
+	bottom := backend.frameWhere(5*time.Second, func(frame *render.Buffer) bool {
+		return bufferContains(frame, "virtual log (120 rows)")
+	})
 	if bottom == nil {
-		t.Fatal("no frame presented after the wheel")
+		t.Fatal("no settled frame presented after the wheel: the page scroller never reached the virtual log")
 	}
 	if !bufferContains(bottom, "feature table") {
 		t.Fatal("wheel never reached the table: the page scroller must reach the stacked page bottom")
-	}
-	if !bufferContains(bottom, "virtual log (120 rows)") {
-		t.Fatal("wheel never reached the virtual log demo")
 	}
 	if !bufferContainsRow(bottom, 23, "[1-9] tabs") {
 		t.Fatal("footer row was painted over by the scrolling page")
@@ -497,11 +539,10 @@ func TestCompactWidgetsPageKeepsControlsReachable(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		backend.events <- event.KeyPress(event.KeyPageUp, 0)
 	}
-	top := backend.lastFrame(200 * time.Millisecond)
+	top := backend.frameWhere(5*time.Second, func(frame *render.Buffer) bool {
+		return bufferContains(frame, "slow spinner")
+	})
 	if top == nil {
-		t.Fatal("no frame presented after PageUp")
-	}
-	if !bufferContains(top, "slow spinner") {
 		t.Fatal("keyboard scrolling could not bring the stacked page back to the top")
 	}
 
@@ -542,44 +583,43 @@ func TestWidgetsPageSortsFeatureTable(t *testing.T) {
 			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
 		}}
 	}
-	scrolled := backend.lastFrame(200 * time.Millisecond)
+	scrolled := backend.frameWhere(5*time.Second, func(frame *render.Buffer) bool {
+		return bufferFindRow(frame, "CAPABILITY") >= 0
+	})
 	if scrolled == nil {
-		t.Fatal("no frame presented after the wheel")
+		t.Fatal("no settled frame presented after the wheel: the feature table never scrolled into view")
 	}
 	header := bufferFindRow(scrolled, "CAPABILITY")
 	if header < 0 {
 		t.Fatal("feature table header is not on screen after scrolling")
 	}
-	clickHeader := func() *render.Buffer {
+	// Click helper: a full press/release pair, then poll for the frame
+	// carrying the sorted outcome, so a slow runner's click-to-frame
+	// latency cannot read as a dropped click.
+	clickHeader := func(want func(*render.Buffer) bool) *render.Buffer {
 		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
 			X: 4, Y: header, Action: event.MousePress, Button: event.MouseLeft,
 		}}
 		backend.events <- event.Event{Kind: event.Mouse, Mouse: event.MouseEvent{
 			X: 4, Y: header, Action: event.MouseRelease, Button: event.MouseLeft,
 		}}
-		return backend.lastFrame(200 * time.Millisecond)
+		return backend.frameWhere(5*time.Second, want)
 	}
 
-	ascending := clickHeader()
+	ascending := clickHeader(func(frame *render.Buffer) bool {
+		return bufferContainsRow(frame, header+1, "allocation steady state") &&
+			bufferContainsRow(frame, header, "▲")
+	})
 	if ascending == nil {
-		t.Fatal("no frame presented after the first header click")
-	}
-	if !bufferContainsRow(ascending, header+1, "allocation steady state") {
-		t.Fatalf("ascending sort: first row = %q", bufferRow(ascending, header+1))
-	}
-	if !bufferContainsRow(ascending, header, "▲") {
-		t.Fatalf("ascending sort: header = %q", bufferRow(ascending, header))
+		t.Fatal("first header click never presented the ascending sort")
 	}
 
-	descending := clickHeader()
+	descending := clickHeader(func(frame *render.Buffer) bool {
+		return bufferContainsRow(frame, header+1, "word wrap authority") &&
+			bufferContainsRow(frame, header, "▼")
+	})
 	if descending == nil {
-		t.Fatal("no frame presented after the second header click")
-	}
-	if !bufferContainsRow(descending, header+1, "word wrap authority") {
-		t.Fatalf("descending sort: first row = %q", bufferRow(descending, header+1))
-	}
-	if !bufferContainsRow(descending, header, "▼") {
-		t.Fatalf("descending sort: header = %q", bufferRow(descending, header))
+		t.Fatal("second header click never presented the descending sort")
 	}
 
 	backend.events <- event.RuneKey('q', 0)
@@ -644,9 +684,11 @@ func TestWidgetsPageShowsInertAndEmptyStates(t *testing.T) {
 			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
 		}}
 	}
-	states := backend.lastFrame(200 * time.Millisecond)
+	states := backend.frameWhere(5*time.Second, func(frame *render.Buffer) bool {
+		return bufferFindRow(frame, "frozen (disabled)") >= 0
+	})
 	if states == nil {
-		t.Fatal("no frame presented after the wheel")
+		t.Fatal("no settled frame presented after the wheel: the states demo never scrolled into view")
 	}
 	frozenRow := bufferFindRow(states, "frozen (disabled)")
 	if frozenRow < 0 {
@@ -676,9 +718,11 @@ func TestWidgetsPageShowsInertAndEmptyStates(t *testing.T) {
 			X: 1, Y: 3, Action: event.MouseWheel, Button: event.MouseWheelDown,
 		}}
 	}
-	table := backend.lastFrame(200 * time.Millisecond)
+	table := backend.frameWhere(5*time.Second, func(frame *render.Buffer) bool {
+		return bufferFindRow(frame, "CAPABILITY") >= 0
+	})
 	if table == nil {
-		t.Fatal("no frame presented after the second wheel")
+		t.Fatal("no settled frame presented after the second wheel: the feature table never scrolled into view")
 	}
 	header := bufferFindRow(table, "CAPABILITY")
 	if header < 0 {
