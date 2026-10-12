@@ -137,6 +137,25 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- `render.Canvas.Text` reuses its own grapheme measurement instead of
+  sending each cluster through `Put` for a second segmentation/width pass.
+  Rows outside the canvas or active clip skip drawing, and exhausted
+  columns skip positive-width puts. Hidden lines still contribute to the
+  widest-input-line return; tabs, carriage returns, combining attachment,
+  wide-cell repair, hyperlinks, nil canvases and `WidthPolicy` semantics
+  are preserved. A reference-algorithm test and fuzz target compare the
+  full backing buffer and return value. No public API or shared mutable
+  instrumentation is added.
+- `examples/08-tour` no longer schedules gauge/spinner frames while those
+  decorations are scrolled out of the compact widgets page. Visibility
+  comes from their actual clipped geometry each View; scrolling them into
+  view resumes animation. Reduced motion still freezes decoration, and
+  work-progress sidebands remain independent of visibility. Pinned by a
+  geometry matrix and an end-to-end scroll/idle/resume test.
+- The benchmark harness adds a lux-only `tall` diagnostic (one precomputed
+  160-line document drawn without virtualization) and a validated `-scenes`
+  filter for repeatable targeted measurements. The 2,000-line CPU-only
+  variant remains separate from paced PTY/idle measurements.
 - `examples/05-widgets` no longer presents at the frame cap: idle pages
   ask for no frames at all (measured 96 frames in 400ms each of a
   parked table, form, and tree — now 0), and the motion page schedules

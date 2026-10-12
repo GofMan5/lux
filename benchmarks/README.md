@@ -32,7 +32,8 @@ That single command builds everything, runs the full suite, and writes
 Go >= 1.26. The `luxbenchmod` volume caches the module cache across runs;
 the first run pays one `go get`/`go mod tidy` for the competitor set.
 
-Quick smoke run (~2-3 min, one round, 120x40 only, not citable):
+Quick smoke run (~7 min on the recorded host, one round, 120x40 only,
+not citable):
 
 ```sh
 docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
@@ -40,8 +41,18 @@ docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
   golang:1.26-alpine sh benchmarks/run.sh -quick
 ```
 
-A full run is ~25-35 minutes on one core-set and should be run on an
-otherwise idle machine.
+A full run is about 55 minutes on the recorded host and should be run on
+an otherwise idle machine. The default suite has 174 runs: nine comparable
+scenes across three lanes, plus two lux-only scenes, at two sizes and three
+rounds. Filter scenes without changing their pacing or round count:
+
+```sh
+docker run --rm -v luxbenchmod:/go/pkg/mod -v "$PWD":/src -w /src \
+  golang:1.26-alpine sh benchmarks/run.sh -scenes tall,egc -out /src/benchmarks/results-targeted
+```
+
+Unknown names fail explicitly. `-scenes tall` runs six full measurements
+(three rounds at each size); `-quick` is still smoke-only.
 
 Rebuild only the derived artifacts (report.md, benchstat.txt) from an
 existing `all-runs.json` without measuring anything:
@@ -72,20 +83,28 @@ output can never fake a settled action, and units without output are
 counted separately instead of entering the latency distribution as 0 —
 and burst-to-burst frame gaps.
 
-Scenes (identical cell content in every lane):
+Scenes 1–9 have identical logical cell content in every lane. Scenes 10–11
+are lux-only diagnostics, not cross-framework comparisons:
 
 | # | scene | drives | stresses |
 |---|---|---|---|
 | 1 | static | paced keys | steady-state idle diff |
 | 2 | onecell | paced keys | one changed cell per frame |
-| 3 | rtt | paced keys + settle | round-trip latency |
-| 4 | damage | paced keys | ~10% scattered cell changes |
-| 5 | resize | alternating sizes | full repaints on SIGWINCH |
-| 6 | inputburst | key bursts | coalescing under load |
-| 7 | full | paced keys | every cell changes every frame |
-| 8 | list | paced keys | 10k-row scrolling window |
-| 9 | egc | paced keys | grapheme clusters, combining marks, ZWJ, flags |
+| 3 | damage | paced keys | ~10% scattered cell changes |
+| 4 | full | paced keys | every cell changes every frame |
+| 5 | list | paced keys | 10k-row virtualized scrolling window |
+| 6 | resize | alternating sizes | full repaints on SIGWINCH |
+| 7 | inputburst | key bursts | coalescing under load |
+| 8 | egc | paced keys | grapheme clusters, combining marks, ZWJ, flags |
+| 9 | rtt | paced keys + settle | round-trip latency |
 | 10 | subcell | paced keys | lux-only shaded 3D cube (scene3d) |
+| 11 | tall | paced keys | lux-only, one precomputed 160-line document drawn with negative y through `Canvas.Text`, without virtualization |
+
+`tall` intentionally prices measurement of the entire input plus drawing the
+visible rows; `Text` returns the widest **input** line even when clipped.
+Applications with huge documents should virtualize, as `list` does. A separate
+`render.BenchmarkText/tall-overscroll` CPU benchmark uses 2,000 lines without
+input pacing or idle-window assumptions.
 
 Terminal sizes 120x40 and 240x80; three rounds per cell; medians reported.
 

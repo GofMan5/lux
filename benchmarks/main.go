@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -36,9 +37,10 @@ func run() int {
 
 	quick := flag.Bool("quick", false, "smoke mode: 1 round, 120x40 only, shrunken pacing")
 	outDir := flag.String("out", "results", "output directory")
+	sceneFilter := flag.String("scenes", "", "comma-separated scene names (default: all)")
 	reportOnly := flag.Bool("report-only", false, "rebuild report.md and benchstat.txt from existing all-runs.json and machine.json without measuring")
 	flag.Usage = func() {
-		fmt.Fprintln(os.Stderr, "usage: bench [-quick] [-out DIR]")
+		fmt.Fprintln(os.Stderr, "usage: bench [-quick] [-scenes NAME,...] [-out DIR]")
 		fmt.Fprintln(os.Stderr, "       bench --child LANE SCENE W H ROUND QUICK OUT")
 		fmt.Fprintln(os.Stderr, "       bench -report-only [-out DIR]")
 		flag.PrintDefaults()
@@ -47,6 +49,12 @@ func run() int {
 
 	if *reportOnly {
 		return rebuildOutputs(*outDir)
+	}
+
+	scenes, err := selectScenes(*sceneFilter)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
 	}
 
 	self, err := os.Executable()
@@ -76,7 +84,7 @@ func run() int {
 
 	var jobs []job
 	for r := 1; r <= rounds; r++ {
-		for _, sc := range allScenesForRun() {
+		for _, sc := range scenes {
 			for _, lane := range lanesForScene(sc) {
 				for _, size := range sizes {
 					jobs = append(jobs, job{lane, sc, size[0], size[1], r})
@@ -163,14 +171,32 @@ func rebuildOutputs(outDir string) int {
 	return 0
 }
 
-// allScenesForRun is the comparable scene set plus the lux-only scene 10.
+// allScenesForRun is the comparable set plus the lux-only stress scenes.
 func allScenesForRun() []sceneID {
-	scenes := comparableScenes()
-	return append(scenes, scSubcell)
+	return append(comparableScenes(), scSubcell, scTall)
+}
+
+func selectScenes(filter string) ([]sceneID, error) {
+	if filter == "" {
+		return allScenesForRun(), nil
+	}
+	var scenes []sceneID
+	seen := make(map[sceneID]bool)
+	for _, name := range strings.Split(filter, ",") {
+		sc, ok := sceneFromName(strings.TrimSpace(name))
+		if !ok {
+			return nil, fmt.Errorf("unknown scene %q", name)
+		}
+		if !seen[sc] {
+			scenes = append(scenes, sc)
+			seen[sc] = true
+		}
+	}
+	return scenes, nil
 }
 
 func lanesForScene(sc sceneID) []string {
-	if sc == scSubcell {
+	if sc == scSubcell || sc == scTall {
 		return []string{"lux"}
 	}
 	return laneNames

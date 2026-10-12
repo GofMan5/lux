@@ -4,9 +4,9 @@
   "goarch": "amd64",
   "cpu_model": "Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz",
   "cores": 10,
-  "mem_total_bytes": 16699310080,
+  "mem_total_bytes": 16699314176,
   "kernel_release": "6.6.87.2-microsoft-standard-WSL2",
   "machine": "x86_64",
-  "bench_image": "",
-  "collected": "2026-10-11T23:44:11.529347626Z"
+  "bench_image": "golang:1.26-alpine",
+  "collected": "2026-10-12T08:18:33.531655006Z"
 }

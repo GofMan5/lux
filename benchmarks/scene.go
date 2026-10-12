@@ -28,11 +28,12 @@ const (
 	scEGC                           // 8: CJK + emoji + ZWJ grapheme soup
 	scRTT                           // 9: 100ms slow link
 	scSubcell                       // 10: subcell/3D (lux only)
+	scTall                          // 11: unvirtualized tall document (lux only)
 )
 
 var sceneNames = [...]string{
 	"static", "onecell", "damage", "full", "list",
-	"resize", "inputburst", "egc", "rtt", "subcell",
+	"resize", "inputburst", "egc", "rtt", "subcell", "tall",
 }
 
 func (s sceneID) name() string   { return sceneNames[s-1] }
@@ -180,6 +181,9 @@ func rowColor(y int) uint32 {
 }
 
 const listRowCount = 10000
+
+// tallRowCount bounds the deliberately unvirtualized Text stress scene.
+const tallRowCount = 160
 
 // listRow is one row of the 10k-row list scene.
 func listRow(index, w int) string {

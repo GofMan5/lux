@@ -231,24 +231,37 @@ func (c *Canvas) put(x, y int, grapheme string, style Style, link Link) int {
 		c.appendCombining(x, y, grapheme)
 		return 0
 	}
+	c.putMeasured(x, y, grapheme, width, style, link)
+	return width
+}
+
+// putMeasured shares wide-cell repair and clipping between Put and Text.
+// Callers supply a printable, positive-width cluster and a non-nil buffer;
+// Text already segmented and measured it, so it must not do that twice.
+func (c *Canvas) putMeasured(x, y int, grapheme string, width int, style Style, link Link) {
 	if y < 0 || y >= c.height || x < 0 || x+width > c.width {
-		return width
+		return
 	}
 	absoluteX, absoluteY := c.originX+x, c.originY+y
 	if !c.clip.Contains(absoluteX, absoluteY) || !c.clip.Contains(absoluteX+width-1, absoluteY) {
-		return width
+		return
 	}
-	if !c.buffer.replacementFits(c.clip, absoluteX, absoluteY, width) {
-		return width
+	if c.buffer.replacementFits(c.clip, absoluteX, absoluteY, width) {
+		c.buffer.putLink(absoluteX, absoluteY, grapheme, width, style, link)
 	}
-	c.buffer.putLink(absoluteX, absoluteY, grapheme, width, style, link)
-	return width
+}
+
+func (c *Canvas) rowDrawable(y int) bool {
+	return c != nil && c.buffer != nil && y >= 0 && y < c.height &&
+		!c.clip.Empty() && c.originY+y >= c.clip.Y && c.originY+y < c.clip.Bottom()
 }
 
 // Text draws text with grapheme-aware widths, newlines, carriage returns and
 // four-column tab stops. It returns the widest input line.
 func (c *Canvas) Text(x, y int, text string, style Style) int {
 	startX, cursorX, cursorY, widest := x, x, y, 0
+	policy := c.WidthPolicy()
+	drawRow := c.rowDrawable(cursorY)
 	graphemes := uniseg.NewGraphemes(text)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
@@ -256,24 +269,32 @@ func (c *Canvas) Text(x, y int, text string, style Style) int {
 		case "\n", "\r\n":
 			widest = max(widest, cursorX-startX)
 			cursorX, cursorY = startX, cursorY+1
+			drawRow = c.rowDrawable(cursorY)
 		case "\r":
 			widest = max(widest, cursorX-startX)
 			cursorX = startX
 		case "\t":
 			spaces := 4 - (cursorX-startX)%4
-			for range spaces {
-				c.Put(cursorX, cursorY, " ", style)
-				cursorX++
+			if drawRow {
+				for offset := range spaces {
+					c.putMeasured(cursorX+offset, cursorY, " ", 1, style, Link{})
+				}
 			}
+			cursorX += spaces
 		default:
 			if !printable(grapheme) {
 				continue
 			}
-			width := terminalWidthOf(grapheme, c.WidthPolicy())
+			// Hidden text still contributes to the widest-input-line return.
+			width := terminalWidthOf(grapheme, policy)
 			if width == 0 {
-				c.appendCombining(cursorX, cursorY, grapheme)
+				if drawRow {
+					c.appendCombining(cursorX, cursorY, grapheme)
+				}
 			} else {
-				c.Put(cursorX, cursorY, grapheme, style)
+				if drawRow && cursorX >= 0 && cursorX+width <= c.width {
+					c.putMeasured(cursorX, cursorY, grapheme, width, style, Link{})
+				}
 				cursorX += width
 			}
 		}

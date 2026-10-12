@@ -1,8 +1,8 @@
 # Performance contract
 
-Snapshot: **2026-10-10**. Cross-framework numbers are now published: the
+Snapshot: **2026-10-12**. Cross-framework numbers are now published: the
 full comparative run lives in [benchmarks/results/report.md](../benchmarks/results/report.md)
-(168 runs, 0 failed, one pinned host, reproduced by the single docker
+(174 runs, 0 failed, one pinned host, reproduced by the single docker
 command in [benchmarks/README.md](../benchmarks/README.md)). This document
 keeps defining how claims must be earned, and the committed report is the
 current earned baseline.
@@ -22,6 +22,10 @@ The implementation already provides:
 - a scrolling region for vertical row shifts, which makes the cost of scrolling
   a list independent of the screen height;
 - absolute-time tweens and springs that skip missed visual states;
+- text measured once per cluster: `Text` feeds its own grapheme
+  measurement into the same guarded cell-writer path `Put` uses, and rows
+  outside the canvas or the active clip skip cell writes while hidden
+  lines still count toward the widest-input-line return;
 - an idle runtime that disarms its frame timer;
 - three reusable surfaces with a one-slot latest-frame queue;
 - adaptive presentation pacing through 60→30→20→10 FPS steps;
@@ -273,6 +277,57 @@ cell) moves from about 0.52 µs to about 0.54 µs, which is the cost of the
 one mutex-guarded theme read; the other widgets stay within a few percent
 (Tabs 83 vs 82 µs, Gauge 13 µs, Sparkline 15.5 vs 15.4 µs, Tree 197 µs,
 Table 1.63 ms), and `alloc/op` counts are unchanged everywhere.
+
+Hidden-work elimination was measured on 2026-10-12 (production-plan stage
+5, item 2). `Canvas.Text` no longer routes every cluster through `Put` for
+a second segmentation/width pass: it measures each cluster once and writes
+cells through the same guarded path, and rows outside the canvas or the
+active clip, plus columns past the right edge, skip the write entirely.
+Correctness is pinned by a reference-algorithm test and a fuzz target that
+compare the full backing buffer and the return value. Interleaved A/B
+microbenchmarks (six alternating rounds, benchstat, i5-10400F, Windows
+Go 1.25.5, every case 0 alloc/op):
+
+| `BenchmarkText` case | Before | After | Change |
+|---|---|---|---|
+| visible-ascii 120×40 | 39.25 µs | 31.88 µs | −18.78% (p=0.041) |
+| visible-egc | 76.84 µs | 40.76 µs | −46.95% (p=0.002) |
+| clip-band | 1.306 ms | 1.043 ms | −20.12% (p=0.015) |
+| exhausted-columns | 557.5 µs | 415.1 µs | −25.54% (p=0.009) |
+| tall-overscroll 2000 rows (CPU-only) | 69.56 ms | 48.88 ms | −29.73% (p=0.002) |
+
+Geomean −29.03%. The same interleaved session re-checked the cell and
+frame paths: `CanvasFrame` −19.92% (p=0.002, B/op 314.5→259.0), while the
+`Put` microbenchmark moved +4.22% (p=0.015) — inside run-to-run noise; put
+cell and fill are unchanged. On the PTY harness the 160-line tall scene
+improved p50/p95 from 7.80/11.71 ms to 6.22/8.41 ms at 120×40 and from
+15.27/23.98 ms to 13.00/17.96 ms at 240×80 (three interleaved rounds,
+Docker `golang:1.26-alpine`), with idle CPU at 0.11–0.17% of one core and
+zero errors.
+
+The committed battery was re-earned with that code: 174 runs, 0 failed —
+the 168-run baseline stays in git history as the A/B "before". Cross-
+session p95 deltas against the old battery ranged from −14.0% (egc 240×80)
+to +98.2% (resize 240×80). Those alarms did not survive same-session
+adjudication: an interleaved confirmation battery (30 runs per version,
+five scenes × two sizes × three alternating rounds in one session) moved
+p95 by −23.9% to +9.9% with per-paint allocations flat and paint counts
+stable. `frame_cpu_us` is a per-present process-CPU delta, so a round with
+fewer presentations reports larger per-frame values; paired with the
+microbenchmark results above, the cross-session alarms are
+presentation-count artifacts, not an evidenced library regression. The
+lux-only `rtt` scene was outside the confirmation set, so its cross-session
+delta is adjudicated only by those microbenchmarks — recorded, not assumed.
+Visibility-aware scheduling is demonstrated in `examples/08-tour`: the
+gauge and spinner stop requesting animation frames while scrolled out of
+view, pinned by an end-to-end test (a hidden spinner requests zero
+recurring frames; revealing it resumes animation; reduced motion freezes
+decoration). Honestly still open in stage 5: `ui.Table` calls `rowAt` for
+rows inside its bounds but clipped by a tighter `ClipRect`, `ui.RadioGroup`
+formats and clips labels on hidden rows, most widgets early-return on an
+empty bounds intersect without consulting `ClipRect`, and the
+`TextArea.drawAreaRow` path duplicates the grapheme-width-then-put
+measurement that `Text` now shares.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

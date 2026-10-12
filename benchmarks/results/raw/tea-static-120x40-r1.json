@@ -10,12 +10,12 @@
   "bursts": 0,
   "paints": -1,
   "draws": 300,
-  "cpu_us": 1081374,
-  "wall_ms": 29803,
-  "alloc_bytes": 1780400,
-  "mallocs": 4894,
-  "idle_cpu_us": 14288,
-  "settle_ms": 25002,
+  "cpu_us": 1558770,
+  "wall_ms": 29802,
+  "alloc_bytes": 1781152,
+  "mallocs": 4902,
+  "idle_cpu_us": 19926,
+  "settle_ms": 25000,
   "notes": [
     "no output observed after the drive phase (expected tail frames)"
   ]

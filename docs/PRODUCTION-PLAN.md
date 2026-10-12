@@ -201,12 +201,21 @@ Border не используется по умолчанию для каждог
 
 Порог уточняется после нового baseline и выбранного host. PR CI ловит детерминированные properties; timing сравнивается на стабильном benchmark host.
 
-**Измеренный baseline (2026-10-10, калиброванный harness, полный прогон 168 runs / 0 failed, benchmarks/results/report.md; i5-10400F, golang:1.26-alpine, Docker/WSL2):**
+**Измеренный baseline (2026-10-10, калиброванный harness, полный прогон 168 runs / 0 failed; архив — в истории git; в benchmarks/results закоммичена обновлённая батарея 174 runs от 2026-10-12; i5-10400F, golang:1.26-alpine, Docker/WSL2):**
 
 - Статичный UI: lux — 0 bytes/frame при 289 paints (unchanged frame реально не попадает в wire); idle lux 0.09–0.14% core (tea 0.67–1.46%, tview ~0.01%).
 - Причинная input→output latency (p95, 120×40 / 240×80): lux resize 3.7 / 11.6 ms; rtt 3.1 / 15.4 ms; inputburst 19.6 / 24.0 ms — в бюджете ≤50 ms. tea inputburst 160 / 709 ms, tview inputburst 676 / 3633 ms (сериализация QueueUpdateDraw — их реальное поведение, не наш blocker).
 - Mean CPU us/frame на paced-сценах 120×40 (lux): onecell 3.0, list 2.9, subcell 2.1, damage 3.2, full 3.9, static 6.0, egc 12.8 ms — egc и resize (59.5 ms CPU/repaint, отдельный budget сложных сцен) остаются кандидатами на profile-этап (§5). Замечание честности: harness сейчас даёт mean CPU на кадр, а не p95; per-frame p95-тайминги — часть этапа 5, не фиктивная приёмка по mean.
 - Carriage для сравнения A/B: benchstat.txt + raw/*.json закоммичены; повторяемость подтверждена 3 rounds на ячейку.
+
+**Этап 5, item 2 — измерено частично (2026-10-12, slice 36):**
+
+- `render.Canvas.Text` измеряет кластер один раз (общий с `Put` путь записи ячеек, `putMeasured`) и не пишет ячейки на строках вне canvas/clip и на исчерпанных столбцах; скрытые строки по-прежнему измеряются для возвращаемой ширины (widest input line). Корректность закреплена reference-алгоритм тестом и fuzz-целью по полному буферу и возвращаемому значению.
+- A/B, 6 чередующихся раундов (benchstat, i5-10400F, Go 1.25.5, все allocs 0): visible-ascii −18.78% (p=0.041), visible-egc −46.95% (p=0.002), clip-band −20.12% (p=0.015), exhausted-columns −25.54% (p=0.009), tall-overscroll 2000 строк (CPU-only) −29.73% (p=0.002); geomean −29.03%. Регресс-проверка того же сеанса: CanvasFrame −19.92% (p=0.002; B/op 314.5→259.0), Put +4.22% (p=0.015, уровень шума), putcell/fill без изменений.
+- PTY tall 160 строк (3 чередованных раунда, Docker golang:1.26-alpine): p50/p95 7.80/11.71→6.22/8.41 мс (120×40), 15.27/23.98→13.00/17.96 мс (240×80); idle 0.11–0.17% одного core; 0 ошибок.
+- Tour: gauge/spinner запрашивают кадры только при реальной видимости (по clipped-геометрии панели на каждом View); скрытый spinner — 0 recurring frames, показ возобновляет анимацию; reduced motion замораживает декор; progress sidebands не зависят от видимости. Закреплено матричным и end-to-end тестом.
+- Baseline переизвлечён на новом коде: 174 runs / 0 failed (~55 мин на закреплённом host; добавлены lux-only сцена tall и флаг `-scenes`). Кросс-сессионные lux p95 deltas против старой батареи (−14.0…+98.2%) не подтвердились как регрессии: чередованная same-session проверка (30+30 runs, 5 сцен × 2 размера × 3 раунда) дала −23.9…+9.9% при плоских per-paint allocs и стабильных paints. Причина: `frame_cpu_us` — per-present delta CPU процесса; при меньшем числе presentations значения на кадр растут. Библиотечных регрессий не выявлено; lux-only сцена rtt в confirm-набор не входила, её delta адъюстирована только микробенчмарками (честно зафиксировано).
+- Честно не закрыто в item 2 (следующий slice этапа 5): `ui.Table` вызывает `rowAt` для строк внутри bounds, но обрезанных более тесным `ClipRect`; `ui.RadioGroup` форматирует/клипует скрытые labels; большинство widgets делает ранний return только по пустому bounds-intersect без проверки `ClipRect`; `TextArea.drawAreaRow` дублирует GraphemeWidth+Put измерение, которое `Text` теперь делит.
 
 
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.

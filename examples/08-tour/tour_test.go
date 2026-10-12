@@ -258,7 +258,8 @@ func TestWantsFrameMatrix(t *testing.T) {
 
 	app = newTour()
 	app.page = 6
-	app.sync.Started = time.Time{} // no running spinner, no moving gauge
+	app.gaugeVisible, app.spinnerVisible = true, true // geometry normally latched by View
+	app.sync.Started = time.Time{}                    // no running spinner, no moving gauge
 	if _, moving := app.wantsFrame(now); moving {
 		t.Fatal("widget tab with a settled gauge and a stopped spinner: want no frames")
 	}

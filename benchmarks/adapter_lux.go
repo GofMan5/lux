@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -50,6 +51,7 @@ type luxModel struct {
 
 	rows    []rowStyle // base rows; the list scene keeps all 10k
 	egcRows []rowStyle
+	tallDoc string // one precomputed document, deliberately not virtualized
 
 	cursorStyle    render.Style
 	highlightStyle render.Style
@@ -168,6 +170,17 @@ func (m *luxModel) precompute() {
 			}
 		}
 	}
+	if m.sc == scTall {
+		var doc strings.Builder
+		doc.Grow(tallRowCount * (m.w + 1))
+		for row := 0; row < tallRowCount; row++ {
+			if row > 0 {
+				doc.WriteByte('\n')
+			}
+			doc.WriteString(listRow(row, m.w))
+		}
+		m.tallDoc = doc.String()
+	}
 	if m.sc == scSubcell {
 		m.renderer = scene3d.NewRenderer()
 		m.renderer.DoubleSided = true
@@ -227,6 +240,10 @@ func (m *luxModel) View(f *lux.Frame) {
 			}
 			canvas.Text(0, y, m.egcRows[y].text, style)
 		}
+
+	case scTall:
+		offset := m.step % max(tallRowCount-h, 1)
+		canvas.Text(0, -offset, m.tallDoc, m.cursorStyle)
 
 	case scSubcell:
 		m.renderer.Render(canvas, cubeScene(m.step))

@@ -89,6 +89,9 @@ type tour struct {
 	target   float64
 	trace    []float64
 	sync     ui.SpinnerState
+	// Latched from actual clipped geometry each View; offscreen decoration
+	// must not keep the compact page awake.
+	gaugeVisible, spinnerVisible bool
 	// Input tab.
 	feed     []feedRow
 	presses  int
@@ -399,6 +402,7 @@ func (app *tour) View(frame *lux.Frame) {
 	area := canvas.Bounds()
 	app.width, app.height = area.W, area.H
 	app.reduced = frame.ReducedMotion
+	app.gaugeVisible, app.spinnerVisible = false, false
 	canvas.Clear(render.Style{Background: background})
 	app.ui.Begin(frame)
 	defer app.ui.End(frame)
@@ -535,10 +539,10 @@ func (app *tour) wantsFrame(now time.Time) (time.Duration, bool) {
 		if app.reduced {
 			return 0, false
 		}
-		if math.Abs(app.target-app.gauge) > 1e-4 {
+		if app.gaugeVisible && math.Abs(app.target-app.gauge) > 1e-4 {
 			return 0, true
 		}
-		if app.sync.Started.IsZero() {
+		if !app.spinnerVisible || app.sync.Started.IsZero() {
 			return 0, false
 		}
 		// The spinner glyph is a pure function of absolute time: ask for a
@@ -1005,14 +1009,18 @@ func (app *tour) drawDisplayPanel(canvas *render.Canvas, area render.Rect, pageO
 	content := pagePanel(canvas, area, "DISPLAY + DATA")
 	y := content.Y
 	canvas.Text(content.X, y, "animated gauge (button sets the target)", render.Style{Foreground: muted, Background: panel})
-	app.ui.Gauge(canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &ui.GaugeState{Value: app.gauge}, gaugeStyle())
+	gaugeBounds := render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}
+	app.gaugeVisible = !canvas.GlobalRect(gaugeBounds).Empty()
+	app.ui.Gauge(canvas, gaugeBounds, &ui.GaugeState{Value: app.gauge}, gaugeStyle())
 	canvas.Text(content.X, y+3, "gauge value trace", render.Style{Foreground: muted, Background: panel})
 	trace := ui.SparklineState{Values: app.trace}
 	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 4, W: content.W, H: 2}, &trace, ui.SparklineStyle{Fill: render.Style{Foreground: cyan, Background: panel}})
 	canvas.Text(content.X, y+7, "frame present-time sparkline", render.Style{Foreground: muted, Background: panel})
 	frameSpark := ui.SparklineState{Values: app.frameTimes}
 	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 8, W: content.W, H: 2}, &frameSpark, ui.SparklineStyle{Fill: render.Style{Foreground: violet, Background: panel}})
-	app.ui.Spinner(canvas, render.Rect{X: content.X, Y: y + 11, W: 1, H: 1}, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
+	spinnerBounds := render.Rect{X: content.X, Y: y + 11, W: 1, H: 1}
+	app.spinnerVisible = !canvas.GlobalRect(spinnerBounds).Empty()
+	app.ui.Spinner(canvas, spinnerBounds, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
 	canvas.Text(content.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: muted, Background: panel})
 	canvas.Text(content.X, y+13, "feature table", render.Style{Foreground: muted, Background: panel})
 	app.ui.Table("table", canvas, render.Rect{X: content.X, Y: y + 14, W: content.W, H: 6}, &app.table, featureColumns, len(app.features),
