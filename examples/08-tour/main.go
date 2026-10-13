@@ -74,7 +74,9 @@ type tour struct {
 	speedIdx int
 	renderer scene3d.Renderer
 	mesh     scene3d.Mesh
-	// Widgets tab.
+	// Widgets tab. Editing catalog is a disclosure, not another top-level tab.
+	editing  bool
+	catalog  editingCatalog
 	name     ui.TextInput
 	list     ui.ListState
 	scroll   ui.ScrollState
@@ -122,6 +124,7 @@ func newTour() *tour {
 	app.gauge = .25
 	app.target = .25
 	app.features = append([][2]string(nil), featureRows...)
+	app.catalog.init()
 	app.sync.Started = time.Now()
 	app.spring.Response = 250 * time.Millisecond
 	return app
@@ -142,6 +145,12 @@ func (app *tour) Update(next event.Event) lux.Command {
 		case "tabs":
 			_, _ = app.tabs.Apply(action, tabLabels)
 			app.page = app.tabs.Selected
+		case "catalog-toggle":
+			if action.Kind == ui.Activate && !app.ui.ModalOpen() {
+				app.editing = !app.editing
+			}
+		case "catalog-tree", "catalog-mode", "catalog-editor":
+			app.catalog.apply(action)
 		case "name":
 			app.name.Apply(action)
 		case "list":
@@ -433,6 +442,9 @@ func (app *tour) View(frame *lux.Frame) {
 		app.pageShortcut('s', "demo-speed")
 		app.pageShortcut('S', "demo-speed")
 	}
+	if app.page == 6 {
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF2}, Target: "catalog-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	}
 
 	if layout.Classify(area) == layout.Tiny {
 		canvas.Text(0, 0, "LUX tour - enlarge the terminal", render.Style{Foreground: violet, Attrs: render.AttrBold})
@@ -575,6 +587,12 @@ func (app *tour) drawFooter(frame *lux.Frame, area render.Rect) {
 		6: "type in the editor, click the button, scroll the log",
 		7: "press keys: press / repeat / release decoded here",
 		8: "sideband demos: taskbar progress, notify, clipboard",
+	}
+	if app.page == 6 {
+		hints[6] = "[F2] editing widgets"
+		if app.editing {
+			hints[6] = "[F2] controls  [Tab] focus  [Esc] cancel"
+		}
 	}
 	footer := fmt.Sprintf(" [1-9] tabs  %s  [q] quit  [F1] help ", hints[app.page])
 	footerY := max(area.H-1, 0)
@@ -935,6 +953,10 @@ const (
 // (typically 80x24) switches to drawWidgetsStacked so every control stays
 // reachable through one page scroller instead of being cut off.
 func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect, now time.Time) {
+	if app.editing {
+		app.catalog.draw(&app.ui, canvas, area)
+		return
+	}
 	if layout.Classify(area) <= layout.Compact || area.H < widgetsDisplayPanelHeight {
 		app.drawWidgetsStacked(canvas, area, now)
 		return
@@ -1165,6 +1187,7 @@ func (app *tour) drawHelp(canvas *render.Canvas, area render.Rect) {
 			"Tab / Shift+Tab      move widget focus",
 			"Enter / Space        activate focused control",
 			"Arrows / wheel       select, scroll",
+			"F2 on Widgets        editing catalog",
 			"[e] / [v]            motion: easing / response",
 			"[s]                  3D: rotation speed",
 			"Esc                  close this dialog",

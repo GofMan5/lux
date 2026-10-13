@@ -17,6 +17,12 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- The guided tour's Widgets tab now exposes Tree, Select, and TextArea
+  through F2: independent in-memory sample drafts, captured commit/cancel
+  picker, editable/read-only/disabled/empty editor states, compact stacking
+  and wide master-detail placement. Committed-routing tests and 80×24,
+  120×40, and 240×80 cell/style/caret/geometry fixtures cover the stand.
+  The original controls remain available; no public API changed.
 - Deterministic widget allocation guards: 20 warmed draw scenarios now
   enforce fixed allocation-count ceilings in the root test suite alongside
   the existing renderer/encoder allocation and wire-byte budgets. Cold

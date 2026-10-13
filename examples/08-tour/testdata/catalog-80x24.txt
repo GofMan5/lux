@@ -1,0 +1,27 @@
+viewport=80x24
+geometry={tree:{X:1 Y:6 W:78 H:3} modePicker:{X:1 Y:11 W:24 H:1} editor:{X:1 Y:14 W:78 H:6}}
+focus=catalog-editor caret=1,14,true
+02 " Editing widgets"
+03 " In-memory samples: Tree / Select / TextArea"
+04 ""
+05 " Tree — Enter expands / opens"
+06 " - samples"
+07 "    config.lux"
+08 "    notes.txt"
+09 ""
+10 " Select — editor state"
+11 "  editable              v"
+12 ""
+13 " TextArea — config.lux (editable)"
+14 " # In-memory config sample"
+15 " name = lux-workbench"
+16 " workers = 4"
+17 " region = 東京"
+18 " # Paste multiple lines; Ctrl+Z undoes the edit."
+19 ""
+20 " In-memory samples only; nothing is written to disk."
+21 " Tab moves focus | Ctrl+Z undo | Ctrl+Y redo | empty: type to start"
+all-body-cells-sha256=9b0b635768023eb1a6a9b77622e871de540b9a8af0a09b260b9b108cd671e20d
+cell(1,6)=render.Cell{Grapheme:"-", Width:0x1, Style:render.Style{Foreground:render.Color{Mode:0x3, Value:0xe5e7eb}, Background:render.Color{Mode:0x3, Value:0x80a12}, Attrs:0x1, UnderlineStyle:0x0, UnderlineColor:render.Color{Mode:0x0, Value:0x0}}, Link:render.Link{URI:"", ID:""}}
+cell(1,11)=render.Cell{Grapheme:" ", Width:0x1, Style:render.Style{Foreground:render.Color{Mode:0x3, Value:0xe5e7eb}, Background:render.Color{Mode:0x3, Value:0x80a12}, Attrs:0x0, UnderlineStyle:0x0, UnderlineColor:render.Color{Mode:0x0, Value:0x0}}, Link:render.Link{URI:"", ID:""}}
+cell(1,14)=render.Cell{Grapheme:"#", Width:0x1, Style:render.Style{Foreground:render.Color{Mode:0x3, Value:0x80a12}, Background:render.Color{Mode:0x3, Value:0x22d3ee}, Attrs:0x9, UnderlineStyle:0x0, UnderlineColor:render.Color{Mode:0x0, Value:0x0}}, Link:render.Link{URI:"", ID:""}}

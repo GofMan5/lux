@@ -1,0 +1,2 @@
+# Cell fixtures compare byte-exact UTF-8 text on every OS.
+*.txt text eol=lf

@@ -271,6 +271,14 @@ Border не используется по умолчанию для каждог
 - Детерминированное время/данные в tests; cell snapshots сравнивают text + styles + caret + geometry, не только plain strings.
 - Saved fixtures + ограниченный визуальный проход в реальных hosts; не бесконечный цикл косметических переделок.
 
+### Workbench catalog, slice 43
+
+- `08-tour` / Widgets / F2: добавлен editing stand Tree + Select + TextArea, без новой top-level вкладки, public API/dependencies. Старый каталог сохранён; переключатель виден в footer/help и работает из focused editor, но не сквозь modal scope.
+- 80×24: дерево над picker/editor; 120×40 и 240×80: дерево рядом с редактором. Для слишком маленькой области — enlargement hint; zero-size не ждёт несуществующего Present и восстановление сохраняет drafts.
+- Два in-memory samples с независимыми draft/caret/scroll/history, MaxBytes 16KiB / UndoBytes 32KiB. Tree expand/open; Select preview/Enter commit/Escape+outside cancel+focus trap/restore; TextArea editable/read-only/disabled/empty, multiline paste и undo/redo. Никаких disk writes или обещаний настоящего filesystem editor.
+- Committed-routing tests через существующий probeBackend: beacon после Context.End commit, последовательный causal ack на каждый input; callback не пишет model. Fixtures 80×24/120×40/240×80: exact text positioning, hash всех body cells (grapheme/width/style/link), representative cells, caret/focus/geometry. Hidden decoration не планирует animation; tiny/zero/restore проверены. Это cell/backend evidence, не ручной live-terminal host pass.
+- Открыто: theme/density/reduced-motion switches, simulated capability previews, diagnostics и loading/error каталога; реальные project/config и jobs/log flows ниже всё ещё обязательны. Stand не подменяет reference application и не закрывает stage 6 целиком.
+
 ### Три reference designs
 
 1. **Task/process explorer** — virtual data, async, filtering, master-detail, recovery.
