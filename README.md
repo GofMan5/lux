@@ -131,7 +131,7 @@ The examples are numbered as a curriculum:
 | `05-widgets` | The widget catalog — every control end to end ([CUSTOM-CONTROL.md](docs/CUSTOM-CONTROL.md)) |
 | `06-showcase` | The adaptive animated 3D showcase with a live Interaction Lab |
 | `07-ssh` | A LUX TUI served over SSH — the engine in a child on a real pty |
-| `08-tour` | The full-capability tour — nine tabs; Widgets / F2 opens the keyboard-first Tree, Select, and TextArea stand ([tour guide](examples/08-tour/README.md)) |
+| `08-tour` | The full-capability tour — nine tabs; Widgets / F2 opens the Tree, Select, and TextArea stand; F3 opens theme, density, and motion settings ([tour guide](examples/08-tour/README.md)) |
 | `09-procs` | The async data app — a real process explorer: type-to-search filtering, loading/empty/error/retry phases, master-detail, cancellation, and a confirm-then-kill action with auto-refresh |
 | `annex` | Sideband channels — taskbar progress, a toast, a clipboard write |
 

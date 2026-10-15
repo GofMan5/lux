@@ -17,6 +17,15 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- The guided tour has an F3 settings screen: per-tour dark, light,
+  terminal-default, and high-contrast themes; compact/comfortable body spacing;
+  and a local reduced-motion preference that cannot override runtime policy.
+  F3/Escape restores the prior editor's focus, caret, and draft. Settings
+  suppress hidden page-local shortcuts and decorative frame scheduling;
+  terminal-default focus also differs by underline. Committed-routing tests
+  and styled cell fixtures cover 80×24, 120×40, and 240×80. Preferences are
+  session-local; no library API or dependencies changed.
+
 - The guided tour's Widgets tab now exposes Tree, Select, and TextArea
   through F2: independent in-memory sample drafts, captured commit/cancel
   picker, editable/read-only/disabled/empty editor states, compact stacking

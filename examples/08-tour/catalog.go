@@ -91,17 +91,17 @@ func (c *editingCatalog) apply(action ui.Action) {
 	}
 }
 
-func (c *editingCatalog) draw(ctx *ui.Context, canvas *render.Canvas, area render.Rect) {
+func (c *editingCatalog) draw(ctx *ui.Context, canvas *render.Canvas, area render.Rect, paint tourPaint) {
 	canvas = canvas.Clip(area)
 	if area.W < 32 || area.H < 14 {
 		c.geometry = catalogGeometry{}
-		canvas.Text(area.X, area.Y, "Editing widgets - enlarge the terminal", render.Style{Foreground: ink, Background: background})
+		canvas.Text(area.X, area.Y, "Editing widgets - enlarge the terminal", render.Style{Foreground: paint.ink, Background: paint.background})
 		return
 	}
-	text := render.Style{Foreground: ink, Background: background}
-	label := render.Style{Foreground: ink, Background: background, Attrs: render.AttrDim}
-	focus := render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold | render.AttrUnderline}
-	canvas.Text(area.X, area.Y, "Editing widgets", render.Style{Foreground: ink, Background: background, Attrs: render.AttrBold})
+	text := render.Style{Foreground: paint.ink, Background: paint.background}
+	label := render.Style{Foreground: paint.ink, Background: paint.background, Attrs: render.AttrDim}
+	focus := render.Style{Foreground: paint.background, Background: paint.cyan, Attrs: render.AttrBold | render.AttrUnderline}
+	canvas.Text(area.X, area.Y, "Editing widgets", render.Style{Foreground: paint.ink, Background: paint.background, Attrs: render.AttrBold})
 	canvas.Text(area.X, area.Y+1, "In-memory samples: Tree / Select / TextArea", label)
 	work := render.Rect{X: area.X, Y: area.Y + 3, W: area.W, H: max(area.H-5, 0)}
 	var tree, editor render.Rect
@@ -115,12 +115,12 @@ func (c *editingCatalog) draw(ctx *ui.Context, canvas *render.Canvas, area rende
 	canvas.Text(tree.X, tree.Y-1, "Tree — Enter expands / opens", label)
 	rows := c.rows()
 	ctx.Tree("catalog-tree", canvas, tree, &c.tree, len(rows), func(i int) ui.TreeRow { return rows[i] }, ui.TreeStyle{
-		Normal: text, Selected: render.Style{Foreground: ink, Background: background, Attrs: render.AttrBold}, Focused: focus,
+		Normal: text, Selected: render.Style{Foreground: paint.ink, Background: paint.background, Attrs: render.AttrBold}, Focused: focus,
 	})
 	canvas.Text(editor.X, editor.Y, "Select — editor state", label)
 	anchor := render.Rect{X: editor.X, Y: editor.Y + 1, W: min(editor.W, 24), H: 1}
 	style := ui.SelectStyle{Normal: text, Focused: focus, Marker: "v", Popup: text, OptionNormal: text,
-		OptionSelected: render.Style{Foreground: ink, Background: background, Attrs: render.AttrBold | render.AttrReverse}, OptionFocused: focus}
+		OptionSelected: render.Style{Foreground: paint.ink, Background: paint.background, Attrs: render.AttrBold | render.AttrReverse}, OptionFocused: focus}
 	if !c.modePicker.Open {
 		ctx.Select("catalog-mode", canvas, anchor, &c.modePicker, catalogModes, style)
 	}

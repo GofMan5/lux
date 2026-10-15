@@ -24,17 +24,6 @@ import (
 	"github.com/GofMan5/lux/ui"
 )
 
-var (
-	ink        = render.RGBColor(229, 231, 235)
-	muted      = render.RGBColor(107, 114, 128)
-	violet     = render.RGBColor(139, 92, 246)
-	cyan       = render.RGBColor(34, 211, 238)
-	green      = render.RGBColor(52, 211, 153)
-	amber      = render.RGBColor(251, 191, 36)
-	background = render.RGBColor(8, 10, 18)
-	panel      = render.RGBColor(15, 18, 31)
-)
-
 var tabLabels = []string{"1 Text", "2 Color", "3 Border", "4 Layout", "5 Motion", "6 3D", "7 Widgets", "8 Input", "9 Annex"}
 
 // wrapDemo is the paragraph the text page wraps at the panel width.
@@ -56,11 +45,13 @@ var textSamples = [][2]string{
 }
 
 type tour struct {
-	page   int
-	tabs   ui.TabsState
-	ui     ui.Context
-	width  int
-	height int
+	settings workbenchSettings
+	paint    tourPaint
+	page     int
+	tabs     ui.TabsState
+	ui       ui.Context
+	width    int
+	height   int
 
 	// Motion tab.
 	tween   motion.Tween
@@ -106,7 +97,7 @@ type tour struct {
 	// Telemetry.
 	frameTimes []float64
 	showHelp   bool
-	reduced    bool // latched from Frame.ReducedMotion every View
+	reduced    bool // effective runtime OR local motion preference, latched each View
 }
 
 // feedRow is one recorded input-tab line: a decoded key or another event
@@ -118,7 +109,7 @@ type feedRow struct {
 }
 
 func newTour() *tour {
-	app := &tour{mesh: scene3d.Cube(1.45)}
+	app := &tour{mesh: scene3d.Cube(1.45), paint: workbenchPaint(0)}
 	app.name.SetValue("retarget me")
 	app.list.Selected = 2
 	app.gauge = .25
@@ -145,6 +136,18 @@ func (app *tour) Update(next event.Event) lux.Command {
 		case "tabs":
 			_, _ = app.tabs.Apply(action, tabLabels)
 			app.page = app.tabs.Selected
+		case "settings-toggle":
+			if app.settings.open && (action.Kind == ui.Activate || action.Kind == ui.Dismiss) {
+				app.settings.open = false
+			} else if action.Kind == ui.Activate && !app.ui.ModalOpen() {
+				app.settings.open = true
+			}
+		case "settings-theme":
+			app.settings.theme.Apply(action, len(workbenchThemes))
+		case "settings-density":
+			app.settings.density.Apply(action, len(workbenchDensities))
+		case "settings-motion":
+			app.settings.motion.Apply(action)
 		case "catalog-toggle":
 			if action.Kind == ui.Activate && !app.ui.ModalOpen() {
 				app.editing = !app.editing
@@ -184,7 +187,7 @@ func (app *tour) Update(next event.Event) lux.Command {
 				}
 			}
 		case "help":
-			if action.Kind == ui.Activate {
+			if action.Kind == ui.Activate && !app.settings.open {
 				app.showHelp = true
 			}
 		case "help-modal", "close-help":
@@ -410,9 +413,11 @@ func (app *tour) View(frame *lux.Frame) {
 	canvas := frame.Canvas
 	area := canvas.Bounds()
 	app.width, app.height = area.W, area.H
-	app.reduced = frame.ReducedMotion
+	app.reduced = frame.ReducedMotion || app.settings.motion.Checked
+	app.paint = workbenchPaint(app.settings.theme.Selected)
+	app.ui.UseTheme(app.paint.theme())
 	app.gaugeVisible, app.spinnerVisible = false, false
-	canvas.Clear(render.Style{Background: background})
+	canvas.Clear(render.Style{Background: app.paint.background})
 	app.ui.Begin(frame)
 	defer app.ui.End(frame)
 	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "help", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
@@ -430,53 +435,65 @@ func (app *tour) View(frame *lux.Frame) {
 	// their page is showing, so they beat the tab strip's Space activation
 	// even when the strip holds focus. digits still switch tabs from the
 	// fallback path.
-	if app.page == 4 {
+	if app.page == 4 && !app.settings.open {
 		app.pageShortcut(' ', "demo-retarget")
 		app.pageShortcut('e', "demo-ease")
 		app.pageShortcut('E', "demo-ease")
 		app.pageShortcut('v', "demo-spring")
 		app.pageShortcut('V', "demo-spring")
 	}
-	if app.page == 5 {
+	if app.page == 5 && !app.settings.open {
 		app.pageShortcut(' ', "demo-pause")
 		app.pageShortcut('s', "demo-speed")
 		app.pageShortcut('S', "demo-speed")
 	}
-	if app.page == 6 {
+	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF3}, Target: "settings-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	if app.page == 6 && !app.settings.open {
 		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF2}, Target: "catalog-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 	}
 
 	if layout.Classify(area) == layout.Tiny {
-		canvas.Text(0, 0, "LUX tour - enlarge the terminal", render.Style{Foreground: violet, Attrs: render.AttrBold})
+		canvas.Text(0, 0, "LUX tour - enlarge the terminal", render.Style{Foreground: app.paint.violet, Attrs: render.AttrBold})
 		return
 	}
-	app.ui.Tabs("tabs", canvas, render.Rect{X: 1, Y: 1, W: max(area.W-2, 1), H: 1}, &app.tabs, tabLabels, tabsStyle())
+	app.ui.Tabs("tabs", canvas, render.Rect{X: 1, Y: 1, W: max(area.W-2, 1), H: 1}, &app.tabs, tabLabels, app.tabsStyle())
 	header := fmt.Sprintf("lux-tui tour   %dx%d   %s", area.W, area.H, colorName(frame.Capabilities.Color))
-	canvas.Text(max(area.W-canvas.TextWidth(header)-1, 0), 0, header, render.Style{Foreground: muted, Background: background})
+	canvas.Text(max(area.W-canvas.TextWidth(header)-1, 0), 0, header, render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 	app.frameTimes = append(app.frameTimes, frame.Metrics.PresentTime.Seconds())
 	if len(app.frameTimes) > 64 {
 		app.frameTimes = append(app.frameTimes[:0], app.frameTimes[1:]...)
 	}
 	body := render.Rect{X: 1, Y: 2, W: max(area.W-2, 1), H: max(area.H-4, 1)}
-	switch app.page {
-	case 0:
-		app.drawText(canvas, body, frame.Capabilities.Unicode)
-	case 1:
-		app.drawColor(canvas, body, frame.Capabilities.Color)
-	case 2:
-		app.drawBorder(canvas, body, frame.Capabilities.Unicode)
-	case 3:
-		app.drawLayout(canvas, body)
-	case 4:
-		app.drawMotion(canvas, body, frame.Now)
-	case 5:
-		app.drawScene(canvas, body, frame)
-	case 6:
-		app.drawWidgets(canvas, body, frame.Now)
-	case 7:
-		app.drawInput(canvas, body, frame.Capabilities)
-	case 8:
-		app.drawAnnex(canvas, body, frame)
+	if app.settings.density.Selected == 1 {
+		// Compact terminals retain height; wider stands gain breathing room.
+		body = body.Inset(min(1, max((body.W-32)/2, 0)), 0)
+		if body.H >= 24 {
+			body = body.Inset(0, 1)
+		}
+	}
+	if app.settings.open {
+		app.drawSettings(canvas, body)
+	} else {
+		switch app.page {
+		case 0:
+			app.drawText(canvas, body, frame.Capabilities.Unicode)
+		case 1:
+			app.drawColor(canvas, body, frame.Capabilities.Color)
+		case 2:
+			app.drawBorder(canvas, body, frame.Capabilities.Unicode)
+		case 3:
+			app.drawLayout(canvas, body)
+		case 4:
+			app.drawMotion(canvas, body, frame.Now)
+		case 5:
+			app.drawScene(canvas, body, frame)
+		case 6:
+			app.drawWidgets(canvas, body, frame.Now)
+		case 7:
+			app.drawInput(canvas, body, frame.Capabilities)
+		case 8:
+			app.drawAnnex(canvas, body, frame)
+		}
 	}
 	app.drawFooter(frame, area)
 	if app.showHelp {
@@ -541,6 +558,9 @@ func (app *tour) wantsFrame(now time.Time) (time.Duration, bool) {
 	if app.progressMode == 1 {
 		return 0, true
 	}
+	if app.settings.open {
+		return 0, false
+	}
 	switch app.page {
 	case 4:
 		// The motion page retargets forever, so it animates continuously.
@@ -594,21 +614,24 @@ func (app *tour) drawFooter(frame *lux.Frame, area render.Rect) {
 			hints[6] = "[F2] controls  [Tab] focus  [Esc] cancel"
 		}
 	}
-	footer := fmt.Sprintf(" [1-9] tabs  %s  [q] quit  [F1] help ", hints[app.page])
+	footer := fmt.Sprintf(" [1-9] tabs  [F3] settings  %s  [q] quit  [F1] help ", hints[app.page])
+	if app.settings.open {
+		footer = " [F3/Esc] return  [Tab] focus  [Arrows/Space] change  [Ctrl+Q] quit "
+	}
 	footerY := max(area.H-1, 0)
-	canvas.Text(1, footerY, footer, render.Style{Foreground: muted, Background: background})
+	canvas.Text(1, footerY, footer, render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 	status := fmt.Sprintf("%d fps  %s", frame.Metrics.TargetFPS, frame.Metrics.PresentTime.Round(100*time.Microsecond))
 	if area.W > canvas.TextWidth(footer)+canvas.TextWidth(status)+4 {
-		canvas.Text(area.W-canvas.TextWidth(status)-1, footerY, status, render.Style{Foreground: cyan, Background: background})
+		canvas.Text(area.W-canvas.TextWidth(status)-1, footerY, status, render.Style{Foreground: app.paint.cyan, Background: app.paint.background})
 	}
 }
 
 // pagePanel draws the standard page chrome: a bordered, titled panel whose
 // inset rect is the working area.
-func pagePanel(canvas *render.Canvas, area render.Rect, title string) render.Rect {
-	canvas.Fill(area, " ", render.Style{Background: panel})
-	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
-	canvas.Text(area.X+2, area.Y, " "+title+" ", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+func (app *tour) pagePanel(canvas *render.Canvas, area render.Rect, title string) render.Rect {
+	canvas.Fill(area, " ", render.Style{Background: app.paint.panel})
+	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: app.paint.violet, Background: app.paint.panel})
+	canvas.Text(area.X+2, area.Y, " "+title+" ", render.Style{Foreground: app.paint.cyan, Background: app.paint.panel, Attrs: render.AttrBold})
 	return area.Inset(2, 1)
 }
 
@@ -618,7 +641,7 @@ func (app *tour) drawText(canvas *render.Canvas, area render.Rect, unicode bool)
 		layout.Constraint{Basis: area.W / 2, Min: 20, Grow: 1, Shrink: 1},
 	)
 	// Left: the grapheme sampler, each row annotated with measured width.
-	left := pagePanel(canvas, columns[0], "GRAPHEME SAMPLER")
+	left := app.pagePanel(canvas, columns[0], "GRAPHEME SAMPLER")
 	if !left.Empty() {
 		y := left.Y
 		if unicode {
@@ -626,59 +649,59 @@ func (app *tour) drawText(canvas *render.Canvas, area render.Rect, unicode bool)
 				if y >= left.Bottom() {
 					break
 				}
-				canvas.Text(left.X, y, sample[0], render.Style{Foreground: muted, Background: panel})
-				w := canvas.Text(left.X+14, y, sample[1], render.Style{Foreground: ink, Background: panel})
-				canvas.Text(left.X+14+w+1, y, fmt.Sprintf("w=%d", w), render.Style{Foreground: muted, Background: panel})
+				canvas.Text(left.X, y, sample[0], render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+				w := canvas.Text(left.X+14, y, sample[1], render.Style{Foreground: app.paint.ink, Background: app.paint.panel})
+				canvas.Text(left.X+14+w+1, y, fmt.Sprintf("w=%d", w), render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 				y++
 			}
 		} else {
-			canvas.Text(left.X, y, "this terminal reported no Unicode mode;", render.Style{Foreground: muted, Background: panel})
-			canvas.Text(left.X, y+1, "the sampler degrades to ASCII labels.", render.Style{Foreground: muted, Background: panel})
+			canvas.Text(left.X, y, "this terminal reported no Unicode mode;", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+			canvas.Text(left.X, y+1, "the sampler degrades to ASCII labels.", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 		}
 	}
 	// Right: word wrap against the same measuring authority.
-	right := pagePanel(canvas, columns[1], "WORD WRAP")
+	right := app.pagePanel(canvas, columns[1], "WORD WRAP")
 	if right.Empty() {
 		return
 	}
 	width := max(right.W-2, 8)
 	wordLines := render.WrapLines(wrapDemo, width, render.WrapOptions{})
 	charLines := render.WrapLines(wrapDemo, width, render.WrapOptions{Mode: render.WrapChar})
-	canvas.Text(right.X, right.Y, fmt.Sprintf("WrapWord @ %d cols", width), render.Style{Foreground: muted, Background: panel})
+	canvas.Text(right.X, right.Y, fmt.Sprintf("WrapWord @ %d cols", width), render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	for index, line := range wordLines {
 		if index >= max(right.H/2-1, 1) {
 			break
 		}
-		canvas.Text(right.X, right.Y+1+index, line, render.Style{Foreground: ink, Background: panel})
+		canvas.Text(right.X, right.Y+1+index, line, render.Style{Foreground: app.paint.ink, Background: app.paint.panel})
 	}
 	charY := right.Y + right.H/2 + 1
-	canvas.Text(right.X, charY, fmt.Sprintf("WrapChar @ %d cols", width), render.Style{Foreground: muted, Background: panel})
+	canvas.Text(right.X, charY, fmt.Sprintf("WrapChar @ %d cols", width), render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	for index, line := range charLines {
 		if index >= max(right.Bottom()-charY-2, 0) {
 			break
 		}
-		canvas.Text(right.X, charY+1+index, line, render.Style{Foreground: amber, Background: panel})
+		canvas.Text(right.X, charY+1+index, line, render.Style{Foreground: app.paint.amber, Background: app.paint.panel})
 	}
 	metrics := render.MeasureWrap(wrapDemo, width, render.WrapOptions{})
-	canvas.Text(right.X, max(right.Bottom()-1, right.Y), fmt.Sprintf("word: %d lines, %d cols", metrics.Height, metrics.Width), render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+	canvas.Text(right.X, max(right.Bottom()-1, right.Y), fmt.Sprintf("word: %d lines, %d cols", metrics.Height, metrics.Width), render.Style{Foreground: app.paint.cyan, Background: app.paint.panel, Attrs: render.AttrBold})
 }
 
 func (app *tour) drawColor(canvas *render.Canvas, area render.Rect, depth capability.ColorDepth) {
 	// A truecolor horizontal gradient: one interpolated RGB cell per column.
 	gradient, rest := area.SplitTop(4)
 	if gradient.H >= 3 {
-		canvas.Fill(gradient, " ", render.Style{Background: panel})
-		canvas.Text(gradient.X+2, gradient.Y, " 24-BIT GRADIENT (violet -> cyan) ", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+		canvas.Fill(gradient, " ", render.Style{Background: app.paint.panel})
+		canvas.Text(gradient.X+2, gradient.Y, " 24-BIT GRADIENT (violet -> cyan) ", render.Style{Foreground: app.paint.cyan, Background: app.paint.panel, Attrs: render.AttrBold})
 		for x := 0; x < gradient.W-4; x++ {
 			t := float64(x) / math.Max(float64(gradient.W-5), 1)
 			color := render.RGBColor(byte(139+float64(34-139)*t), byte(92+float64(211-92)*t), byte(246+float64(238-246)*t))
-			canvas.Put(gradient.X+2+x, gradient.Y+2, "▀", render.Style{Foreground: violet, Background: color})
+			canvas.Put(gradient.X+2+x, gradient.Y+2, "▀", render.Style{Foreground: app.paint.violet, Background: color})
 		}
 	}
 	// The xterm 256 cube: two spaces of background per color, 16 per row.
 	palette, attrs := rest.SplitTop(min(18, max(rest.H, 0)))
 	if !palette.Empty() {
-		canvas.Text(palette.X, palette.Y, "XTERM 256 PALETTE (IndexedColor 16..255)", render.Style{Foreground: muted, Background: background})
+		canvas.Text(palette.X, palette.Y, "XTERM 256 PALETTE (IndexedColor 16..255)", render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 		for index := 16; index < 256; index++ {
 			col := (index-16)%16*3 + 1
 			row := (index-16)/16 + 2
@@ -691,9 +714,9 @@ func (app *tour) drawColor(canvas *render.Canvas, area render.Rect, depth capabi
 	if attrs.Empty() {
 		return
 	}
-	canvas.Text(attrs.X, attrs.Y, "ANSI 16 BASE COLORS", render.Style{Foreground: muted, Background: background})
+	canvas.Text(attrs.X, attrs.Y, "ANSI 16 BASE COLORS", render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 	for index := 0; index < 16 && index*3+2 < attrs.W; index++ {
-		canvas.Text(attrs.X+1+index*3, attrs.Y+1, fmt.Sprintf("%2d", index), render.Style{Background: render.ANSIColor(byte(index)), Foreground: ink, Attrs: render.AttrBold})
+		canvas.Text(attrs.X+1+index*3, attrs.Y+1, fmt.Sprintf("%2d", index), render.Style{Background: render.ANSIColor(byte(index)), Foreground: app.paint.ink, Attrs: render.AttrBold})
 	}
 	attrRows := []struct {
 		name string
@@ -708,16 +731,16 @@ func (app *tour) drawColor(canvas *render.Canvas, area render.Rect, depth capabi
 		{"blink", render.AttrBlink},
 		{"hidden", render.AttrHidden},
 	}
-	canvas.Text(attrs.X, attrs.Y+3, "SGR ATTRIBUTES", render.Style{Foreground: muted, Background: background})
+	canvas.Text(attrs.X, attrs.Y+3, "SGR ATTRIBUTES", render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 	for index, row := range attrRows {
 		if attrs.Y+4+index >= attrs.Bottom() {
 			break
 		}
-		canvas.Text(attrs.X, attrs.Y+4+index, row.name, render.Style{Foreground: muted, Background: background})
-		canvas.Text(attrs.X+16, attrs.Y+4+index, "the quick brown fox 0123", render.Style{Foreground: ink, Background: background, Attrs: row.attr})
+		canvas.Text(attrs.X, attrs.Y+4+index, row.name, render.Style{Foreground: app.paint.muted, Background: app.paint.background})
+		canvas.Text(attrs.X+16, attrs.Y+4+index, "the quick brown fox 0123", render.Style{Foreground: app.paint.ink, Background: app.paint.background, Attrs: row.attr})
 	}
 	if attrs.Y+13 < attrs.Bottom() {
-		canvas.Text(attrs.X, attrs.Y+13, "UNDERLINE STYLES (SGR 4:x + SGR 58 color)", render.Style{Foreground: muted, Background: background})
+		canvas.Text(attrs.X, attrs.Y+13, "UNDERLINE STYLES (SGR 4:x + SGR 58 color)", render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 		styles := []struct {
 			name  string
 			style render.UnderlineStyle
@@ -732,13 +755,13 @@ func (app *tour) drawColor(canvas *render.Canvas, area render.Rect, depth capabi
 			if attrs.Y+14+index >= attrs.Bottom() {
 				break
 			}
-			canvas.Text(attrs.X, attrs.Y+14+index, row.name, render.Style{Foreground: muted, Background: background})
-			canvas.Text(attrs.X+10, attrs.Y+14+index, "underlined words", render.Style{Foreground: ink, Background: background, Attrs: render.AttrUnderline, UnderlineStyle: row.style, UnderlineColor: cyan})
+			canvas.Text(attrs.X, attrs.Y+14+index, row.name, render.Style{Foreground: app.paint.muted, Background: app.paint.background})
+			canvas.Text(attrs.X+10, attrs.Y+14+index, "underlined words", render.Style{Foreground: app.paint.ink, Background: app.paint.background, Attrs: render.AttrUnderline, UnderlineStyle: row.style, UnderlineColor: app.paint.cyan})
 		}
 	}
 	switch depth {
 	case capability.Monochrome, capability.ANSI16, capability.ANSI256:
-		canvas.Text(area.X, max(area.Bottom()-1, area.Y), fmt.Sprintf("terminal reports %s: the engine clamps these cells at present", colorName(depth)), render.Style{Foreground: amber, Background: background})
+		canvas.Text(area.X, max(area.Bottom()-1, area.Y), fmt.Sprintf("terminal reports %s: the engine clamps these cells at present", colorName(depth)), render.Style{Foreground: app.paint.amber, Background: app.paint.background})
 	}
 }
 
@@ -764,14 +787,14 @@ func (app *tour) drawBorder(canvas *render.Canvas, area render.Rect, unicode boo
 		if rect.W < 10 || rect.H < 5 {
 			return
 		}
-		border, color := borders[index].border, violet
+		border, color := borders[index].border, app.paint.violet
 		if !unicode {
-			border, color = render.ASCIIBorder, ink
+			border, color = render.ASCIIBorder, app.paint.ink
 		}
-		canvas.Border(rect, border, render.Style{Foreground: color, Background: panel})
-		canvas.Text(rect.X+2, rect.Y, " "+borders[index].name+" ", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
-		canvas.Text(rect.X+2, rect.Y+2, "styled border,", render.Style{Foreground: ink, Background: panel})
-		canvas.Text(rect.X+2, rect.Y+3, "per-cell styles", render.Style{Foreground: muted, Background: panel})
+		canvas.Border(rect, border, render.Style{Foreground: color, Background: app.paint.panel})
+		canvas.Text(rect.X+2, rect.Y, " "+borders[index].name+" ", render.Style{Foreground: app.paint.cyan, Background: app.paint.panel, Attrs: render.AttrBold})
+		canvas.Text(rect.X+2, rect.Y+2, "styled border,", render.Style{Foreground: app.paint.ink, Background: app.paint.panel})
+		canvas.Text(rect.X+2, rect.Y+3, "per-cell styles", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	}
 	drawCell(cells[0], 0)
 	drawCell(cells[1], 1)
@@ -784,16 +807,16 @@ func (app *tour) drawBorder(canvas *render.Canvas, area render.Rect, unicode boo
 		drawCell(cells2[0], 3)
 		outer := cells2[1]
 		if outer.W >= 14 && outer.H >= 6 {
-			border, color := borders[4].border, cyan
+			border, color := borders[4].border, app.paint.cyan
 			if !unicode {
-				border, color = render.ASCIIBorder, ink
+				border, color = render.ASCIIBorder, app.paint.ink
 			}
-			canvas.Border(outer, border, render.Style{Foreground: color, Background: panel})
-			canvas.Text(outer.X+2, outer.Y, " ASCIIBorder + nested ", render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold})
+			canvas.Border(outer, border, render.Style{Foreground: color, Background: app.paint.panel})
+			canvas.Text(outer.X+2, outer.Y, " ASCIIBorder + nested ", render.Style{Foreground: app.paint.cyan, Background: app.paint.panel, Attrs: render.AttrBold})
 			inner := outer.Inset(3, 2)
 			if !inner.Empty() {
-				canvas.Border(inner, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
-				canvas.Text(inner.X+1, inner.Y+1, "inset(3,2)", render.Style{Foreground: ink, Background: panel})
+				canvas.Border(inner, render.RoundedBorder, render.Style{Foreground: app.paint.violet, Background: app.paint.panel})
+				canvas.Text(inner.X+1, inner.Y+1, "inset(3,2)", render.Style{Foreground: app.paint.ink, Background: app.paint.panel})
 			}
 		}
 	}
@@ -801,7 +824,7 @@ func (app *tour) drawBorder(canvas *render.Canvas, area render.Rect, unicode boo
 
 func (app *tour) drawLayout(canvas *render.Canvas, area render.Rect) {
 	class := layout.Classify(area)
-	canvas.Text(area.X, area.Y, fmt.Sprintf("size class: %s (%dx%d) - resize the window, the tree reflows", className(class), area.W, area.H), render.Style{Foreground: cyan, Background: background, Attrs: render.AttrBold})
+	canvas.Text(area.X, area.Y, fmt.Sprintf("size class: %s (%dx%d) - resize the window, the tree reflows", className(class), area.W, area.H), render.Style{Foreground: app.paint.cyan, Background: app.paint.background, Attrs: render.AttrBold})
 	tree := render.Rect{X: area.X, Y: area.Y + 2, W: area.W, H: max(area.H-2, 1)}
 	rows := layout.Flex(make([]render.Rect, 2), tree, layout.Vertical, 1,
 		layout.Constraint{Basis: tree.H * 2 / 3, Min: 5, Grow: 3, Shrink: 1},
@@ -812,21 +835,21 @@ func (app *tour) drawLayout(canvas *render.Canvas, area render.Rect) {
 		if rect.Empty() {
 			return
 		}
-		canvas.Fill(rect, " ", render.Style{Background: panel})
-		canvas.Border(rect, render.RoundedBorder, render.Style{Foreground: color, Background: panel})
-		canvas.Text(rect.X+2, rect.Y+1, label, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
+		canvas.Fill(rect, " ", render.Style{Background: app.paint.panel})
+		canvas.Border(rect, render.RoundedBorder, render.Style{Foreground: color, Background: app.paint.panel})
+		canvas.Text(rect.X+2, rect.Y+1, label, render.Style{Foreground: app.paint.ink, Background: app.paint.panel, Attrs: render.AttrBold})
 		if rect.H > 2 {
-			canvas.Text(rect.X+2, rect.Y+2, fmt.Sprintf("%s %dx%d", detail, rect.W, rect.H), render.Style{Foreground: muted, Background: panel})
+			canvas.Text(rect.X+2, rect.Y+2, fmt.Sprintf("%s %dx%d", detail, rect.W, rect.H), render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 		}
 	}
-	labelBox(sidebar, "fixed-ish left", "Basis 24, Shrink 1", violet)
+	labelBox(sidebar, "fixed-ish left", "Basis 24, Shrink 1", app.paint.violet)
 	mainRows := layout.Flex(make([]render.Rect, 2), main, layout.Vertical, 1,
 		layout.Constraint{Basis: main.H * 3 / 4, Min: 4, Grow: 3, Shrink: 2},
 		layout.Constraint{Basis: main.H / 4, Min: 2, Grow: 1},
 	)
-	labelBox(mainRows[0], "grow 3 / shrink 2", "top of the main column", cyan)
-	labelBox(mainRows[1], "grow 1", "bottom of the main column", green)
-	labelBox(rows[1], "footer strip", "Basis H/3, Grow 1", amber)
+	labelBox(mainRows[0], "grow 3 / shrink 2", "top of the main column", app.paint.cyan)
+	labelBox(mainRows[1], "grow 1", "bottom of the main column", app.paint.green)
+	labelBox(rows[1], "footer strip", "Basis H/3, Grow 1", app.paint.amber)
 }
 
 type easing struct {
@@ -847,22 +870,22 @@ func (app *tour) drawMotion(canvas *render.Canvas, area render.Rect, now time.Ti
 	value, _ := app.tween.Value(now)
 	position, velocity := app.spring.Value(now)
 	back, _ := app.back.Value(now)
-	canvas.Text(area.X, area.Y, "absolute-time motion: every value is a pure sample of frame.Now, so a lagging frame skips stale states instead of replaying them", render.Style{Foreground: muted, Background: background})
+	canvas.Text(area.X, area.Y, "absolute-time motion: every value is a pure sample of frame.Now, so a lagging frame skips stale states instead of replaying them", render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 	track := func(y int, label, value string, fraction float64, color render.Color) {
-		base := render.Style{Foreground: muted, Background: background}
-		canvas.Text(area.X, y, label, render.Style{Foreground: color, Background: background, Attrs: render.AttrBold})
+		base := render.Style{Foreground: app.paint.muted, Background: app.paint.background}
+		canvas.Text(area.X, y, label, render.Style{Foreground: color, Background: app.paint.background, Attrs: render.AttrBold})
 		canvas.Text(max(area.X+area.W-canvas.TextWidth(value), area.X), y, value, base)
 		width := max(area.W-4, 2)
 		for x := 0; x < width; x++ {
 			canvas.Put(area.X+2+x, y+1, "·", base)
 		}
 		at := area.X + 2 + min(max(int(fraction*float64(width-1)), 0), width-1)
-		canvas.Put(at, y+1, "█", render.Style{Foreground: color, Background: background})
+		canvas.Put(at, y+1, "█", render.Style{Foreground: color, Background: app.paint.background})
 	}
 	y := area.Y + 2
-	track(y, fmt.Sprintf("TWEEN %s 900ms", easings[app.ease].name), fmt.Sprintf("%.3f", value), clamp01(value), violet)
-	track(y+4, fmt.Sprintf("SPRING response %s", app.spring.Response), fmt.Sprintf("pos %.3f  vel %.2f/s", position, velocity), clamp01(position), cyan)
-	track(y+8, "OUTBACK ping-pong loop", fmt.Sprintf("%.3f (marker clamped)", back), clamp01(back), amber)
+	track(y, fmt.Sprintf("TWEEN %s 900ms", easings[app.ease].name), fmt.Sprintf("%.3f", value), clamp01(value), app.paint.violet)
+	track(y+4, fmt.Sprintf("SPRING response %s", app.spring.Response), fmt.Sprintf("pos %.3f  vel %.2f/s", position, velocity), clamp01(position), app.paint.cyan)
+	track(y+8, "OUTBACK ping-pong loop", fmt.Sprintf("%.3f (marker clamped)", back), clamp01(back), app.paint.amber)
 }
 
 func clamp01(v float64) float64 { return min(max(v, 0), 1) }
@@ -873,8 +896,8 @@ func (app *tour) drawScene(canvas *render.Canvas, area render.Rect, frame *lux.F
 	if area.Empty() {
 		return
 	}
-	canvas.Fill(area, " ", render.Style{Background: panel})
-	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: violet, Background: panel})
+	canvas.Fill(area, " ", render.Style{Background: app.paint.panel})
+	canvas.Border(area, render.RoundedBorder, render.Style{Foreground: app.paint.violet, Background: app.paint.panel})
 	inner := area.Inset(1, 1)
 	if inner.Empty() {
 		return
@@ -895,10 +918,10 @@ func (app *tour) drawScene(canvas *render.Canvas, area render.Rect, frame *lux.F
 	}
 	app.renderer.Render(canvas.Subview(inner), scene)
 	status := fmt.Sprintf(" CPU 3D · %s · %s ", colorName(frame.Capabilities.Color), pauseName(app.paused))
-	if frame.ReducedMotion {
+	if app.reduced {
 		status = fmt.Sprintf(" CPU 3D · %s · REDUCED MOTION ", colorName(frame.Capabilities.Color))
 	}
-	canvas.Text(area.X+2, area.Y, status, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
+	canvas.Text(area.X+2, area.Y, status, render.Style{Foreground: app.paint.ink, Background: app.paint.panel, Attrs: render.AttrBold})
 }
 
 var terminalList = []string{"Windows Terminal", "iTerm2", "kitty", "foot", "Alacritty", "wezterm", "gnome-terminal", "plain xterm"}
@@ -954,7 +977,7 @@ const (
 // reachable through one page scroller instead of being cut off.
 func (app *tour) drawWidgets(canvas *render.Canvas, area render.Rect, now time.Time) {
 	if app.editing {
-		app.catalog.draw(&app.ui, canvas, area)
+		app.catalog.draw(&app.ui, canvas, area, app.paint)
 		return
 	}
 	if layout.Classify(area) <= layout.Compact || area.H < widgetsDisplayPanelHeight {
@@ -990,17 +1013,17 @@ func (app *tour) drawWidgetsStacked(canvas *render.Canvas, area render.Rect, now
 // sizes. The canvas clips the rects; the controls still register, so focus
 // and scrolling keep working when the panel sits partly off view.
 func (app *tour) drawFormPanel(canvas *render.Canvas, area render.Rect) {
-	content := pagePanel(canvas, area, "FORM CONTROLS")
+	content := app.pagePanel(canvas, area, "FORM CONTROLS")
 	y := content.Y
-	canvas.Text(content.X, y, "editor (undo/redo/paste)", render.Style{Foreground: muted, Background: panel})
-	app.ui.Input("name", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &app.name, inputStyle())
-	app.ui.Button("gauge", canvas, render.Rect{X: content.X, Y: y + 3, W: min(content.W, 20), H: 3}, "Retarget gauge", buttonStyle())
+	canvas.Text(content.X, y, "editor (undo/redo/paste)", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+	app.ui.Input("name", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &app.name, app.inputStyle())
+	app.ui.Button("gauge", canvas, render.Rect{X: content.X, Y: y + 3, W: min(content.W, 20), H: 3}, "Retarget gauge", app.buttonStyle())
 	y = y + 8
-	canvas.Text(content.X, y, "terminal list", render.Style{Foreground: muted, Background: panel})
-	app.ui.List("list", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(terminalList)}, &app.list, terminalList, listStyle())
+	canvas.Text(content.X, y, "terminal list", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+	app.ui.List("list", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(terminalList)}, &app.list, terminalList, app.listStyle())
 	y = y + 1 + len(terminalList) + 1
-	app.ui.Checkbox("slow", canvas, render.Rect{X: content.X, Y: y, W: content.W, H: 1}, &app.slow, "slow spinner", checkboxStyle())
-	app.ui.RadioGroup("glyph", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(spinnerNames)}, &app.glyph, spinnerNames, radioStyle())
+	app.ui.Checkbox("slow", canvas, render.Rect{X: content.X, Y: y, W: content.W, H: 1}, &app.slow, "slow spinner", app.checkboxStyle())
+	app.ui.RadioGroup("glyph", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: len(spinnerNames)}, &app.glyph, spinnerNames, app.radioStyle())
 
 	// States demo, pinned by TestWidgetsPageShowsInertAndEmptyStates. The
 	// disabled pair proves Disabled regions are unroutable by construction:
@@ -1010,16 +1033,16 @@ func (app *tour) drawFormPanel(canvas *render.Canvas, area render.Rect) {
 	// ListState.Apply with zero rows is inert, and the hint replaces the
 	// blank rows so the state stays honest instead of looking broken.
 	y = y + 1 + len(spinnerNames) + 1
-	canvas.Text(content.X, y, "control states — disabled + empty", render.Style{Foreground: muted, Background: panel})
-	frozen := checkboxStyle()
+	canvas.Text(content.X, y, "control states — disabled + empty", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+	frozen := app.checkboxStyle()
 	frozen.Disabled = true
-	frozen.DisabledStyle = render.Style{Foreground: muted, Background: panel, Attrs: render.AttrDim}
+	frozen.DisabledStyle = render.Style{Foreground: app.paint.muted, Background: app.paint.panel, Attrs: render.AttrDim}
 	app.ui.Checkbox("frozen", canvas, render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}, &app.frozen, "frozen (disabled)", frozen)
-	app.ui.List("results", canvas, render.Rect{X: content.X, Y: y + 2, W: content.W, H: 2}, &app.results, nil, listStyle())
-	canvas.Text(content.X+1, y+2, "(empty) list: nothing to select, clicks inert", render.Style{Foreground: muted, Background: panel})
-	locked := buttonStyle()
+	app.ui.List("results", canvas, render.Rect{X: content.X, Y: y + 2, W: content.W, H: 2}, &app.results, nil, app.listStyle())
+	canvas.Text(content.X+1, y+2, "(empty) list: nothing to select, clicks inert", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+	locked := app.buttonStyle()
 	locked.Disabled = true
-	locked.DisabledStyle = render.Style{Foreground: muted, Background: panel, Attrs: render.AttrDim}
+	locked.DisabledStyle = render.Style{Foreground: app.paint.muted, Background: app.paint.panel, Attrs: render.AttrDim}
 	app.ui.Button("locked", canvas, render.Rect{X: content.X, Y: y + 4, W: 16, H: 3}, "Unavailable", locked)
 }
 
@@ -1028,34 +1051,34 @@ func (app *tour) drawFormPanel(canvas *render.Canvas, area render.Rect) {
 // row (0 in the two-column layout); the nested log viewport composes it so
 // its rows stay glued to the content when its top slides above the page.
 func (app *tour) drawDisplayPanel(canvas *render.Canvas, area render.Rect, pageOffset int, now time.Time) {
-	content := pagePanel(canvas, area, "DISPLAY + DATA")
+	content := app.pagePanel(canvas, area, "DISPLAY + DATA")
 	y := content.Y
-	canvas.Text(content.X, y, "animated gauge (button sets the target)", render.Style{Foreground: muted, Background: panel})
+	canvas.Text(content.X, y, "animated gauge (button sets the target)", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	gaugeBounds := render.Rect{X: content.X, Y: y + 1, W: content.W, H: 1}
 	app.gaugeVisible = !canvas.GlobalRect(gaugeBounds).Empty()
-	app.ui.Gauge(canvas, gaugeBounds, &ui.GaugeState{Value: app.gauge}, gaugeStyle())
-	canvas.Text(content.X, y+3, "gauge value trace", render.Style{Foreground: muted, Background: panel})
+	app.ui.Gauge(canvas, gaugeBounds, &ui.GaugeState{Value: app.gauge}, app.gaugeStyle())
+	canvas.Text(content.X, y+3, "gauge value trace", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	trace := ui.SparklineState{Values: app.trace}
-	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 4, W: content.W, H: 2}, &trace, ui.SparklineStyle{Fill: render.Style{Foreground: cyan, Background: panel}})
-	canvas.Text(content.X, y+7, "frame present-time sparkline", render.Style{Foreground: muted, Background: panel})
+	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 4, W: content.W, H: 2}, &trace, ui.SparklineStyle{Fill: render.Style{Foreground: app.paint.cyan, Background: app.paint.panel}})
+	canvas.Text(content.X, y+7, "frame present-time sparkline", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	frameSpark := ui.SparklineState{Values: app.frameTimes}
-	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 8, W: content.W, H: 2}, &frameSpark, ui.SparklineStyle{Fill: render.Style{Foreground: violet, Background: panel}})
+	app.ui.Sparkline(canvas, render.Rect{X: content.X, Y: y + 8, W: content.W, H: 2}, &frameSpark, ui.SparklineStyle{Fill: render.Style{Foreground: app.paint.violet, Background: app.paint.panel}})
 	spinnerBounds := render.Rect{X: content.X, Y: y + 11, W: 1, H: 1}
 	app.spinnerVisible = !canvas.GlobalRect(spinnerBounds).Empty()
-	app.ui.Spinner(canvas, spinnerBounds, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: cyan, Background: panel}})
-	canvas.Text(content.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: muted, Background: panel})
-	canvas.Text(content.X, y+13, "feature table", render.Style{Foreground: muted, Background: panel})
+	app.ui.Spinner(canvas, spinnerBounds, &app.sync, now, ui.SpinnerStyle{Frames: spinners[app.glyph.Selected], FrameDuration: app.spinnerDuration(), Style: render.Style{Foreground: app.paint.cyan, Background: app.paint.panel}})
+	canvas.Text(content.X+3, y+11, fmt.Sprintf("%s spinner, checkbox slows it", spinnerNames[app.glyph.Selected]), render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
+	canvas.Text(content.X, y+13, "feature table", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	app.ui.Table("table", canvas, render.Rect{X: content.X, Y: y + 14, W: content.W, H: 6}, &app.table, featureColumns, len(app.features),
 		func(index int) []string { return app.features[index][:] },
 		ui.TableStyle{
-			Normal:   render.Style{Foreground: ink, Background: panel},
-			Header:   render.Style{Foreground: muted, Background: panel, Attrs: render.AttrUnderline},
-			Selected: render.Style{Foreground: background, Background: violet},
-			Focused:  render.Style{Foreground: background, Background: cyan},
+			Normal:   render.Style{Foreground: app.paint.ink, Background: app.paint.panel},
+			Header:   render.Style{Foreground: app.paint.muted, Background: app.paint.panel, Attrs: render.AttrUnderline},
+			Selected: render.Style{Foreground: app.paint.background, Background: app.paint.violet},
+			Focused:  render.Style{Foreground: app.paint.background, Background: app.paint.cyan},
 		})
 	scrollTop := y + 21
 	scrollH := content.Bottom() - scrollTop
-	canvas.Text(content.X, scrollTop-1, "virtual log (120 rows)", render.Style{Foreground: muted, Background: panel})
+	canvas.Text(content.X, scrollTop-1, "virtual log (120 rows)", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	// Compose the page offset into the log's effective offset: when the log's
 	// top is clipped from above, the first visible row must advance with it.
 	log := app.scroll
@@ -1063,33 +1086,33 @@ func (app *tour) drawDisplayPanel(canvas *render.Canvas, area render.Rect, pageO
 	view := app.ui.ScrollViewport("scroll", canvas, render.Rect{X: content.X, Y: scrollTop, W: content.W, H: scrollH}, &log, scrollContent, ui.ScrollStyle{})
 	visible := log.Range(scrollContent, scrollH)
 	for index := visible.First; index < visible.Last; index++ {
-		view.Text(0, index-visible.First, fmt.Sprintf("%06d scrollable row (arrows or wheel)", index+1), render.Style{Foreground: muted, Background: panel})
+		view.Text(0, index-visible.First, fmt.Sprintf("%06d scrollable row (arrows or wheel)", index+1), render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	}
 }
 
 func (app *tour) drawInput(canvas *render.Canvas, area render.Rect, caps capability.Set) {
-	canvas.Text(area.X, area.Y, "every key arrives decoded: code, rune, intent modifiers, press / auto-repeat / release; drags and wheel land too", render.Style{Foreground: muted, Background: background})
+	canvas.Text(area.X, area.Y, "every key arrives decoded: code, rune, intent modifiers, press / auto-repeat / release; drags and wheel land too", render.Style{Foreground: app.paint.muted, Background: app.paint.background})
 	enhanced := "legacy input: presses only"
 	if caps.KeyboardEnhanced || caps.Win32Input {
 		enhanced = "enhanced protocol: releases and repeats decoded"
 	}
-	canvas.Text(area.X, area.Y+1, fmt.Sprintf("%s   presses %d · releases %d", enhanced, app.presses, app.releases), render.Style{Foreground: cyan, Background: background, Attrs: render.AttrBold})
+	canvas.Text(area.X, area.Y+1, fmt.Sprintf("%s   presses %d · releases %d", enhanced, app.presses, app.releases), render.Style{Foreground: app.paint.cyan, Background: app.paint.background, Attrs: render.AttrBold})
 	for index, row := range app.feed {
 		y := area.Y + 3 + index
 		if y >= area.Bottom() {
 			break
 		}
-		style := render.Style{Foreground: ink, Background: background}
+		style := render.Style{Foreground: app.paint.ink, Background: app.paint.background}
 		switch row.kind {
 		case "release":
-			style.Foreground = muted
+			style.Foreground = app.paint.muted
 		case "repeat":
-			style.Foreground = amber
+			style.Foreground = app.paint.amber
 		case "mouse press", "wheel":
-			style.Foreground = green
+			style.Foreground = app.paint.green
 		case "press":
 		default:
-			style.Foreground = violet
+			style.Foreground = app.paint.violet
 		}
 		canvas.Text(area.X, y, fmt.Sprintf("%-13s %-44s %s", row.kind, row.desc, row.extra), style)
 	}
@@ -1101,7 +1124,7 @@ func (app *tour) drawAnnex(canvas *render.Canvas, area render.Rect, frame *lux.F
 		layout.Constraint{Basis: area.W / 2, Min: 30, Grow: 1, Shrink: 1},
 		layout.Constraint{Basis: area.W / 2, Min: 30, Grow: 1, Shrink: 1},
 	)
-	left := pagePanel(canvas, columns[0], "PROBED CAPABILITIES")
+	left := app.pagePanel(canvas, columns[0], "PROBED CAPABILITIES")
 	if !left.Empty() {
 		rows := [][2]string{
 			{"terminal", caps.Terminal},
@@ -1127,20 +1150,20 @@ func (app *tour) drawAnnex(canvas *render.Canvas, area render.Rect, frame *lux.F
 			if y >= left.Bottom() {
 				break
 			}
-			canvas.Text(left.X, y, row[0], render.Style{Foreground: muted, Background: panel})
+			canvas.Text(left.X, y, row[0], render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 			value := row[1]
 			if value == "" {
 				value = "(unreported)"
 			}
-			canvas.Text(left.X+19, y, value, render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold})
+			canvas.Text(left.X+19, y, value, render.Style{Foreground: app.paint.ink, Background: app.paint.panel, Attrs: render.AttrBold})
 		}
 	}
-	right := pagePanel(canvas, columns[1], "SIDEBANDS (OSC)")
+	right := app.pagePanel(canvas, columns[1], "SIDEBANDS (OSC)")
 	if right.Empty() {
 		return
 	}
 	y := right.Y
-	canvas.Text(right.X, y, "channels that ride the frame, never a second write", render.Style{Foreground: muted, Background: panel})
+	canvas.Text(right.X, y, "channels that ride the frame, never a second write", render.Style{Foreground: app.paint.muted, Background: app.paint.panel})
 	buttons := []struct {
 		id    ui.ID
 		label string
@@ -1159,15 +1182,15 @@ func (app *tour) drawAnnex(canvas *render.Canvas, area render.Rect, frame *lux.F
 		if by+3 >= right.Bottom() {
 			break
 		}
-		app.ui.Button(button.id, canvas, render.Rect{X: bx, Y: by, W: buttonW, H: 3}, button.label, buttonStyle())
+		app.ui.Button(button.id, canvas, render.Rect{X: bx, Y: by, W: buttonW, H: 3}, button.label, app.buttonStyle())
 	}
 	// Terminal sidebands (SetProgress/Notify/CopyToClipboard) are driven by
 	// View itself, not this page: see applySidebands.
 	statusY := right.Bottom() - 2
 	if statusY > y+2 {
-		canvas.Text(right.X, statusY, app.annexNote, render.Style{Foreground: amber, Background: panel})
+		canvas.Text(right.X, statusY, app.annexNote, render.Style{Foreground: app.paint.amber, Background: app.paint.panel})
 		if app.progressMode == 1 {
-			canvas.Text(right.X, statusY+1, fmt.Sprintf("bar %3d%%", int(app.progress*100)), render.Style{Foreground: cyan, Background: panel})
+			canvas.Text(right.X, statusY+1, fmt.Sprintf("bar %3d%%", int(app.progress*100)), render.Style{Foreground: app.paint.cyan, Background: app.paint.panel})
 		}
 	}
 }
@@ -1176,9 +1199,9 @@ func (app *tour) drawHelp(canvas *render.Canvas, area render.Rect) {
 	width, height := min(max(area.W-8, 24), 58), min(max(area.H-6, 10), 18)
 	rect := render.Rect{X: max((area.W-width)/2, 0), Y: max((area.H-height)/2, 0), W: width, H: height}
 	inner := app.ui.Modal("help-modal", canvas, rect, "Tour keys", ui.ModalStyle{
-		Panel:  render.Style{Background: panel},
-		Border: render.Style{Foreground: violet, Background: panel},
-		Title:  render.Style{Foreground: cyan, Background: panel, Attrs: render.AttrBold},
+		Panel:  render.Style{Background: app.paint.panel},
+		Border: render.Style{Foreground: app.paint.violet, Background: app.paint.panel},
+		Title:  render.Style{Foreground: app.paint.cyan, Background: app.paint.panel, Attrs: render.AttrBold},
 	})
 	if inner != nil {
 		bounds := inner.Bounds()
@@ -1188,6 +1211,7 @@ func (app *tour) drawHelp(canvas *render.Canvas, area render.Rect) {
 			"Enter / Space        activate focused control",
 			"Arrows / wheel       select, scroll",
 			"F2 on Widgets        editing catalog",
+			"F3                   settings; F3/Esc returns",
 			"[e] / [v]            motion: easing / response",
 			"[s]                  3D: rotation speed",
 			"Esc                  close this dialog",
@@ -1197,9 +1221,9 @@ func (app *tour) drawHelp(canvas *render.Canvas, area render.Rect) {
 			if index >= bounds.H-4 {
 				break
 			}
-			inner.Text(1, 1+index, line, render.Style{Foreground: ink, Background: panel})
+			inner.Text(1, 1+index, line, render.Style{Foreground: app.paint.ink, Background: app.paint.panel})
 		}
-		app.ui.Button("close-help", inner, render.Rect{X: max(bounds.W-11, 1), Y: max(bounds.H-3, 1), W: min(10, max(bounds.W-2, 1)), H: min(3, max(bounds.H-1, 1))}, "Close", buttonStyle())
+		app.ui.Button("close-help", inner, render.Rect{X: max(bounds.W-11, 1), Y: max(bounds.H-3, 1), W: min(10, max(bounds.W-2, 1)), H: min(3, max(bounds.H-1, 1))}, "Close", app.buttonStyle())
 	}
 	app.ui.EndModal()
 }
@@ -1308,65 +1332,65 @@ func pauseName(paused bool) string {
 	return "running"
 }
 
-func tabsStyle() ui.TabsStyle {
+func (app *tour) tabsStyle() ui.TabsStyle {
 	return ui.TabsStyle{
-		Normal:   render.Style{Foreground: muted, Background: background},
-		Selected: render.Style{Foreground: background, Background: violet, Attrs: render.AttrBold},
-		Focused:  render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
+		Normal:   render.Style{Foreground: app.paint.muted, Background: app.paint.background},
+		Selected: render.Style{Foreground: app.paint.background, Background: app.paint.violet, Attrs: render.AttrBold},
+		Focused:  render.Style{Foreground: app.paint.background, Background: app.paint.cyan, Attrs: render.AttrBold | render.AttrUnderline},
 	}
 }
 
-func buttonStyle() ui.ButtonStyle {
+func (app *tour) buttonStyle() ui.ButtonStyle {
 	return ui.ButtonStyle{
-		Normal:  render.Style{Foreground: ink, Background: panel},
-		Focused: render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
-		Hovered: render.Style{Foreground: cyan, Background: panel},
-		Pressed: render.Style{Foreground: background, Background: violet, Attrs: render.AttrBold},
+		Normal:  render.Style{Foreground: app.paint.ink, Background: app.paint.panel},
+		Focused: render.Style{Foreground: app.paint.background, Background: app.paint.cyan, Attrs: render.AttrBold | render.AttrUnderline},
+		Hovered: render.Style{Foreground: app.paint.cyan, Background: app.paint.panel},
+		Pressed: render.Style{Foreground: app.paint.background, Background: app.paint.violet, Attrs: render.AttrBold},
 	}
 }
 
-func inputStyle() ui.InputStyle {
+func (app *tour) inputStyle() ui.InputStyle {
 	return ui.InputStyle{
-		Normal:      render.Style{Foreground: ink, Background: background},
-		Placeholder: render.Style{Foreground: muted, Background: background, Attrs: render.AttrDim},
-		Selection:   render.Style{Foreground: background, Background: cyan},
-		Cursor:      render.Style{Foreground: background, Background: violet},
+		Normal:      render.Style{Foreground: app.paint.ink, Background: app.paint.background},
+		Placeholder: render.Style{Foreground: app.paint.muted, Background: app.paint.background, Attrs: render.AttrDim},
+		Selection:   render.Style{Foreground: app.paint.background, Background: app.paint.cyan},
+		Cursor:      render.Style{Foreground: app.paint.background, Background: app.paint.violet},
 	}
 }
 
-func listStyle() ui.ListStyle {
+func (app *tour) listStyle() ui.ListStyle {
 	return ui.ListStyle{
-		Normal:   render.Style{Foreground: muted, Background: panel},
-		Selected: render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold},
-		Focused:  render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
-		Hovered:  render.Style{Foreground: cyan, Background: panel},
+		Normal:   render.Style{Foreground: app.paint.muted, Background: app.paint.panel},
+		Selected: render.Style{Foreground: app.paint.ink, Background: app.paint.panel, Attrs: render.AttrBold},
+		Focused:  render.Style{Foreground: app.paint.background, Background: app.paint.cyan, Attrs: render.AttrBold | render.AttrUnderline},
+		Hovered:  render.Style{Foreground: app.paint.cyan, Background: app.paint.panel},
 		Marker:   "> ",
 	}
 }
 
-func checkboxStyle() ui.CheckboxStyle {
+func (app *tour) checkboxStyle() ui.CheckboxStyle {
 	return ui.CheckboxStyle{
-		Normal:    render.Style{Foreground: ink, Background: panel},
-		Focused:   render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
+		Normal:    render.Style{Foreground: app.paint.ink, Background: app.paint.panel},
+		Focused:   render.Style{Foreground: app.paint.background, Background: app.paint.cyan, Attrs: render.AttrBold | render.AttrUnderline},
 		Checked:   "[x]",
 		Unchecked: "[ ]",
 	}
 }
 
-func radioStyle() ui.RadioStyle {
+func (app *tour) radioStyle() ui.RadioStyle {
 	return ui.RadioStyle{
-		Normal:   render.Style{Foreground: muted, Background: panel},
-		Selected: render.Style{Foreground: ink, Background: panel, Attrs: render.AttrBold},
-		Focused:  render.Style{Foreground: background, Background: cyan, Attrs: render.AttrBold},
+		Normal:   render.Style{Foreground: app.paint.muted, Background: app.paint.panel},
+		Selected: render.Style{Foreground: app.paint.ink, Background: app.paint.panel, Attrs: render.AttrBold},
+		Focused:  render.Style{Foreground: app.paint.background, Background: app.paint.cyan, Attrs: render.AttrBold | render.AttrUnderline},
 		Marker:   "(*)",
 		Empty:    "( )",
 	}
 }
 
-func gaugeStyle() ui.GaugeStyle {
+func (app *tour) gaugeStyle() ui.GaugeStyle {
 	return ui.GaugeStyle{
-		Fill:  render.Style{Foreground: violet, Background: panel},
-		Track: render.Style{Foreground: muted, Background: panel},
+		Fill:  render.Style{Foreground: app.paint.violet, Background: app.paint.panel},
+		Track: render.Style{Foreground: app.paint.muted, Background: app.paint.panel},
 	}
 }
 

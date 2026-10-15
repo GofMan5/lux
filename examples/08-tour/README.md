@@ -4,6 +4,29 @@ The tour keeps nine top-level tabs. Choose **7 Widgets**, then press **F2**
 to switch between the original controls stand and **Editing widgets**.
 The footer advertises the switch; F1 opens the key guide.
 
+## Workbench settings
+
+Press **F3** from any stand, including a focused editor. Tab moves between
+Theme, Density, and Reduced motion; arrows select a radio option, and
+Space toggles the checkbox. **F3 or Escape** returns to the prior stand,
+restoring editor focus and caret without resetting drafts. An open picker
+or help dialog must be closed first. Settings temporarily own keyboard input;
+page-local Space shortcuts and F1 help do not act through this screen.
+
+- **Theme:** `dark`, `light`, `terminal-default`, or `high-contrast`.
+  App chrome and controls use a per-tour palette and `Context.UseTheme`,
+  not mutable global colors. Focus is underlined as well as colored;
+  terminal-default chrome assumes neither foreground nor background color.
+  Illustrative color swatches, gradients, and 3D materials keep their data.
+- **Density:** `compact` or `comfortable`. Comfortable adds bounded body
+  gutters and, where height permits, vertical space; it retains the compact
+  editor layout at 80×24. It changes placement, not widget behavior.
+- **Reduced motion:** freezes decorative animation; turning it off cannot
+  override runtime reduced-motion policy. Work progress remains live.
+  The settings screen does not schedule hidden decorative animation.
+
+Preferences last for this run only; the example does not write a config file.
+
 ## Editing widgets
 
 This is an **in-memory widget stand**, not a filesystem editor. It never
@@ -61,8 +84,8 @@ go run ./examples/08-tour
 ## Deterministic checks
 
 ```sh
-go test ./examples/08-tour -run 'TestWidgets(Catalog|EditingCatalog)' -count=20
-go test -race ./examples/08-tour -run 'TestWidgets(Catalog|EditingCatalog)' -count=5
+go test ./examples/08-tour -run 'TestWidgets(Catalog|EditingCatalog)|TestWorkbench' -count=20
+go test -race ./examples/08-tour -run 'TestWidgets(Catalog|EditingCatalog)|TestWorkbench' -count=5
 ```
 
 The tests run the real model through `lux.Run` and the existing public
@@ -92,6 +115,6 @@ Remove-Item Env:LUX_UPDATE_SNAPSHOTS
 go test ./examples/08-tour -run '^TestWidgetsCatalogGeometryAndCellSnapshots$'
 ```
 
-Theme/density switches, simulated capability profiles, diagnostics, and the
-separate real project/config application remain production-plan work. This
-stand does not claim to complete those requirements.
+Simulated capability profiles, diagnostics, loading/error catalog states, and
+the separate real project/config application remain production-plan work.
+This stand does not claim to complete those requirements.

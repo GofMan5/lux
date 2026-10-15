@@ -21,13 +21,15 @@ import (
 // tour.View has queued Context.End's commit. Present returning alone does not
 // prove that the input tree is live. No model state is written by the callback.
 type catalogBeacon struct {
-	input         int
-	frame         *render.Buffer
-	focus         ui.ID
-	geometry      catalogGeometry
-	text          string
-	mode          int
-	open, editing bool
+	input                            int
+	frame                            *render.Buffer
+	focus                            ui.ID
+	geometry                         catalogGeometry
+	text                             string
+	mode                             int
+	open, editing                    bool
+	settingsOpen, reduced, scheduled bool
+	theme, density                   int
 }
 
 type catalogProbe struct {
@@ -47,9 +49,11 @@ func (p *catalogProbe) View(frame *lux.Frame) {
 	p.tour.View(frame)
 	beacon := catalogBeacon{input: p.input, frame: frame.Canvas.Buffer().Clone(),
 		geometry: p.catalog.geometry, text: p.catalog.editor().Text(), mode: p.catalog.mode,
-		open: p.catalog.modePicker.Open, editing: p.editing}
+		open: p.catalog.modePicker.Open, editing: p.editing,
+		settingsOpen: p.settings.open, reduced: p.reduced, theme: p.settings.theme.Selected, density: p.settings.density.Selected}
+	_, beacon.scheduled = p.wantsFrame(frame.Now)
 	frame.OnPresented(func() {
-		for _, id := range []ui.ID{"tabs", "catalog-tree", "catalog-mode", "catalog-editor"} {
+		for _, id := range []ui.ID{"tabs", "catalog-tree", "catalog-mode", "catalog-editor", "settings-theme", "settings-density", "settings-motion"} {
 			if p.ui.Focused(id) {
 				beacon.focus = id
 			}
@@ -61,7 +65,7 @@ func (p *catalogProbe) View(frame *lux.Frame) {
 	})
 }
 
-func startCatalogTour(t *testing.T, w, h int) (*probeBackend, *catalogProbe, catalogBeacon) {
+func startCatalogTour(t *testing.T, w, h int, options ...lux.Option) (*probeBackend, *catalogProbe, catalogBeacon) {
 	t.Helper()
 	backend := newProbeBackend(w, h)
 	app := newTour()
@@ -70,7 +74,8 @@ func startCatalogTour(t *testing.T, w, h int) (*probeBackend, *catalogProbe, cat
 	probe := &catalogProbe{tour: app, committed: make(chan catalogBeacon, 64)}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- lux.Run(ctx, probe, lux.WithBackend(backend), lux.WithMaxFPS(240)) }()
+	options = append([]lux.Option{lux.WithBackend(backend), lux.WithMaxFPS(240)}, options...)
+	go func() { done <- lux.Run(ctx, probe, options...) }()
 	t.Cleanup(func() {
 		cancel()
 		select {
