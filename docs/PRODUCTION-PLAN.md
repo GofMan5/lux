@@ -309,6 +309,14 @@ Border не используется по умолчанию для каждог
 - Writes staged в том же каталоге, `Sync` и replace; Windows fallback делает backup/restore. Source отклоняет path traversal. Deterministic seam tests проверяют loading/recovery, validation, preview, unsaved protection; filesystem tests проверяют replacement и отсутствие backup leak.
 - User-facing guide: `examples/14-workspace/README.md`; root catalog и changelog обновлены. Push CI run `38748929728` на `4a6d629` завершён success, 21/21 jobs (lint, fuzz, vuln, root/nested/race/PTy/SSH lanes и cross-build). Это реальный project/config reference, но не заменяет jobs/log dashboard и не закрывает Stage 5/7 или v1.0 gates.
 
+### Jobs/log dashboard, slice 48
+
+- `examples/15-jobs` добавляет runnable deterministic jobs/log reference: три job rows, queued/running/succeeded/failed/canceled states, progress steps через существующий `lux.Command`/`event.Message`, bounded history в 80 строк и dropped-line telemetry.
+- Follow-tail следует последней строке, ручной `l`/`L` scroll отдаёт tail, `f` возвращает его; `x` отменяет только текущий per-job context, `r` запускает retry. Monotonic request ID и `activeJob` отбрасывают stale result после смены selection.
+- RED→GREEN tracer `TestJobsProgressTelemetryRetryAndBoundedHistory` проверяет progress/completion, cap/dropped counts, pause/resume follow-tail, cancellation и retry. Source seam намеренно demo queue; это не claim о transport, persistence или host integration.
+- User-facing `README.md`, root example catalog и CHANGELOG обновлены. Slice закрывает jobs/log reference flow, но не Stage 5 profiling/long-session evidence, Stage 7 audit/RC или v1.0 gate.
+
+
 ### Три reference designs
 
 1. **Task/process explorer** — virtual data, async, filtering, master-detail, recovery.

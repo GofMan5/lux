@@ -17,6 +17,11 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- Added `examples/15-jobs`, a deterministic jobs/log dashboard reference flow:
+  bounded progress events and history, dropped-line telemetry, follow-tail with
+  manual scroll, per-job cancellation, retry, and stale-result protection. Its
+  source seam is intentionally a demo queue, not a transport or persistence claim.
+
 - The guided tour's Widgets editing stand now includes a deterministic in-memory
   `data states` leaf with Loading, Ready, Empty, and Error states plus a visible
   Retry action. It is explicitly a state-preview catalog, not a claim of backend
