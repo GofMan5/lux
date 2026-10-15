@@ -295,6 +295,13 @@ Border не используется по умолчанию для каждог
 - Metrics используют существующие `Frame.Metrics`: target FPS, total `PresentTime`, dropped frames, с явной подписью, что Present включает backend I/O и не является preparation-only latency. Нового public API и speculative region introspection не добавлено.
 - Causal tracer `TestWorkbenchInspectionReturnsToEditor` проверяет committed route/geometry, simulated-versus-actual copy, hidden caret, no hidden schedule и exact restoration. Loading/error catalog и полноценные project/config + jobs/log reference flows остаются обязательными; Stage 5/7 и v1.0 gates не закрыты.
 
+### Project/config workspace, slice 46
+
+- `examples/14-workspace` добавляет runnable reference flow поверх реального filesystem source: список файлов, async loading, ready/empty/error/retry states и чтение выбранного файла. `LUX_WORKSPACE_ROOT` задаёт root; default — текущий каталог.
+- `config.lux` получает минимальную validation boundary (`name = ...`, положительный `workers = ...`); Ctrl+P показывает unsaved read-only preview, Ctrl+S валидирует и сохраняет, Esc защищает dirty draft через один modal scope. Ctrl+S/Ctrl+R не обходят modal; Escape в modal оставляет редактирование.
+- Writes staged в том же каталоге, `Sync` и replace; Windows fallback делает backup/restore. Source отклоняет path traversal. Deterministic seam tests проверяют loading/recovery, validation, preview, unsaved protection; filesystem tests проверяют replacement и отсутствие backup leak.
+- User-facing guide: `examples/14-workspace/README.md`; root catalog и changelog обновлены. Это реальный project/config reference, но не заменяет jobs/log dashboard и не закрывает Stage 5/7 или v1.0 gates.
+
 ### Три reference designs
 
 1. **Task/process explorer** — virtual data, async, filtering, master-detail, recovery.

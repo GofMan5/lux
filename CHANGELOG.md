@@ -17,6 +17,12 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `examples/14-workspace` adds a filesystem-backed project/config reference flow:
+  asynchronous loading with empty/error/retry states, `config.lux` validation,
+  unsaved preview and discard protection, and same-directory staged replacement
+  writes. The filesystem source is explicit and rejects path traversal; tests
+  cover deterministic loading/recovery and real replacement writes.
+
 - The guided tour's F4 inspection screen reports the last committed action target,
   handled state, bounds, source focus, viewport, and presented-frame metrics.
   It keeps negotiated backend capabilities separate from explicitly simulated
