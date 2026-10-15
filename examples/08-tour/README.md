@@ -2,7 +2,25 @@
 
 The tour keeps nine top-level tabs. Choose **7 Widgets**, then press **F2**
 to switch between the original controls stand and **Editing widgets**.
-The footer advertises the switch; F1 opens the key guide.
+The footer advertises the switch; F1 opens the key guide and F4 opens the
+compact workbench inspection.
+
+## Workbench inspection
+
+Press **F4** from a stand to inspect the last committed input route without
+leaving the tour. The screen keeps the source focus, action target and handled
+state, target bounds, viewport size, and the latest presented-frame metrics
+(target FPS, present time, and dropped frames). The route and bounds are
+captured from the public UI action that committed with the preceding frame;
+`Present` arrival by itself is not treated as a routing barrier.
+
+The inspection lists the negotiated `Frame.Capabilities` separately from four
+**SIMULATED capability profiles** (Monochrome, ANSI16, ANSI256, and TrueColor).
+Those rows are preview labels only: they do not emulate a terminal protocol,
+change backend capabilities, or claim support for graphics/image adapters.
+The inspection itself does not schedule hidden decorative animation. Press
+**F4** or **Escape** to return to the exact stand, editor focus, caret, and
+draft.
 
 ## Workbench settings
 
@@ -115,6 +133,8 @@ Remove-Item Env:LUX_UPDATE_SNAPSHOTS
 go test ./examples/08-tour -run '^TestWidgetsCatalogGeometryAndCellSnapshots$'
 ```
 
-Simulated capability profiles, diagnostics, loading/error catalog states, and
-the separate real project/config application remain production-plan work.
-This stand does not claim to complete those requirements.
+F4 now provides simulated capability preview rows and compact committed-route/frame
+diagnostics; these are honest application diagnostics, not backend emulation.
+Loading/error catalog states and the separate real project/config application
+remain production-plan work. This stand does not claim to complete those
+requirements.

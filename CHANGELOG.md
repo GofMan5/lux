@@ -17,6 +17,13 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- The guided tour's F4 inspection screen reports the last committed action target,
+  handled state, bounds, source focus, viewport, and presented-frame metrics.
+  It keeps negotiated backend capabilities separate from explicitly simulated
+  Monochrome/ANSI16/ANSI256/TrueColor preview labels; those labels do not emulate
+  terminal protocols or graphics adapters. Returning with F4/Escape preserves
+  the underlying stand, editor focus, caret, and draft. No public API changed.
+
 - The guided tour has an F3 settings screen: per-tour dark, light,
   terminal-default, and high-contrast themes; compact/comfortable body spacing;
   and a local reduced-motion preference that cannot override runtime policy.

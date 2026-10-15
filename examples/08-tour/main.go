@@ -45,13 +45,14 @@ var textSamples = [][2]string{
 }
 
 type tour struct {
-	settings workbenchSettings
-	paint    tourPaint
-	page     int
-	tabs     ui.TabsState
-	ui       ui.Context
-	width    int
-	height   int
+	settings   workbenchSettings
+	inspection workbenchInspection
+	paint      tourPaint
+	page       int
+	tabs       ui.TabsState
+	ui         ui.Context
+	width      int
+	height     int
 
 	// Motion tab.
 	tween   motion.Tween
@@ -128,6 +129,9 @@ func (app *tour) Update(next event.Event) lux.Command {
 	// routing debugger. Resize and Frame are lifecycle traffic, not input.
 	app.recordEvent(next)
 	action, handled := app.ui.Handle(next)
+	if !app.inspection.open && action.Target != "inspection-toggle" && (next.Kind == event.Key || next.Kind == event.Text || next.Kind == event.Paste || next.Kind == event.Mouse) {
+		app.inspection.lastTarget, app.inspection.lastBounds, app.inspection.lastHandled = action.Target, action.Bounds, handled
+	}
 	if handled {
 		if next.Kind == event.Key {
 			app.annotateConsumed(action)
@@ -141,6 +145,13 @@ func (app *tour) Update(next event.Event) lux.Command {
 				app.settings.open = false
 			} else if action.Kind == ui.Activate && !app.ui.ModalOpen() {
 				app.settings.open = true
+			}
+		case "inspection-toggle":
+			if action.Kind == ui.Dismiss || action.Kind == ui.Activate {
+				app.inspection.open = !app.inspection.open
+				if app.inspection.open {
+					app.inspection.sourceFocus = app.uiFocusName()
+				}
 			}
 		case "settings-theme":
 			app.settings.theme.Apply(action, len(workbenchThemes))
@@ -187,7 +198,7 @@ func (app *tour) Update(next event.Event) lux.Command {
 				}
 			}
 		case "help":
-			if action.Kind == ui.Activate && !app.settings.open {
+			if action.Kind == ui.Activate && !app.settings.open && !app.inspection.open {
 				app.showHelp = true
 			}
 		case "help-modal", "close-help":
@@ -420,7 +431,9 @@ func (app *tour) View(frame *lux.Frame) {
 	canvas.Clear(render.Style{Background: app.paint.background})
 	app.ui.Begin(frame)
 	defer app.ui.End(frame)
-	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "help", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	if !app.settings.open && !app.inspection.open && !app.showHelp {
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF1}, Target: "help", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	}
 	// Ctrl+Q covers three terminal spellings: legacy C0 0x11 decodes to
 	// lowercase q+Ctrl, while enhanced kitty keys report Q+Ctrl (shifted
 	// capital) or Q+Ctrl+Shift.
@@ -435,20 +448,25 @@ func (app *tour) View(frame *lux.Frame) {
 	// their page is showing, so they beat the tab strip's Space activation
 	// even when the strip holds focus. digits still switch tabs from the
 	// fallback path.
-	if app.page == 4 && !app.settings.open {
+	if app.page == 4 && !app.settings.open && !app.inspection.open && !app.showHelp {
 		app.pageShortcut(' ', "demo-retarget")
 		app.pageShortcut('e', "demo-ease")
 		app.pageShortcut('E', "demo-ease")
 		app.pageShortcut('v', "demo-spring")
 		app.pageShortcut('V', "demo-spring")
 	}
-	if app.page == 5 && !app.settings.open {
+	if app.page == 5 && !app.settings.open && !app.inspection.open && !app.showHelp {
 		app.pageShortcut(' ', "demo-pause")
 		app.pageShortcut('s', "demo-speed")
 		app.pageShortcut('S', "demo-speed")
 	}
-	app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF3}, Target: "settings-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
-	if app.page == 6 && !app.settings.open {
+	if !app.inspection.open && !app.showHelp {
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF3}, Target: "settings-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	}
+	if !app.settings.open && !app.showHelp {
+		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF4}, Target: "inspection-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
+	}
+	if app.page == 6 && !app.settings.open && !app.inspection.open && !app.showHelp {
 		app.ui.Shortcut(ui.Shortcut{Key: event.KeyEvent{Code: event.KeyF2}, Target: "catalog-toggle", Kind: ui.Activate, Scope: ui.ScopeApp, Priority: true})
 	}
 
@@ -473,6 +491,8 @@ func (app *tour) View(frame *lux.Frame) {
 	}
 	if app.settings.open {
 		app.drawSettings(canvas, body)
+	} else if app.inspection.open {
+		app.drawInspection(frame, body)
 	} else {
 		switch app.page {
 		case 0:
@@ -558,7 +578,7 @@ func (app *tour) wantsFrame(now time.Time) (time.Duration, bool) {
 	if app.progressMode == 1 {
 		return 0, true
 	}
-	if app.settings.open {
+	if app.settings.open || app.inspection.open {
 		return 0, false
 	}
 	switch app.page {
@@ -614,9 +634,11 @@ func (app *tour) drawFooter(frame *lux.Frame, area render.Rect) {
 			hints[6] = "[F2] controls  [Tab] focus  [Esc] cancel"
 		}
 	}
-	footer := fmt.Sprintf(" [1-9] tabs  [F3] settings  %s  [q] quit  [F1] help ", hints[app.page])
+	footer := fmt.Sprintf(" [1-9] tabs  [F3] settings  [F4] inspect  %s  [q] quit  [F1] help ", hints[app.page])
 	if app.settings.open {
 		footer = " [F3/Esc] return  [Tab] focus  [Arrows/Space] change  [Ctrl+Q] quit "
+	} else if app.inspection.open {
+		footer = " [F4/Esc] return  [Ctrl+Q] quit "
 	}
 	footerY := max(area.H-1, 0)
 	canvas.Text(1, footerY, footer, render.Style{Foreground: app.paint.muted, Background: app.paint.background})
@@ -1212,6 +1234,7 @@ func (app *tour) drawHelp(canvas *render.Canvas, area render.Rect) {
 			"Arrows / wheel       select, scroll",
 			"F2 on Widgets        editing catalog",
 			"F3                   settings; F3/Esc returns",
+			"F4                   inspect route/frame; F4/Esc returns",
 			"[e] / [v]            motion: easing / response",
 			"[s]                  3D: rotation speed",
 			"Esc                  close this dialog",
