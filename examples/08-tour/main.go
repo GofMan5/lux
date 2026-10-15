@@ -163,7 +163,7 @@ func (app *tour) Update(next event.Event) lux.Command {
 			if action.Kind == ui.Activate && !app.ui.ModalOpen() {
 				app.editing = !app.editing
 			}
-		case "catalog-tree", "catalog-mode", "catalog-editor":
+		case "catalog-tree", "catalog-mode", "catalog-editor", "catalog-state-loading", "catalog-state-ready", "catalog-state-empty", "catalog-state-error", "catalog-state-retry":
 			app.catalog.apply(action)
 		case "name":
 			app.name.Apply(action)

@@ -8,7 +8,7 @@ focus=catalog-editor caret=32,9,true
 06 " - samples                       editable              v"
 07 "    config.lux"
 08 "    notes.txt                   TextArea — config.lux (editable)"
-09 "                                # In-memory config sample"
+09 "    data states                 # In-memory config sample"
 10 "                                name = lux-workbench"
 11 "                                workers = 4"
 12 "                                region = 東京"
@@ -37,7 +37,7 @@ focus=catalog-editor caret=32,9,true
 35 ""
 36 " In-memory samples only; nothing is written to disk."
 37 " Tab moves focus | Ctrl+Z undo | Ctrl+Y redo | empty: type to start"
-all-body-cells-sha256=218ffb89aae2a744eff9e703c2e62d87d237a6af847799a8f32bf455da77d6fd
+all-body-cells-sha256=82fd9cb05024fc96877854f9ad64c0a02f77e1efa51abbd57fb57aeeee8b5a9e
 cell(1,6)=render.Cell{Grapheme:"-", Width:0x1, Style:render.Style{Foreground:render.Color{Mode:0x3, Value:0xe5e7eb}, Background:render.Color{Mode:0x3, Value:0x80a12}, Attrs:0x1, UnderlineStyle:0x0, UnderlineColor:render.Color{Mode:0x0, Value:0x0}}, Link:render.Link{URI:"", ID:""}}
 cell(32,6)=render.Cell{Grapheme:" ", Width:0x1, Style:render.Style{Foreground:render.Color{Mode:0x3, Value:0xe5e7eb}, Background:render.Color{Mode:0x3, Value:0x80a12}, Attrs:0x0, UnderlineStyle:0x0, UnderlineColor:render.Color{Mode:0x0, Value:0x0}}, Link:render.Link{URI:"", ID:""}}
 cell(32,9)=render.Cell{Grapheme:"#", Width:0x1, Style:render.Style{Foreground:render.Color{Mode:0x3, Value:0x80a12}, Background:render.Color{Mode:0x3, Value:0x22d3ee}, Attrs:0x9, UnderlineStyle:0x0, UnderlineColor:render.Color{Mode:0x0, Value:0x0}}, Link:render.Link{URI:"", ID:""}}

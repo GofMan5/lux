@@ -277,7 +277,7 @@ Border не используется по умолчанию для каждог
 - 80×24: дерево над picker/editor; 120×40 и 240×80: дерево рядом с редактором. Для слишком маленькой области — enlargement hint; zero-size не ждёт несуществующего Present и восстановление сохраняет drafts.
 - Два in-memory samples с независимыми draft/caret/scroll/history, MaxBytes 16KiB / UndoBytes 32KiB. Tree expand/open; Select preview/Enter commit/Escape+outside cancel+focus trap/restore; TextArea editable/read-only/disabled/empty, multiline paste и undo/redo. Никаких disk writes или обещаний настоящего filesystem editor.
 - Committed-routing tests через существующий probeBackend: beacon после Context.End commit, последовательный causal ack на каждый input; callback не пишет model. Fixtures 80×24/120×40/240×80: exact text positioning, hash всех body cells (grapheme/width/style/link), representative cells, caret/focus/geometry. Hidden decoration не планирует animation; tiny/zero/restore проверены. Это cell/backend evidence, не ручной live-terminal host pass.
-- Открыто после slice 43: theme/density/reduced-motion switches (закрыты slice 44 ниже), simulated capability previews и diagnostics (закрыты slice 45 ниже), loading/error каталога; реальные project/config и jobs/log flows ниже всё ещё обязательны. Stand не подменяет reference application и не закрывает stage 6 целиком.
+- Открыто после slice 43: theme/density/reduced-motion switches (закрыты slice 44 ниже), simulated capability previews и diagnostics (закрыты slice 45 ниже), loading/error каталога (закрыт slice 47 ниже); реальные project/config и jobs/log flows ниже всё ещё обязательны. Stand не подменяет reference application и не закрывает stage 6 целиком.
 
 ### Workbench settings, slice 44
 
@@ -285,7 +285,7 @@ Border не используется по умолчанию для каждог
 - Per-tour palette без mutable color globals + существующий Context.UseTheme: dark/light/terminal-default/high-contrast. Explicit chrome styles читают ту же palette; focus отличается underline, selected — marker/bold. Terminal-default settings не задаёт fg/bg; демонстрационные gradients/3D materials остаются собственными данными, не обещанием monochrome emulation.
 - Compact/comfortable: bounded body gutters, дополнительная высота только при наличии; geometry/редактирование проверены на 80×24/120×40/240×80. Local reduced motion объединяется OR с runtime policy; decorative schedule гасится, progress policy сохраняется. Preferences session-local, disk persist не вводится.
 - Committed input-to-frame tests сохраняют public Backend seam, frame callback не пишет Model. Новые saved settings fixtures всех трёх размеров содержат четыре темы, text/styles hashes/focus/caret; старые catalog fixtures проходят без регенерации. Это cell evidence, не manual live-host pass.
-- Следующее: loading/error catalog; реальные project/config и jobs/log references. Stage 5 profiling/prep-only p95/long-session memory и весь stage 7 остаются открыты.
+- Следующее: полноценный jobs/log reference; project/config flow и tour loading/error catalog закрыты ниже. Stage 5 profiling/prep-only p95/long-session memory и весь stage 7 остаются открыты.
 
 ### Workbench inspection, slice 45
 
@@ -293,14 +293,21 @@ Border не используется по умолчанию для каждог
 - Diagnostics показывают immutable snapshot последнего committed `ui.Action`: source focus, target, handled, `Action.Bounds`, viewport; callback не мутирует model. `Context.End`/`OnPresented` causal barrier не подменён простым фактом `Backend.Present`.
 - `Frame.Capabilities` показаны как negotiated actual facts; рядом явно помечены четыре `SIMULATED capability profiles` (Monochrome/ANSI16/ANSI256/TrueColor). Preview labels не изменяют backend capabilities и не заявляют terminal protocol/image adapter support.
 - Metrics используют существующие `Frame.Metrics`: target FPS, total `PresentTime`, dropped frames, с явной подписью, что Present включает backend I/O и не является preparation-only latency. Нового public API и speculative region introspection не добавлено.
-- Causal tracer `TestWorkbenchInspectionReturnsToEditor` проверяет committed route/geometry, simulated-versus-actual copy, hidden caret, no hidden schedule и exact restoration. Loading/error catalog и полноценные project/config + jobs/log reference flows остаются обязательными; Stage 5/7 и v1.0 gates не закрыты.
+- Causal tracer `TestWorkbenchInspectionReturnsToEditor` проверяет committed route/geometry, simulated-versus-actual copy, hidden caret, no hidden schedule и exact restoration. Tour loading/error catalog закрыт slice 47; полноценные project/config + jobs/log reference flows остаются обязательными; Stage 5/7 и v1.0 gates не закрыты.
+
+### Loading/error catalog, slice 47
+
+- `examples/08-tour` / Widgets / F2 получил существующий Tree leaf `data states`; отдельная top-level вкладка и новые public API не нужны. Выбор leaf показывает deterministic in-memory state-preview с кнопками Loading, Ready, Empty, Error и Retry.
+- Состояния явно различаются текстом и action affordance: Loading объясняет, что это preview request state; Ready показывает доступные rows; Empty — успешный ответ без rows; Error — permission-denied copy; Retry переводит Error обратно в Ready. Это не backend request и не claim о capability/protocol support.
+- RED→GREEN tracer `TestWidgetsCatalogShowsLoadingErrorAndRetryStates` переиспользует causal `probeBackend`: F2 → Tab → Tree navigation → Enter, проверяет все labels, затем выбирает Error и Retry и проверяет diagnostic copy/recovery. Старый compact reachability test сохранён.
+- Fixtures 120×40 и 240×80 регенерированы только после intentional layout change; `go test ./examples/08-tour -count=1` и targeted tracer зелёные. User-facing README/CHANGELOG обновлены; project/config и jobs/log flows, Stage 5/7 и v1.0 gates остаются открыты.
 
 ### Project/config workspace, slice 46
 
 - `examples/14-workspace` добавляет runnable reference flow поверх реального filesystem source: список файлов, async loading, ready/empty/error/retry states и чтение выбранного файла. `LUX_WORKSPACE_ROOT` задаёт root; default — текущий каталог.
 - `config.lux` получает минимальную validation boundary (`name = ...`, положительный `workers = ...`); Ctrl+P показывает unsaved read-only preview, Ctrl+S валидирует и сохраняет, Esc защищает dirty draft через один modal scope. Ctrl+S/Ctrl+R не обходят modal; Escape в modal оставляет редактирование.
 - Writes staged в том же каталоге, `Sync` и replace; Windows fallback делает backup/restore. Source отклоняет path traversal. Deterministic seam tests проверяют loading/recovery, validation, preview, unsaved protection; filesystem tests проверяют replacement и отсутствие backup leak.
-- User-facing guide: `examples/14-workspace/README.md`; root catalog и changelog обновлены. Это реальный project/config reference, но не заменяет jobs/log dashboard и не закрывает Stage 5/7 или v1.0 gates.
+- User-facing guide: `examples/14-workspace/README.md`; root catalog и changelog обновлены. Push CI run `38748929728` на `4a6d629` завершён success, 21/21 jobs (lint, fuzz, vuln, root/nested/race/PTy/SSH lanes и cross-build). Это реальный project/config reference, но не заменяет jobs/log dashboard и не закрывает Stage 5/7 или v1.0 gates.
 
 ### Три reference designs
 

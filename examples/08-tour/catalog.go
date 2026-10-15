@@ -17,6 +17,8 @@ type editingCatalog struct {
 	mode       int // committed editor mode; popup navigation is only a preview
 	revert     int
 	document   int
+	states     bool
+	state      int // 0 loading, 1 ready, 2 empty, 3 error
 	drafts     [2]ui.TextArea
 	empty      ui.TextArea
 	status     string
@@ -47,7 +49,9 @@ func (c *editingCatalog) rows() []ui.TreeRow {
 	if c.tree.IsExpanded("samples") {
 		rows = append(rows,
 			ui.TreeRow{ID: "config", Label: "config.lux", Depth: 1},
-			ui.TreeRow{ID: "notes", Label: "notes.txt", Depth: 1})
+			ui.TreeRow{ID: "notes", Label: "notes.txt", Depth: 1},
+			ui.TreeRow{ID: "states", Label: "data states", Depth: 1},
+		)
 	}
 	return rows
 }
@@ -66,10 +70,29 @@ func (c *editingCatalog) apply(action ui.Action) {
 		if _, activated := c.tree.Apply(action, len(rows), func(i int) ui.TreeRow { return rows[i] }); activated {
 			switch rows[c.tree.Selected].ID {
 			case "config":
-				c.document = 0
+				c.document, c.states = 0, false
 			case "notes":
-				c.document = 1
+				c.document, c.states = 1, false
+			case "states":
+				c.states = true
 			}
+		}
+	case "catalog-state-loading":
+		c.states, c.state = true, 0
+		c.status = "Loading: request state is being demonstrated."
+	case "catalog-state-ready":
+		c.states, c.state = true, 1
+		c.status = "Ready: data loaded successfully."
+	case "catalog-state-empty":
+		c.states, c.state = true, 2
+		c.status = "Empty: request succeeded with no rows."
+	case "catalog-state-error":
+		c.states, c.state = true, 3
+		c.status = "Error: permission denied; retry is available."
+	case "catalog-state-retry":
+		if c.state == 3 {
+			c.state = 1
+			c.status = "Retry succeeded: data loaded successfully."
 		}
 	case "catalog-mode":
 		if action.Kind == ui.Dismiss {
@@ -117,6 +140,27 @@ func (c *editingCatalog) draw(ctx *ui.Context, canvas *render.Canvas, area rende
 	ctx.Tree("catalog-tree", canvas, tree, &c.tree, len(rows), func(i int) ui.TreeRow { return rows[i] }, ui.TreeStyle{
 		Normal: text, Selected: render.Style{Foreground: paint.ink, Background: paint.background, Attrs: render.AttrBold}, Focused: focus,
 	})
+	if c.states {
+		canvas.Text(editor.X, editor.Y, "Loading / empty / error states", label)
+		buttonStyle := ui.ButtonStyle{Normal: text, Focused: focus}
+		buttonW := min(14, max(editor.W/5, 8))
+		for i, item := range []struct {
+			id, label string
+		}{
+			{"catalog-state-loading", "Loading"},
+			{"catalog-state-ready", "Ready"},
+			{"catalog-state-empty", "Empty"},
+			{"catalog-state-error", "Error"},
+		} {
+			ctx.Button(ui.ID(item.id), canvas, render.Rect{X: editor.X + i*buttonW, Y: editor.Y + 2, W: buttonW - 1, H: 3}, item.label, buttonStyle)
+		}
+		ctx.Button(ui.ID("catalog-state-retry"), canvas, render.Rect{X: editor.X, Y: editor.Y + 6, W: min(editor.W, 18), H: 3}, "Retry", buttonStyle)
+		messages := []string{"Loading: request in flight", "Ready: rows available", "Empty: no rows returned", "Error: permission denied"}
+		canvas.Text(editor.X, editor.Y+10, messages[c.state], text)
+		canvas.Text(editor.X, editor.Y+11, "Choose a state to inspect its copy and recovery affordance.", label)
+		c.geometry = catalogGeometry{tree: tree, editor: editor}
+		return
+	}
 	canvas.Text(editor.X, editor.Y, "Select — editor state", label)
 	anchor := render.Rect{X: editor.X, Y: editor.Y + 1, W: min(editor.W, 24), H: 1}
 	style := ui.SelectStyle{Normal: text, Focused: focus, Marker: "v", Popup: text, OptionNormal: text,

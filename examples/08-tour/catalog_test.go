@@ -378,3 +378,30 @@ func TestWidgetsEditingCatalogReachableAtCompactSize(t *testing.T) {
 		t.Fatal("the compact catalog lost its back-navigation hint")
 	}
 }
+
+func TestWidgetsCatalogShowsLoadingErrorAndRetryStates(t *testing.T) {
+	backend, app, start := startCatalogTour(t, 80, 24)
+	frame := sendCatalog(t, backend, app, start, event.KeyPress(event.KeyF2, 0))
+	frame = catalogKey(t, backend, app, frame, event.KeyTab)
+	frame = catalogKey(t, backend, app, frame, event.KeyDown)
+	frame = catalogKey(t, backend, app, frame, event.KeyDown)
+	frame = catalogKey(t, backend, app, frame, event.KeyDown)
+	frame = catalogKey(t, backend, app, frame, event.KeyEnter)
+	for _, label := range []string{"Loading", "Ready", "Empty", "Error", "Retry"} {
+		if !bufferContains(frame.frame, label) {
+			t.Fatalf("state catalog missing %q", label)
+		}
+	}
+	for range 4 {
+		frame = catalogKey(t, backend, app, frame, event.KeyTab)
+	}
+	frame = catalogKey(t, backend, app, frame, event.KeyEnter)
+	if !bufferContains(frame.frame, "Error: permission denied") {
+		t.Fatal("error state did not expose its diagnostic copy")
+	}
+	frame = catalogKey(t, backend, app, frame, event.KeyTab)
+	frame = catalogKey(t, backend, app, frame, event.KeyEnter)
+	if !bufferContains(frame.frame, "Ready: rows available") {
+		t.Fatal("retry did not restore ready state")
+	}
+}

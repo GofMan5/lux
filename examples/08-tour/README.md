@@ -64,8 +64,7 @@ writes either sample to disk.
   focusable but rejects edits and hides the caret; `disabled` is dimmed and
   skipped by focus navigation. `empty` starts a separate blank draft that
   accepts text without discarding either sample.
-- **Limits:** each draft is capped at 16 KiB with a 32 KiB undo budget.
-  Switching leaves or pressing F2 does not reset drafts.
+- **Loading/error catalog:** select `data states` in the Tree to inspect explicit `Loading`, `Ready`, `Empty`, and `Error` states. The buttons are deterministic in-memory previews, not backend requests. Error copy includes a visible `Retry` action; activating it returns to `Ready` and demonstrates the recovery affordance.
 
 At **80×24** the tree sits above the picker and editor; all three controls
 are visible without scrolling the page. At **120×40** and **240×80** the
@@ -135,6 +134,6 @@ go test ./examples/08-tour -run '^TestWidgetsCatalogGeometryAndCellSnapshots$'
 
 F4 now provides simulated capability preview rows and compact committed-route/frame
 diagnostics; these are honest application diagnostics, not backend emulation.
-Loading/error catalog states and the separate real project/config application
-remain production-plan work. This stand does not claim to complete those
-requirements.
+The tour now includes a deterministic in-memory loading/empty/error/retry catalog;
+the separate real project/config application and jobs/log dashboard remain
+production-plan work. Neither stand claims to complete those requirements.
