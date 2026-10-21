@@ -256,6 +256,15 @@ Border не используется по умолчанию для каждог
 - Локальные гейты: `go vet ./...`, `go test -count=1 ./...`, `go test -race -count=1 ./ui ./render ./internal/terminal`, gofmt и golangci-lint — PASS. Cross-host/toolchain — только после push-CI verdict, не по локальному PASS.
 - Уточнены устаревшие подписи плана: per-present CPU p95 уже существует с slice 35; это не preparation-only p95. Фактический TextArea уже имеет dirty-range wrap-cache (content invalidation, width/mode/policy), поэтому новый generic cache не строится без профиля.
 
+**Этап 5, Phase timing — preparation-only метрики кадра (slice 49):**
+
+- `lux.Metrics` получил фазовые поля: `UpdateTime`, `ViewTime`, `DiffEncodeTime`, `EncodeTime`, `FlushTime`, `PreparationTime` (= Update+View+DiffEncode+Encode, без flush, scheduling, parsing и callbacks) и `BackendTiming` (фазы backend'а известны только встроенному `terminal.Backend` через внутренний seam `PresentWithTiming`; внешний Backend получает `false` и нулевые backend-фазы, а не выдуманные значения). `PresentTime` теперь включает annex I/O своего кадра.
+- `Frame.OnPresentedWithMetrics(func(Metrics))` отдаёт метрики именно этого кадра по значению; dropped/failed кадры колбэк не вызывают. `Frame.Metrics` — последний подтверждённый кадр, но `TargetFPS`/`DroppedFrames` остаются live и не идут назад: RED-регрессия незавершённого diff'а (подтверждение старого in-flight кадра откатывало `DroppedFrames` к 0) закреплена `TestFrameMetricsDroppedFramesNeverDecrease`; мутант (копия метрик без live-перезаписи) пойман: `went backwards at view 8: [0 0 0 0 1 2 3 4 0 6 ...]`.
+- `TestPresentedMetricsBelongToExactFrameAndExcludeFlush` (legacy и timed backend, sentinel Flush = 1 s не попадает в preparation) и `internal/terminal` `TestPresentWithTimingSeparatesPreparationFromFlush` фиксируют разделение фаз.
+- Benchmarks lux-lane пишет `frame_prep_us` через `OnPresentedWithMetrics` (только при `BackendTiming`, сброс в `resetCounts`); отчёт/benchstat получили `prep p50/p95/p99 (us)` / `prep_us_per_frame_p50/p95/p99` рядом с process-CPU распределением; tea/tview — `—`. Тесты: `TestLuxLanePrepSamplerWindow`, расширенный `TestRebuildOutputsRegeneratesArtifacts`.
+- Локальные гейты: gofmt, `go vet ./...`, `go test -count=1 ./...`, `go test -race -shuffle=on -count=10 . ./internal/terminal`, golangci-lint (root 0 issues), кросс-сборки linux/darwin/windows/freebsd amd64+arm64, nested e2e/07-ssh/benchmarks `GOOS=linux go vet`. Linux-only тесты benchmarks в этом срезе только скомпилированы (`go test -c`), не выполнены: локальные Docker/WSL недоступны — их подтверждает push-CI.
+- Это измерительный seam, не закрытие бюджета: фактический p95 подготовки 120×40 на reference flows, phase-профиль сложных сцен, long-session bounded memory и итоговый regression report остаются открыты.
+
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.
 
 ## 10. Этап 6 — дизайн-workbench и reference applications

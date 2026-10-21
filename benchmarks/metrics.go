@@ -41,7 +41,10 @@ type RunResult struct {
 	// sampled at the lane's presentation callback. nil when the lane
 	// cannot sample per-frame CPU — the same honesty rule as Paints == -1.
 	FrameCPUUs []float64 `json:"frame_cpu_us,omitempty"`
-	FrameGapMs []float64 `json:"frame_gap_ms,omitempty"`
+	// FramePrepUs holds the runtime's Update+View+diff/encode wall time
+	// (us) per presented frame, flush excluded; nil when unavailable.
+	FramePrepUs []float64 `json:"frame_prep_us,omitempty"`
+	FrameGapMs  []float64 `json:"frame_gap_ms,omitempty"`
 
 	// NoOutput counts drive units (bursts, resizes, rtt steps) that
 	// produced no output at all after the input — a distinct outcome,
@@ -170,6 +173,9 @@ type laneAgg struct {
 	FrameCPUP50   float64
 	FrameCPUP95   float64
 	FrameCPUP99   float64
+	PrepP50       float64
+	PrepP95       float64
+	PrepP99       float64
 	NoOutput      int64
 	Notes         []string
 	ErrCount      int
@@ -305,7 +311,7 @@ func aggregateLane(laneName string, runs []*RunResult) laneAgg {
 
 	var events, bytes, bursts, paints, draws, cpu, wall, idle, noout []int64
 	var allocs, mallocs []uint64
-	var lats, gaps, frameCPU []float64
+	var lats, gaps, frameCPU, prep []float64
 	notes := make(map[string]bool)
 	for _, r := range runs {
 		l.Paints = -1 // set below from median
@@ -323,6 +329,7 @@ func aggregateLane(laneName string, runs []*RunResult) laneAgg {
 		lats = append(lats, r.BatchLatMs...)
 		gaps = append(gaps, r.FrameGapMs...)
 		frameCPU = append(frameCPU, r.FrameCPUUs...)
+		prep = append(prep, r.FramePrepUs...)
 		for _, n := range r.Notes {
 			notes[n] = true
 		}
@@ -355,6 +362,9 @@ func aggregateLane(laneName string, runs []*RunResult) laneAgg {
 	l.FrameCPUP50 = medianFloat(frameCPU)
 	l.FrameCPUP95 = percentileFloat(frameCPU, 95)
 	l.FrameCPUP99 = percentileFloat(frameCPU, 99)
+	l.PrepP50 = medianFloat(prep)
+	l.PrepP95 = percentileFloat(prep, 95)
+	l.PrepP99 = percentileFloat(prep, 99)
 	l.IdleCPUPct = float64(medianInt64(idle)) / float64(idleWindowUs) * 100
 
 	frames := l.frames()
@@ -417,6 +427,7 @@ func renderReport(spec machineSpec, aggs []cellAgg, quick bool) string {
 	b.WriteString("- **draws** = lane view/draw invocations (lux `View`, tea `View`, tview `Draw`).\n")
 	b.WriteString("- **CPU us/frame**, **ms/frame**, **bytes/frame**, **alloc B/frame** are divided by the median frame count (paints, or bursts when paints are `-1`); ms/frame includes pacing sleeps. A `—` means the lane produced no measurable frames (no paints, no wire output), so per-frame division has no honest denominator.\n")
 	b.WriteString("- **CPU p50/p95/p99 (us)** = per-frame process-CPU distribution, sampled through the process CPU clock at each presented frame (lux only; lanes without a presentation callback report `—`). The delta between two consecutive presents covers one full frame pipeline — input parse, update, view, compose, diff, encode, flush — plus in-process background work, so it shares the process-level semantics of the mean. The tail is what a mean hides: a lane can average a few us/frame while every 20th frame costs an order of magnitude more. The mean can also sit far *above* p50 in the same run: the mean's window extends to the final settle, whose output-wait loop polls every 2 ms, so a scene that emits no tail output (e.g. static, whose diff is empty) burns seconds of harness wait CPU that lands in the mean but never in the distribution — the samples telescope only between the first and last presented frame.\n")
+	b.WriteString("- **prep p50/p95/p99 (us)** = the runtime's own per-frame preparation wall time from `Frame.OnPresentedWithMetrics` — Update + View + diff/encode, excluding terminal flush, scheduling and callbacks (lux only). This is the figure the 8 ms preparation budget is judged against; it is wall time, not CPU, and not input-to-screen latency.\n")
 	b.WriteString("- **idle CPU%** = CPU during a 2 s quiet window after the run, as % of one core.\n")
 	b.WriteString("- **lat p50/p95** = input-to-last-output latency, ms, where the scene defines it; the wait requires output causally after the input, and units with no output are counted in notes (`no-output units`), never as 0 ms.\n")
 	b.WriteString("- **gap p50/p95/p99** = burst-to-burst gap distribution, ms.\n")
@@ -426,8 +437,8 @@ func renderReport(spec machineSpec, aggs []cellAgg, quick bool) string {
 
 	for _, cell := range aggs {
 		fmt.Fprintf(&b, "## Scene %s %dx%d\n\n", cell.Scene, cell.Width, cell.Height)
-		b.WriteString("| lane | events | bursts | paints | draws | CPU us/frame | CPU p50/p95/p99 (us) | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |\n")
-		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
+		b.WriteString("| lane | events | bursts | paints | draws | CPU us/frame | CPU p50/p95/p99 (us) | prep p50/p95/p99 (us) | ms/frame | bytes/frame | alloc B/frame | idle CPU% | lat p50/p95 | gap p50/p95/p99 | notes |\n")
+		b.WriteString("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n")
 		for _, l := range cell.Lanes {
 			lat := "—"
 			if l.LatP50 > 0 || l.LatP95 > 0 {
@@ -448,13 +459,17 @@ func renderReport(spec machineSpec, aggs []cellAgg, quick bool) string {
 			if l.FrameCPUP50 > 0 || l.FrameCPUP95 > 0 || l.FrameCPUP99 > 0 {
 				cpuP = fmt.Sprintf("%.1f / %.1f / %.1f", l.FrameCPUP50, l.FrameCPUP95, l.FrameCPUP99)
 			}
+			prepP := "—"
+			if l.PrepP50 > 0 || l.PrepP95 > 0 || l.PrepP99 > 0 {
+				prepP = fmt.Sprintf("%.1f / %.1f / %.1f", l.PrepP50, l.PrepP95, l.PrepP99)
+			}
 			notes := "—"
 			if len(l.Notes) > 0 {
 				notes = strings.Join(l.Notes, "; ")
 			}
-			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %s | %s | %s | %s | %s | %.2f | %s | %s | %s |\n",
+			fmt.Fprintf(&b, "| %s | %d | %d | %d | %d | %s | %s | %s | %s | %s | %s | %.2f | %s | %s | %s |\n",
 				l.Lane, l.Events, l.Bursts, l.Paints, l.Draws,
-				cpuF, cpuP, msF, bytesF, allocF,
+				cpuF, cpuP, prepP, msF, bytesF, allocF,
 				l.IdleCPUPct, lat, gap, notes)
 		}
 		b.WriteString("\n")
@@ -480,6 +495,11 @@ func renderBenchstat(spec machineSpec, aggs []cellAgg) string {
 				fmt.Fprintf(&b, "  cpu_us_per_frame_p50=%.1f\n", l.FrameCPUP50)
 				fmt.Fprintf(&b, "  cpu_us_per_frame_p95=%.1f\n", l.FrameCPUP95)
 				fmt.Fprintf(&b, "  cpu_us_per_frame_p99=%.1f\n", l.FrameCPUP99)
+			}
+			if l.PrepP50 > 0 || l.PrepP95 > 0 || l.PrepP99 > 0 {
+				fmt.Fprintf(&b, "  prep_us_per_frame_p50=%.1f\n", l.PrepP50)
+				fmt.Fprintf(&b, "  prep_us_per_frame_p95=%.1f\n", l.PrepP95)
+				fmt.Fprintf(&b, "  prep_us_per_frame_p99=%.1f\n", l.PrepP99)
 			}
 			fmt.Fprintf(&b, "  bytes_per_frame=%.0f\n", l.BytesPerFrame)
 			fmt.Fprintf(&b, "  alloc_b_per_frame=%.0f\n", l.AllocPerFrame)

@@ -17,6 +17,14 @@ semver: breaking changes land only in a new major.
 
 ### Added
 
+- `lux.Metrics` reports per-frame phase timings — `UpdateTime`, `ViewTime`,
+  `DiffEncodeTime`, `EncodeTime`, `FlushTime` and `PreparationTime` (Update +
+  View + diff/encode, flush excluded) — plus `BackendTiming`, true only when the
+  built-in terminal backend supplied the backend phases. New
+  `Frame.OnPresentedWithMetrics` delivers the exact presented frame's metrics.
+  `PresentTime` now also covers that frame's annex writes. The benchmark report
+  gains a lux `prep p50/p95/p99 (us)` column.
+
 - Added `examples/15-jobs`, a deterministic jobs/log dashboard reference flow:
   bounded progress events and history, dropped-line telemetry, follow-tail with
   manual scroll, per-job cancellation, retry, and stale-result protection. Its

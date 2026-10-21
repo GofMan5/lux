@@ -288,6 +288,8 @@ func (l *tviewLane) resetCounts() {
 // no presentation callback, so per-frame CPU is not sampled here.
 func (l *tviewLane) frameCPUs() []float64 { return nil }
 
+func (l *tviewLane) framePreps() []float64 { return nil }
+
 func (l *tviewLane) stop() error {
 	l.stopped.Store(true)
 	if l.app != nil {

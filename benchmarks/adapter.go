@@ -15,26 +15,22 @@ type adapter interface {
 	// start boots the framework with default options on the slave.
 	start(slave *os.File, sc sceneID, w, h int) error
 
-	// inputTick is called right after the harness writes one key to the
-	// master. Lanes whose redraw follows input directly (lux, tea) no-op:
-	// their event loop drives the redraw from the parsed key. tview queues
-	// an update+draw, which is the idiomatic redraw path for that lane.
+	// inputTick follows each harness key write. lux/tea redraw from parsed
+	// input; tview queues its idiomatic update+draw.
 	inputTick()
 
-	// counts returns lane-true paints (-1 when the lane cannot count
-	// them) and view/draw invocations.
+	// counts returns lane-true paints (-1 if unavailable) and view/draws.
 	counts() (paints int64, draws int64)
 
-	// resetCounts zeroes the paint/draw counters after the warmup phase
-	// so they cover the same window as the wire and usage counters,
-	// which are also reset right after warmup.
+	// resetCounts aligns counters with the measured wire/usage window.
 	resetCounts()
 
-	// frameCPUs returns one process-CPU delta (us) per presented frame,
-	// sampled at each presentation callback within the measured window.
-	// Lanes with no presentation hook return nil — the same honesty rule
-	// as counts(): a lane that cannot measure reports nothing, not zero.
+	// frameCPUs returns per-present process CPU deltas (us), nil if unavailable.
 	frameCPUs() []float64
+
+	// framePreps returns per-present preparation wall time (us) excluding
+	// flush, nil if the lane cannot separate it.
+	framePreps() []float64
 
 	stop() error
 }

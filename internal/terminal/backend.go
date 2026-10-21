@@ -105,6 +105,15 @@ const (
 	escapeDelay = 35 * time.Millisecond
 )
 
+// PresentTiming reports backend presentation phases. Interactive encoding keeps
+// diff detection and emission fused, so DiffEncode is intentionally one value;
+// Flush excludes terminal writes from the preparation sample.
+type PresentTiming struct {
+	DiffEncode time.Duration
+	Encode     time.Duration
+	Flush      time.Duration
+}
+
 // Backend is a VT-first terminal adapter. Its methods serialize lifecycle and
 // output state; one goroutine may block in NextEvent while another presents.
 type Backend struct {
@@ -628,8 +637,17 @@ func (b *Backend) deliverEvent(next event.Event) (done bool, ev event.Event, err
 // Present renders a frame. Interactive terminals receive changed row runs;
 // portable output receives a complete text snapshot per call.
 func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
+	_, err := b.PresentWithTiming(ctx, frame)
+	return err
+}
+
+// PresentWithTiming is an optional diagnostic seam for the runtime and
+// benchmarks. It does not change Backend.Present: callers that do not need
+// phase data keep the same interface and behavior.
+func (b *Backend) PresentWithTiming(ctx context.Context, frame *render.Buffer) (PresentTiming, error) {
+	var timing PresentTiming
 	if frame == nil {
-		return errors.New("terminal: nil frame")
+		return timing, errors.New("terminal: nil frame")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -641,17 +659,17 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	select {
 	case slot <- struct{}{}:
 	case <-ctx.Done():
-		return ctx.Err()
+		return timing, ctx.Err()
 	}
 	defer func() { <-slot }()
 	b.mu.Lock()
 	if !b.opened {
 		b.mu.Unlock()
-		return errors.New("terminal: backend is not open")
+		return timing, errors.New("terminal: backend is not open")
 	}
 	if b.writer == nil {
 		b.mu.Unlock()
-		return errors.New("terminal: nil output")
+		return timing, errors.New("terminal: nil output")
 	}
 	if b.suspended {
 		// A suspended terminal is showing the shell's screen. Painting a
@@ -661,7 +679,7 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		// the user is not looking, and resumeTerminal drops the baseline so
 		// the next frame repaints everything anyway.
 		b.mu.Unlock()
-		return nil
+		return timing, nil
 	}
 	output, plain, synchronized, scrollRegions, links, features, previous := b.writer, b.plain, b.features.SynchronizedOutput, b.features.ScrollRegions, b.hyperlink, b.features, b.previous
 	b.mu.Unlock()
@@ -669,15 +687,21 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 	// frame are reused instead of reallocated once per frame.
 	var data []byte
 	if plain {
+		started := time.Now()
 		data = appendPlain(b.encoded[:0], frame)
+		timing.Encode = time.Since(started)
 	} else {
+		started := time.Now()
 		data = appendFrame(b.encoded[:0], frame, previous, features.Color, scrollRegions, synchronized, links)
+		timing.DiffEncode = time.Since(started)
 	}
 	b.encoded = data
 	if len(data) == 0 {
-		return nil
+		return timing, nil
 	}
+	started := time.Now()
 	if err := writeAllContext(ctx, output, data); err != nil {
+		timing.Flush = time.Since(started)
 		// The encoder may already have moved rows in its model of the terminal,
 		// and a failed write leaves the real terminal in an unknown state, so the
 		// model is discarded and the next frame repaints from scratch.
@@ -686,8 +710,9 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 			b.previous = nil
 		}
 		b.mu.Unlock()
-		return err
+		return timing, err
 	}
+	timing.Flush = time.Since(started)
 	b.mu.Lock()
 	if b.opened && b.previous == previous {
 		if previous == nil {
@@ -697,7 +722,7 @@ func (b *Backend) Present(ctx context.Context, frame *render.Buffer) error {
 		}
 	}
 	b.mu.Unlock()
-	return nil
+	return timing, nil
 }
 
 // Size returns the current terminal size, preferring the output handle and

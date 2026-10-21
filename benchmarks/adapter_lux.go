@@ -30,6 +30,7 @@ type luxLane struct {
 	frameCPUMu sync.Mutex
 	frameCPU   []float64 // per-frame process-CPU deltas (us), measured window
 	lastCPU    float64   // CPU clock at the previous present (0 = no baseline yet)
+	framePrep  []float64 // per-frame Update+View+diff/encode wall time (us), no flush
 }
 
 func newLuxLane() *luxLane {
@@ -93,7 +94,26 @@ func (l *luxLane) resetCounts() {
 	l.frameCPUMu.Lock()
 	l.frameCPU = l.frameCPU[:0]
 	l.lastCPU = 0
+	l.framePrep = l.framePrep[:0]
 	l.frameCPUMu.Unlock()
+}
+
+// samplePrep records the runtime's own preparation time for one presented
+// frame. Unlike the CPU delta it needs no baseline and excludes the flush,
+// so it is the preparation-only budget figure, not process cost.
+func (l *luxLane) samplePrep(metrics lux.Metrics) {
+	if !metrics.BackendTiming {
+		return
+	}
+	l.frameCPUMu.Lock()
+	l.framePrep = append(l.framePrep, float64(metrics.PreparationTime)/float64(time.Microsecond))
+	l.frameCPUMu.Unlock()
+}
+
+func (l *luxLane) framePreps() []float64 {
+	l.frameCPUMu.Lock()
+	defer l.frameCPUMu.Unlock()
+	return append([]float64(nil), l.framePrep...)
 }
 
 // sampleFrameCPU runs inside the presentation callback of each frame:
@@ -200,9 +220,10 @@ func (m *luxModel) View(f *lux.Frame) {
 		return
 	}
 	m.lane.draws.Add(1)
-	f.OnPresented(func() {
+	f.OnPresentedWithMetrics(func(metrics lux.Metrics) {
 		m.lane.paints.Add(1)
 		m.lane.sampleFrameCPU()
+		m.lane.samplePrep(metrics)
 	})
 
 	canvas := f.Canvas

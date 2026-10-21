@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GofMan5/lux"
 )
 
 func TestWaitQuietSinceRejectsStaleRead(t *testing.T) {
@@ -242,6 +244,29 @@ func TestLuxLaneFrameCPUSamplerWindow(t *testing.T) {
 	}
 }
 
+func TestLuxLanePrepSamplerWindow(t *testing.T) {
+	l := newLuxLane()
+
+	// A backend that cannot split flush from preparation reports nothing:
+	// a zero sample would drag the budget percentiles down.
+	l.samplePrep(lux.Metrics{PreparationTime: time.Millisecond})
+	if got := len(l.framePreps()); got != 0 {
+		t.Fatalf("untimed backend recorded %d prep samples, want 0", got)
+	}
+	l.samplePrep(lux.Metrics{BackendTiming: true, PreparationTime: 1500 * time.Microsecond})
+	if got := l.framePreps(); len(got) != 1 || got[0] != 1500 {
+		t.Fatalf("prep samples = %v, want [1500]", got)
+	}
+	l.framePreps()[0] = -1
+	if l.framePreps()[0] == -1 {
+		t.Fatal("framePreps returned a slice aliasing lane state")
+	}
+	l.resetCounts()
+	if got := len(l.framePreps()); got != 0 {
+		t.Fatalf("resetCounts left %d prep samples, want 0", got)
+	}
+}
+
 func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	spec := machineSpec{
@@ -255,7 +280,8 @@ func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 	runs := []*RunResult{
 		{Adapter: "lux", Scene: "inputburst", Width: 120, Height: 40, Round: 1,
 			Paints: 4, Draws: 4, NoOutput: 2, BatchLatMs: []float64{12.5},
-			FrameCPUUs: []float64{2, 4, 6, 8, 10, 12, 14, 16, 18, 20}},
+			FrameCPUUs:  []float64{2, 4, 6, 8, 10, 12, 14, 16, 18, 20},
+			FramePrepUs: []float64{100, 200, 300, 400, 500, 600, 700, 800, 900, 1000}},
 	}
 	runsRaw, _ := json.Marshal(runs)
 	if err := os.WriteFile(filepath.Join(dir, "all-runs.json"), runsRaw, 0o644); err != nil {
@@ -278,6 +304,9 @@ func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 		"cpu_us_per_frame_p50=11.0",
 		"cpu_us_per_frame_p95=19.1",
 		"cpu_us_per_frame_p99=19.8",
+		"prep_us_per_frame_p50=550.0",
+		"prep_us_per_frame_p95=955.0",
+		"prep_us_per_frame_p99=991.0",
 	} {
 		if !strings.Contains(string(bench), want) {
 			t.Fatalf("benchstat.txt missing %q:\n%s", want, bench)
@@ -297,6 +326,10 @@ func TestRebuildOutputsRegeneratesArtifacts(t *testing.T) {
 	}
 	if !strings.Contains(string(report), "11.0 / 19.1 / 19.8") {
 		t.Fatalf("report.md missing the frame CPU distribution values:\n%s", report)
+	}
+	if !strings.Contains(string(report), "prep p50/p95/p99 (us)") ||
+		!strings.Contains(string(report), "550.0 / 955.0 / 991.0") {
+		t.Fatalf("report.md missing the preparation distribution:\n%s", report)
 	}
 	// The measurement inputs must survive a rebuild untouched.
 	runsAfter, err := os.ReadFile(filepath.Join(dir, "all-runs.json"))

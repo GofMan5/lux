@@ -96,6 +96,8 @@ func (l *teaLane) resetCounts() {
 // there is no per-frame presentation callback to sample CPU at.
 func (l *teaLane) frameCPUs() []float64 { return nil }
 
+func (l *teaLane) framePreps() []float64 { return nil }
+
 func (l *teaLane) stop() error {
 	if l.prog != nil {
 		l.prog.Quit()

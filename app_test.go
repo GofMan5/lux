@@ -390,13 +390,13 @@ func TestOfferLatestKeepsNewest(t *testing.T) {
 func TestDroppedSurfaceCallbacksAreReleased(t *testing.T) {
 	queue := make(chan *surface, 1)
 	stale := newSurface(1, 1, render.WidthPolicy{})
-	stale.presented = append(stale.presented, func() {})
+	stale.presented = append(stale.presented, presentedCallback{plain: func() {}})
 	queue <- stale
 	latest := newSurface(1, 1, render.WidthPolicy{})
 	recycled := offerLatest(queue, latest)
 	clear(recycled.presented)
 	recycled.presented = recycled.presented[:0]
-	if len(recycled.presented) != 0 || cap(recycled.presented) > 0 && recycled.presented[:cap(recycled.presented)][0] != nil {
+	if len(recycled.presented) != 0 || cap(recycled.presented) > 0 && (recycled.presented[:cap(recycled.presented)][0].plain != nil || recycled.presented[:cap(recycled.presented)][0].timed != nil) {
 		t.Fatal("dropped callback remained reachable")
 	}
 }
@@ -408,13 +408,13 @@ func TestPresentationHookRunsOnlyForPresentedFrame(t *testing.T) {
 	surface := newSurface(1, 1, render.WidthPolicy{})
 	surface.presented = append(surface.presented, frame.presented...)
 	for _, callback := range surface.presented {
-		callback()
+		callback.plain()
 	}
 	if called != 1 {
 		t.Fatalf("hook calls = %d", called)
 	}
 	dropped := newSurface(1, 1, render.WidthPolicy{})
-	dropped.presented = append(dropped.presented, func() { called++ })
+	dropped.presented = append(dropped.presented, presentedCallback{plain: func() { called++ }})
 	dropped.presented = dropped.presented[:0]
 	if called != 1 {
 		t.Fatal("dropped frame hook ran")

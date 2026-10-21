@@ -55,11 +55,29 @@ func isQuit(command Command) bool {
 // last intended frame rather than a scheduler-dependent farewell.
 func Quit() Command { return quitCommand }
 
-// Metrics describes the current presentation path without affecting state.
+type presentedCallback struct {
+	plain func()
+	timed func(Metrics)
+}
+
+// Metrics describes a successful frame's presentation path. Durations are
+// elapsed wall time, not process CPU or input-to-screen latency.
+// PreparationTime sums UpdateTime, ViewTime, DiffEncodeTime and EncodeTime;
+// it excludes flush, scheduling, parsing, and callback overhead. Backend phase
+// timings are available only when BackendTiming is true (the default backend).
+// Frame.Metrics contains the most recently acknowledged presentation; use
+// OnPresentedWithMetrics to observe this exact frame without retaining Frame.
 type Metrics struct {
-	TargetFPS     int
-	PresentTime   time.Duration
-	DroppedFrames uint64
+	TargetFPS       int
+	PresentTime     time.Duration
+	PreparationTime time.Duration
+	UpdateTime      time.Duration
+	ViewTime        time.Duration
+	DiffEncodeTime  time.Duration
+	EncodeTime      time.Duration
+	FlushTime       time.Duration
+	BackendTiming   bool
+	DroppedFrames   uint64
 }
 
 // Frame is valid only for the duration of Model.View.
@@ -72,7 +90,7 @@ type Frame struct {
 	ReducedMotion bool
 
 	nextFrame time.Time
-	presented []func()
+	presented []presentedCallback
 
 	// annex carries the control sideband bytes View queued through
 	// SetProgress, Notify, and CopyToClipboard, and the three flags gate
@@ -123,7 +141,17 @@ func (f *Frame) OnPresented(callback func()) {
 	if f == nil || callback == nil {
 		return
 	}
-	f.presented = append(f.presented, callback)
+	f.presented = append(f.presented, presentedCallback{plain: callback})
+}
+
+// OnPresentedWithMetrics is like OnPresented, but receives this exact frame's
+// metrics by value. PresentTime includes backend and annex I/O, not callbacks.
+// Dropped/failed frames do not call it. Do not retain Frame or mutate model
+// state from either presentation callback.
+func (f *Frame) OnPresentedWithMetrics(callback func(Metrics)) {
+	if f != nil && callback != nil {
+		f.presented = append(f.presented, presentedCallback{timed: callback})
+	}
 }
 
 // Option configures Run.
@@ -373,7 +401,8 @@ type surface struct {
 	buffer      *render.Buffer
 	canvas      *render.Canvas
 	widthPolicy render.WidthPolicy
-	presented   []func()
+	presented   []presentedCallback
+	metrics     Metrics
 	// annex holds the control sideband bytes queued by the View that drew
 	// this surface. It rides the surface so an annex belongs to exactly
 	// one frame — a dropped frame drops its annex, and a replaced frame
@@ -398,6 +427,10 @@ type presentResult struct {
 	surface  *surface
 	duration time.Duration
 	err      error
+}
+
+type presentationTimer interface {
+	PresentWithTiming(context.Context, *render.Buffer) (terminal.PresentTiming, error)
 }
 
 func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, settings config, features capability.Set, closeBackend func() error) (result error) {
@@ -435,7 +468,19 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			case next = <-present:
 			}
 			started := time.Now()
-			err := settings.backend.Present(ctx, next.buffer)
+			var timing terminal.PresentTiming
+			var err error
+			timed, hasTiming := settings.backend.(presentationTimer)
+			if hasTiming {
+				timing, err = timed.PresentWithTiming(ctx, next.buffer)
+			} else {
+				err = settings.backend.Present(ctx, next.buffer)
+			}
+			next.metrics.BackendTiming = hasTiming
+			next.metrics.DiffEncodeTime = timing.DiffEncode
+			next.metrics.EncodeTime = timing.Encode
+			next.metrics.FlushTime = timing.Flush
+			next.metrics.PreparationTime = next.metrics.UpdateTime + next.metrics.ViewTime + timing.DiffEncode + timing.Encode
 			if err == nil && len(next.annex) > 0 {
 				// The annex writes only after its frame is on the wire:
 				// the sideband belongs to the frame that queued it, so a
@@ -449,9 +494,14 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 					err = writer.WriteAnnex(ctx, next.annex)
 				}
 			}
+			next.metrics.PresentTime = time.Since(started)
 			if err == nil {
 				for _, callback := range next.presented {
-					callback()
+					if callback.plain != nil {
+						callback.plain()
+					} else {
+						callback.timed(next.metrics)
+					}
 				}
 			}
 			clear(next.presented)
@@ -489,6 +539,14 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 	// (notifications, clipboard) that View queues on every render.
 	quitting := false
 
+	var updateTime time.Duration
+	update := func(next event.Event) Command {
+		started := time.Now()
+		command := model.Update(next)
+		updateTime += time.Since(started)
+		return command
+	}
+
 	startCommand := func(command Command) {
 		if command == nil {
 			return
@@ -513,7 +571,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 		executeCommand(ctx, command, commands)
 	}
 
-	startCommand(model.Update(event.ResizeTo(width, height)))
+	startCommand(update(event.ResizeTo(width, height)))
 	dirty := true
 	var requested, lastFrame time.Time
 	timer := time.NewTimer(0)
@@ -558,14 +616,15 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 			return context.Cause(ctx)
 		case reported := <-presented:
 			free = append(free, reported.surface)
-			metrics.PresentTime = reported.duration
 			if reported.err != nil {
 				cancel(reported.err)
 				return reported.err
 			}
-			if pacer.observe(time.Now(), reported.duration) {
-				metrics.TargetFPS = pacer.fps
-			}
+			pacer.observe(time.Now(), reported.duration)
+			// Phase timings belong to the acknowledged frame; the pacer
+			// target and drop counter stay live so they never run backwards.
+			metrics = reported.surface.metrics
+			metrics.TargetFPS, metrics.DroppedFrames = pacer.fps, dropped
 		case next := <-events:
 			if next.Kind == event.Error {
 				return next.Err
@@ -577,19 +636,19 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 				continue
 			}
 			if settings.suspend && isSuspendKey(next) {
-				if done, err := suspendForKey(ctx, model, settings, next, &width, &height, &dirty, startCommand); done || err != nil {
+				if done, err := suspendForKey(ctx, update, settings, next, &width, &height, &dirty, startCommand); done || err != nil {
 					return err
 				}
 				continue
 			}
-			if done, err := applyEvent(model, next, settings, &width, &height, &dirty, startCommand); done || err != nil {
+			if done, err := applyEvent(update, next, settings, &width, &height, &dirty, startCommand); done || err != nil {
 				return err
 			}
 		case next := <-commands:
 			if next.Kind == event.Error {
 				return next.Err
 			}
-			if done, err := applyEvent(model, next, settings, &width, &height, &dirty, startCommand); done || err != nil {
+			if done, err := applyEvent(update, next, settings, &width, &height, &dirty, startCommand); done || err != nil {
 				return err
 			}
 		case now := <-timerChannel:
@@ -599,7 +658,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 				if !lastFrame.IsZero() {
 					delta = now.Sub(lastFrame)
 				}
-				startCommand(model.Update(event.Event{Kind: event.Frame, At: now, Delta: delta}))
+				startCommand(update(event.Event{Kind: event.Frame, At: now, Delta: delta}))
 				dirty = true
 			}
 			requested = time.Time{}
@@ -616,7 +675,13 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 				delta = now.Sub(lastFrame)
 			}
 			frame := Frame{Canvas: current.canvas, Now: now, Delta: delta, Capabilities: features, Metrics: metrics, ReducedMotion: settings.reducedMotion, progress: settings.progress, notifications: settings.notifications, clipboard: settings.clipboard}
+			viewStarted := time.Now()
 			model.View(&frame)
+			current.metrics = Metrics{
+				TargetFPS: pacer.fps, DroppedFrames: dropped,
+				UpdateTime: updateTime, ViewTime: time.Since(viewStarted),
+			}
+			updateTime = 0
 			current.presented = append(current.presented[:0], frame.presented...)
 			current.annex = append(current.annex[:0], frame.annex...)
 			requested, lastFrame, dirty = frame.nextFrame, now, false
@@ -659,8 +724,9 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 						cancel(reported.err)
 						return reported.err
 					}
-					metrics.PresentTime = reported.duration
 					pacer.observe(time.Now(), reported.duration)
+					metrics = reported.surface.metrics
+					metrics.TargetFPS, metrics.DroppedFrames = pacer.fps, dropped
 					current = reported.surface
 				case <-ctx.Done():
 					return context.Cause(ctx)
@@ -672,7 +738,7 @@ func run(ctx context.Context, cancel context.CancelCauseFunc, model Model, setti
 	}
 }
 
-func applyEvent(model Model, next event.Event, settings config, width, height *int, dirty *bool, startCommand func(Command)) (bool, error) {
+func applyEvent(update func(event.Event) Command, next event.Event, settings config, width, height *int, dirty *bool, startCommand func(Command)) (bool, error) {
 	if next.Kind == event.Quit {
 		return true, nil
 	}
@@ -683,7 +749,7 @@ func applyEvent(model Model, next event.Event, settings config, width, height *i
 		}
 		*width, *height = next.Width, next.Height
 	}
-	startCommand(model.Update(next))
+	startCommand(update(next))
 	*dirty = true
 	return false, nil
 }
@@ -742,15 +808,15 @@ func isSuspendKey(next event.Event) bool {
 // in a state only the deferred Close can make safe, and the leave Close
 // writes on a latched-but-failed suspend is the documented idempotent
 // belt-and-braces.
-func suspendForKey(ctx context.Context, model Model, settings config, key event.Event, width, height *int, dirty *bool, startCommand func(Command)) (bool, error) {
+func suspendForKey(ctx context.Context, update func(event.Event) Command, settings config, key event.Event, width, height *int, dirty *bool, startCommand func(Command)) (bool, error) {
 	handshake, ok := settings.backend.(suspendTransport)
 	if !ok || !handshake.CanSuspend() {
 		// Plain streams, pipes, test fakes, Windows consoles: Ctrl+Z is
 		// just a key, and models keep seeing exactly the stream a legacy
 		// terminal produces.
-		return applyEvent(model, key, settings, width, height, dirty, startCommand)
+		return applyEvent(update, key, settings, width, height, dirty, startCommand)
 	}
-	if done, err := applyEvent(model, event.Event{Kind: event.Suspend}, settings, width, height, dirty, startCommand); done || err != nil {
+	if done, err := applyEvent(update, event.Event{Kind: event.Suspend}, settings, width, height, dirty, startCommand); done || err != nil {
 		return done, err
 	}
 	suspended, err := handshake.Suspend(ctx)
@@ -762,9 +828,9 @@ func suspendForKey(ctx context.Context, model Model, settings config, key event.
 		// — a backend closing underneath the press. The key falls through
 		// so the model at least sees its input; the closing error is
 		// already on its way through the events queue.
-		return applyEvent(model, key, settings, width, height, dirty, startCommand)
+		return applyEvent(update, key, settings, width, height, dirty, startCommand)
 	}
-	return applyEvent(model, event.Event{Kind: event.Resume}, settings, width, height, dirty, startCommand)
+	return applyEvent(update, event.Event{Kind: event.Resume}, settings, width, height, dirty, startCommand)
 }
 
 func clampSize(width, height int, settings config) (int, int) {
