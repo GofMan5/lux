@@ -1,0 +1,6 @@
+BenchmarkSelectDrawOpen-12    	   28725	     42640 ns/op	     161 B/op	       9 allocs/op
+BenchmarkSelectDrawOpen-12    	   24291	     43298 ns/op	     161 B/op	       9 allocs/op
+BenchmarkSelectDrawOpen-12    	   20955	     74749 ns/op	     161 B/op	       9 allocs/op
+BenchmarkSelectDrawOpen-12    	   29750	     39543 ns/op	     161 B/op	       9 allocs/op
+BenchmarkSelectDrawOpen-12    	   28030	     44578 ns/op	     161 B/op	       9 allocs/op
+BenchmarkSelectDrawOpen-12    	   33459	     42013 ns/op	     161 B/op	       9 allocs/op

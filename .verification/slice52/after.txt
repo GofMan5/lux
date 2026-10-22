@@ -1,0 +1,540 @@
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12    	    5864	    114293 ns/op	      65 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12   	   19066	     19033 ns/op	      20 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12     	     880	    617316 ns/op	     437 B/op	       0 allocs/op
+BenchmarkPutMeasured/ascii-12          	  633936	       623.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/wide-12           	  848415	      2921 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/combining-12      	  122238	      7006 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/put-12               	     100	   3030692 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/putcell-12           	     100	   3984337 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/fill-12              	    8650	    198332 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                	     129	   4159405 ns/op	    2984 B/op	       0 allocs/op
+BenchmarkBufferDiffNoChanges-12        	     328	    970577 ns/op	    3946 B/op	       0 allocs/op
+BenchmarkEqualRowUnchanged-12          	    2190	    269808 ns/op	     351 B/op	       0 allocs/op
+BenchmarkText/visible-ascii-12         	    1794	    344654 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/visible-egc-12           	    2816	    321938 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/tall-overscroll-12       	       1	 723177900 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/clip-band-12             	     100	   5154419 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/exhausted-columns-12     	     100	   5703607 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthLegacy-12            	   10000	    101194 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthOverlay-12           	   38019	     68037 ns/op	      24 B/op	       3 allocs/op
+BenchmarkCanvasTextOverlay-12          	    4149	     97564 ns/op	     100 B/op	       1 allocs/op
+BenchmarkTextWidthAmbiguous2-12        	   10000	    111637 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasTextAmbiguous2-12       	    5714	    107289 ns/op	      67 B/op	       0 allocs/op
+BenchmarkWrapWords64KiB-12             	       4	 348128975 ns/op	  416920 B/op	   30596 allocs/op
+BenchmarkWrapUnbroken64KiB-12          	       2	 386528450 ns/op	  509032 B/op	    4405 allocs/op
+BenchmarkWrapCharMode64KiB-12          	       8	  98476450 ns/op	  199016 B/op	    4382 allocs/op
+BenchmarkCanvasTextWrapParagraph-12    	      43	  13711921 ns/op	   39384 B/op	    2186 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	30.627s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/ui
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkWheelBubbling/2-12              	  866216	       653.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/8-12              	  133387	      3253 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/32-12             	   10000	     44525 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckboxDraw-12                 	    1400	    395157 ns/op	     101 B/op	       2 allocs/op
+BenchmarkRadioGroupDraw-12               	   10000	    459801 ns/op	     128 B/op	       4 allocs/op
+BenchmarkRadioGroupDrawClippedHalf-12    	     100	  10299679 ns/op	     233 B/op	       4 allocs/op
+BenchmarkHitRouting/10-12                	 1000000	       910.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/100-12               	  713661	      1402 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/1000-12              	 1000000	       718.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGaugeDraw-12                    	    7174	    100728 ns/op	      97 B/op	       1 allocs/op
+BenchmarkScrollRangeMillion/8-12         	23418441	        14.15 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/24-12        	19098345	        24.98 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/80-12        	 4712510	        64.53 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDrawClippedHalf-12        	     862	    442701 ns/op	    1209 B/op	      36 allocs/op
+BenchmarkModalDrawClippedHalf-12         	   36889	     10409 ns/op	     105 B/op	       2 allocs/op
+BenchmarkSelectDrawOpen-12               	    6780	     72092 ns/op	     164 B/op	       9 allocs/op
+BenchmarkSelectDrawClosed-12             	   62109	      5927 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSparklineDraw-12                	   12846	     36762 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSpinnerDraw-12                  	  316099	      1211 ns/op	      96 B/op	       1 allocs/op
+BenchmarkTableDraw-12                    	     220	   1510282 ns/op	    3745 B/op	      41 allocs/op
+BenchmarkTableDrawClippedHalf-12         	    1297	    277266 ns/op	     667 B/op	      32 allocs/op
+BenchmarkTabsDraw-12                     	    2410	    152471 ns/op	     388 B/op	       2 allocs/op
+BenchmarkTextAreaDrawClippedHalf-12      	    3794	     98996 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInputDraw-12                	    2616	    144583 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextAreaLayout/many-lines-400-12         	      45	  18122022 ns/op	  178944 B/op	    9396 allocs/op
+BenchmarkTextAreaLayout/single-line-128KiB-12     	       6	  99063733 ns/op	  835298 B/op	   47536 allocs/op
+BenchmarkTextAreaKeystroke/many-lines-12          	    2714	    203087 ns/op	   13856 B/op	       7 allocs/op
+BenchmarkTextAreaKeystroke/single-line-128KiB-12  	     174	   2903316 ns/op	  262258 B/op	       8 allocs/op
+BenchmarkTextAreaDraw-12                          	     163	   2664374 ns/op	     865 B/op	      61 allocs/op
+BenchmarkTextInput/32-12                          	   16288	     21325 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/1024-12                        	     542	    681553 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/65536-12                       	       9	  81689411 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTreeDraw-12                              	    1722	    320559 ns/op	     411 B/op	      11 allocs/op
+BenchmarkTreeDrawClippedHalf-12                   	    3658	    127652 ns/op	     225 B/op	       5 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/ui	34.753s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12      	    1118	    274609 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12    	    5341	     75993 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollFrame-12      	     151	   2641503 ns/op	        62.00 bytes/frame	  385093 B/op	       1 allocs/op
+BenchmarkIdlePresent-12      	    4372	    101916 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/internal/terminal	3.065s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/scene3d
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkRenderer/80x24-12         	     610	    606526 ns/op	   6.33 MB/s	       0 B/op	       0 allocs/op
+BenchmarkRenderer/160x48-12        	     127	   2943100 ns/op	   5.22 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/scene3d	2.576s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12    	    9978	     43873 ns/op	      38 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12   	   36908	      9694 ns/op	      10 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12     	     904	    364493 ns/op	     425 B/op	       0 allocs/op
+BenchmarkPutMeasured/ascii-12          	 1728738	       285.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/wide-12           	  995988	       659.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/combining-12      	  438943	      1223 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/put-12               	     309	   1698024 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/putcell-12           	     310	   1917918 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/fill-12              	   10000	     46470 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                	     411	   1322138 ns/op	     936 B/op	       0 allocs/op
+BenchmarkBufferDiffNoChanges-12        	    1323	    250571 ns/op	     978 B/op	       0 allocs/op
+BenchmarkEqualRowUnchanged-12          	    5142	     74835 ns/op	     149 B/op	       0 allocs/op
+BenchmarkText/visible-ascii-12         	    6724	     53244 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/visible-egc-12           	    2832	    116975 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/tall-overscroll-12       	       4	 118447600 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/clip-band-12             	     211	   1830865 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/exhausted-columns-12     	     354	    997564 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthLegacy-12            	   14334	     23889 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthOverlay-12           	   60699	      5670 ns/op	      24 B/op	       3 allocs/op
+BenchmarkCanvasTextOverlay-12          	   10000	     30129 ns/op	      46 B/op	       1 allocs/op
+BenchmarkTextWidthAmbiguous2-12        	   14764	     39855 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasTextAmbiguous2-12       	   12178	     29711 ns/op	      31 B/op	       0 allocs/op
+BenchmarkWrapWords64KiB-12             	      10	  34684440 ns/op	  407091 B/op	   30596 allocs/op
+BenchmarkWrapUnbroken64KiB-12          	       5	  95359160 ns/op	  489363 B/op	    4404 allocs/op
+BenchmarkWrapCharMode64KiB-12          	       9	  57311856 ns/op	  198106 B/op	    4382 allocs/op
+BenchmarkCanvasTextWrapParagraph-12    	      88	   7361095 ns/op	   34733 B/op	    2186 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	16.879s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/ui
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkWheelBubbling/2-12              	 1203013	       317.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/8-12              	  725852	       517.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/32-12             	  449409	      1025 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckboxDraw-12                 	   21050	     28701 ns/op	     100 B/op	       2 allocs/op
+BenchmarkRadioGroupDraw-12               	   13815	     29937 ns/op	     128 B/op	       4 allocs/op
+BenchmarkRadioGroupDrawClippedHalf-12    	   13335	     48821 ns/op	     128 B/op	       4 allocs/op
+BenchmarkHitRouting/10-12                	 1851816	       166.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/100-12               	 1973335	       338.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/1000-12              	 2272729	       152.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGaugeDraw-12                    	    9516	     37384 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScrollRangeMillion/8-12         	41555083	         9.343 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/24-12        	12545826	        38.00 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/80-12        	 4848331	        89.48 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDrawClippedHalf-12        	     547	    796102 ns/op	    1238 B/op	      36 allocs/op
+BenchmarkModalDrawClippedHalf-12         	   22874	     18609 ns/op	     105 B/op	       2 allocs/op
+BenchmarkSelectDrawOpen-12               	    5457	     85782 ns/op	     166 B/op	       9 allocs/op
+BenchmarkSelectDrawClosed-12             	   63387	      7814 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSparklineDraw-12                	   10000	     30838 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSpinnerDraw-12                  	  285378	      1443 ns/op	      96 B/op	       1 allocs/op
+BenchmarkTableDraw-12                    	     152	   2959504 ns/op	    4529 B/op	      41 allocs/op
+BenchmarkTableDrawClippedHalf-12         	     696	    560225 ns/op	     684 B/op	      32 allocs/op
+BenchmarkTabsDraw-12                     	    1131	    399594 ns/op	     393 B/op	       2 allocs/op
+BenchmarkTextAreaDrawClippedHalf-12      	    2149	    370686 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInputDraw-12                	    1555	    371369 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextAreaLayout/many-lines-400-12         	      32	  19010125 ns/op	  178944 B/op	    9396 allocs/op
+BenchmarkTextAreaLayout/single-line-128KiB-12     	       4	  89459250 ns/op	  835300 B/op	   47536 allocs/op
+BenchmarkTextAreaKeystroke/many-lines-12          	    1981	    387308 ns/op	   13856 B/op	       7 allocs/op
+BenchmarkTextAreaKeystroke/single-line-128KiB-12  	     100	   3394145 ns/op	  262228 B/op	       8 allocs/op
+BenchmarkTextAreaDraw-12                          	     298	   1410254 ns/op	     473 B/op	      33 allocs/op
+BenchmarkTextInput/32-12                          	   10000	     36920 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/1024-12                        	     410	   2201976 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/65536-12                       	       6	  59085650 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTreeDraw-12                              	    1383	    409408 ns/op	     416 B/op	      11 allocs/op
+BenchmarkTreeDrawClippedHalf-12                   	    2210	    158350 ns/op	     231 B/op	       5 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/ui	23.199s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12      	    1360	    311410 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12    	    3618	    128475 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollFrame-12      	     396	   1225701 ns/op	        62.00 bytes/frame	  385037 B/op	       1 allocs/op
+BenchmarkIdlePresent-12      	    5265	    116539 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/internal/terminal	3.982s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/scene3d
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkRenderer/80x24-12         	     576	    612881 ns/op	   6.27 MB/s	       0 B/op	       0 allocs/op
+BenchmarkRenderer/160x48-12        	     127	   2643072 ns/op	   5.81 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/scene3d	2.612s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12    	    7788	     43127 ns/op	      49 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12   	   44941	     11291 ns/op	       8 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12     	    1239	    348768 ns/op	     310 B/op	       0 allocs/op
+BenchmarkPutMeasured/ascii-12          	 1483860	       203.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/wide-12           	  640022	       574.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/combining-12      	  376556	       940.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/put-12               	     298	   1031978 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/putcell-12           	     332	   1090296 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/fill-12              	    6474	     48930 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                	     406	    815802 ns/op	     948 B/op	       0 allocs/op
+BenchmarkBufferDiffNoChanges-12        	    1878	    252284 ns/op	     689 B/op	       0 allocs/op
+BenchmarkEqualRowUnchanged-12          	    1851	    162698 ns/op	     416 B/op	       0 allocs/op
+BenchmarkText/visible-ascii-12         	    4231	     74004 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/visible-egc-12           	    5228	    142867 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/tall-overscroll-12       	       4	 125128975 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/clip-band-12             	     166	   2934881 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/exhausted-columns-12     	     445	   1025322 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthLegacy-12            	    9576	     34013 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthOverlay-12           	   40308	     10631 ns/op	      24 B/op	       3 allocs/op
+BenchmarkCanvasTextOverlay-12          	   13382	     25315 ns/op	      36 B/op	       1 allocs/op
+BenchmarkTextWidthAmbiguous2-12        	   13048	     34884 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasTextAmbiguous2-12       	    9380	     43806 ns/op	      41 B/op	       0 allocs/op
+BenchmarkWrapWords64KiB-12             	      12	  26985717 ns/op	  405998 B/op	   30596 allocs/op
+BenchmarkWrapUnbroken64KiB-12          	       6	  62217117 ns/op	  487178 B/op	    4404 allocs/op
+BenchmarkWrapCharMode64KiB-12          	       9	  38057800 ns/op	  198106 B/op	    4382 allocs/op
+BenchmarkCanvasTextWrapParagraph-12    	      64	   4738981 ns/op	   36400 B/op	    2186 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	17.059s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/ui
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkWheelBubbling/2-12              	 1000000	       434.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/8-12              	 1000000	       460.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/32-12             	  454734	       931.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckboxDraw-12                 	   18559	     28279 ns/op	     100 B/op	       2 allocs/op
+BenchmarkRadioGroupDraw-12               	   14431	     24818 ns/op	     128 B/op	       4 allocs/op
+BenchmarkRadioGroupDrawClippedHalf-12    	   12162	     27404 ns/op	     128 B/op	       4 allocs/op
+BenchmarkHitRouting/10-12                	 1861720	       306.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/100-12               	 1000000	       337.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/1000-12              	 2628478	       217.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGaugeDraw-12                    	   12382	     33006 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScrollRangeMillion/8-12         	41806504	        11.09 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/24-12        	17769967	        36.93 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/80-12        	 4042540	       133.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDrawClippedHalf-12        	     738	    555041 ns/op	    1218 B/op	      36 allocs/op
+BenchmarkModalDrawClippedHalf-12         	   10000	     64980 ns/op	     108 B/op	       2 allocs/op
+BenchmarkSelectDrawOpen-12               	    2338	    216685 ns/op	     174 B/op	       9 allocs/op
+BenchmarkSelectDrawClosed-12             	   51729	      9342 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSparklineDraw-12                	   10000	     71545 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSpinnerDraw-12                  	  398551	      1982 ns/op	      96 B/op	       1 allocs/op
+BenchmarkTableDraw-12                    	     156	   2456824 ns/op	    4464 B/op	      41 allocs/op
+BenchmarkTableDrawClippedHalf-12         	     871	    453822 ns/op	     677 B/op	      32 allocs/op
+BenchmarkTabsDraw-12                     	    1830	    237001 ns/op	     389 B/op	       2 allocs/op
+BenchmarkTextAreaDrawClippedHalf-12      	    2018	    183131 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInputDraw-12                	    2452	    206120 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextAreaLayout/many-lines-400-12         	      30	  19200923 ns/op	  178944 B/op	    9396 allocs/op
+BenchmarkTextAreaLayout/single-line-128KiB-12     	       4	  79860075 ns/op	  835300 B/op	   47536 allocs/op
+BenchmarkTextAreaKeystroke/many-lines-12          	    2242	    379220 ns/op	   13856 B/op	       7 allocs/op
+BenchmarkTextAreaKeystroke/single-line-128KiB-12  	     100	   5139263 ns/op	  262228 B/op	       8 allocs/op
+BenchmarkTextAreaDraw-12                          	     157	   2908000 ns/op	     898 B/op	      63 allocs/op
+BenchmarkTextInput/32-12                          	   17091	     35977 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/1024-12                        	     566	    839633 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/65536-12                       	       9	  34168822 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTreeDraw-12                              	    2122	    284818 ns/op	     407 B/op	      11 allocs/op
+BenchmarkTreeDrawClippedHalf-12                   	    4128	    125719 ns/op	     224 B/op	       5 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/ui	25.594s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12      	    1436	    224591 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12    	    5385	     73951 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollFrame-12      	     205	   1529424 ns/op	        62.00 bytes/frame	  385025 B/op	       1 allocs/op
+BenchmarkIdlePresent-12      	    4392	     80987 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/internal/terminal	2.968s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/scene3d
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkRenderer/80x24-12         	     513	    675946 ns/op	   5.68 MB/s	       0 B/op	       0 allocs/op
+BenchmarkRenderer/160x48-12        	     128	   2757091 ns/op	   5.57 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/scene3d	1.996s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12    	   10000	     34242 ns/op	      38 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12   	   46214	      8604 ns/op	       8 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12     	    1485	    289699 ns/op	     259 B/op	       0 allocs/op
+BenchmarkPutMeasured/ascii-12          	 1892035	       213.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/wide-12           	 1000000	       397.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/combining-12      	  415533	       826.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/put-12               	     370	    962472 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/putcell-12           	     336	   1133587 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/fill-12              	   10986	     31632 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                	     354	    926654 ns/op	    1087 B/op	       0 allocs/op
+BenchmarkBufferDiffNoChanges-12        	    1642	    218421 ns/op	     788 B/op	       0 allocs/op
+BenchmarkEqualRowUnchanged-12          	    5589	     90196 ns/op	     137 B/op	       0 allocs/op
+BenchmarkText/visible-ascii-12         	    7998	     56416 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/visible-egc-12           	    3356	    150618 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/tall-overscroll-12       	       4	  88551050 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/clip-band-12             	     188	   2513927 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/exhausted-columns-12     	     390	    886413 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthLegacy-12            	   12086	     37903 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthOverlay-12           	   54952	      9012 ns/op	      24 B/op	       3 allocs/op
+BenchmarkCanvasTextOverlay-12          	   10000	     39339 ns/op	      46 B/op	       1 allocs/op
+BenchmarkTextWidthAmbiguous2-12        	   15374	     23003 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasTextAmbiguous2-12       	   13052	     30762 ns/op	      29 B/op	       0 allocs/op
+BenchmarkWrapWords64KiB-12             	      10	  31109820 ns/op	  407091 B/op	   30596 allocs/op
+BenchmarkWrapUnbroken64KiB-12          	       7	  50084886 ns/op	  485620 B/op	    4404 allocs/op
+BenchmarkWrapCharMode64KiB-12          	      12	  32965725 ns/op	  196285 B/op	    4382 allocs/op
+BenchmarkCanvasTextWrapParagraph-12    	      96	   5456277 ns/op	   34362 B/op	    2186 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	15.639s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/ui
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkWheelBubbling/2-12              	 1036094	       295.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/8-12              	 1000000	       483.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/32-12             	  410569	      1099 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckboxDraw-12                 	   17289	     27004 ns/op	     100 B/op	       2 allocs/op
+BenchmarkRadioGroupDraw-12               	   11430	     32362 ns/op	     128 B/op	       4 allocs/op
+BenchmarkRadioGroupDrawClippedHalf-12    	   12013	     36133 ns/op	     128 B/op	       4 allocs/op
+BenchmarkHitRouting/10-12                	 2635836	       160.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/100-12               	 1342954	       236.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/1000-12              	 2520658	       278.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGaugeDraw-12                    	   12868	     37621 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScrollRangeMillion/8-12         	41439325	        13.62 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/24-12        	18405306	        22.52 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/80-12        	 3682340	       112.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDrawClippedHalf-12        	     891	    497885 ns/op	    1208 B/op	      36 allocs/op
+BenchmarkModalDrawClippedHalf-12         	   26942	     16652 ns/op	     105 B/op	       2 allocs/op
+BenchmarkSelectDrawOpen-12               	    6375	     91474 ns/op	     165 B/op	       9 allocs/op
+BenchmarkSelectDrawClosed-12             	   57903	      5834 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSparklineDraw-12                	    8204	     46191 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSpinnerDraw-12                  	  433389	      1062 ns/op	      96 B/op	       1 allocs/op
+BenchmarkTableDraw-12                    	     243	   1927649 ns/op	    3579 B/op	      41 allocs/op
+BenchmarkTableDrawClippedHalf-12         	    1198	    342156 ns/op	     669 B/op	      32 allocs/op
+BenchmarkTabsDraw-12                     	    2985	    139613 ns/op	     387 B/op	       2 allocs/op
+BenchmarkTextAreaDrawClippedHalf-12      	    3528	    106257 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInputDraw-12                	    1993	    163630 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextAreaLayout/many-lines-400-12         	      37	  10598205 ns/op	  178944 B/op	    9396 allocs/op
+BenchmarkTextAreaLayout/single-line-128KiB-12     	       6	  53126600 ns/op	  835298 B/op	   47536 allocs/op
+BenchmarkTextAreaKeystroke/many-lines-12          	    2359	    176634 ns/op	   13856 B/op	       7 allocs/op
+BenchmarkTextAreaKeystroke/single-line-128KiB-12  	     218	   2255170 ns/op	  262229 B/op	       8 allocs/op
+BenchmarkTextAreaDraw-12                          	     355	    975406 ns/op	     397 B/op	      28 allocs/op
+BenchmarkTextInput/32-12                          	   17979	     18931 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/1024-12                        	     566	    841423 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/65536-12                       	       9	  39185178 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTreeDraw-12                              	    1741	    218673 ns/op	     411 B/op	      11 allocs/op
+BenchmarkTreeDrawClippedHalf-12                   	    4258	     93311 ns/op	     223 B/op	       5 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/ui	23.361s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12      	    1617	    286050 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12    	    5329	     80768 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollFrame-12      	     681	    954370 ns/op	        62.00 bytes/frame	  385040 B/op	       1 allocs/op
+BenchmarkIdlePresent-12      	    5572	     88823 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/internal/terminal	2.882s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/scene3d
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkRenderer/80x24-12         	     609	    615075 ns/op	   6.24 MB/s	       0 B/op	       0 allocs/op
+BenchmarkRenderer/160x48-12        	     157	   2551228 ns/op	   6.02 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/scene3d	1.629s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12    	   10530	     30629 ns/op	      36 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12   	   49704	      8791 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12     	    1228	    271363 ns/op	     313 B/op	       0 allocs/op
+BenchmarkPutMeasured/ascii-12          	 1859821	       223.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/wide-12           	 1000000	       384.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/combining-12      	  486190	      1002 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/put-12               	     348	    902715 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/putcell-12           	     336	   1662641 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/fill-12              	    7652	     47394 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                	     429	    761994 ns/op	     897 B/op	       0 allocs/op
+BenchmarkBufferDiffNoChanges-12        	    1525	    247507 ns/op	     848 B/op	       0 allocs/op
+BenchmarkEqualRowUnchanged-12          	    4274	     79142 ns/op	     180 B/op	       0 allocs/op
+BenchmarkText/visible-ascii-12         	    7764	     83590 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/visible-egc-12           	    4704	     80647 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/tall-overscroll-12       	       3	 104682300 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/clip-band-12             	     182	   2152220 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/exhausted-columns-12     	     429	    718507 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthLegacy-12            	   15648	     28341 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthOverlay-12           	   56956	      6658 ns/op	      24 B/op	       3 allocs/op
+BenchmarkCanvasTextOverlay-12          	   13896	     34871 ns/op	      35 B/op	       1 allocs/op
+BenchmarkTextWidthAmbiguous2-12        	   15568	     28219 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasTextAmbiguous2-12       	   10000	     30571 ns/op	      38 B/op	       0 allocs/op
+BenchmarkWrapWords64KiB-12             	      13	  26172454 ns/op	  405579 B/op	   30596 allocs/op
+BenchmarkWrapUnbroken64KiB-12          	       7	  48800614 ns/op	  485618 B/op	    4404 allocs/op
+BenchmarkWrapCharMode64KiB-12          	      14	  29866057 ns/op	  195505 B/op	    4382 allocs/op
+BenchmarkCanvasTextWrapParagraph-12    	      82	   4727754 ns/op	   35058 B/op	    2186 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	13.977s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/ui
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkWheelBubbling/2-12              	 1238576	       357.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/8-12              	  961923	       429.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/32-12             	  384668	       823.1 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckboxDraw-12                 	   19826	     16914 ns/op	     100 B/op	       2 allocs/op
+BenchmarkRadioGroupDraw-12               	   12310	     24961 ns/op	     128 B/op	       4 allocs/op
+BenchmarkRadioGroupDrawClippedHalf-12    	   15978	     26016 ns/op	     128 B/op	       4 allocs/op
+BenchmarkHitRouting/10-12                	 2834930	       133.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/100-12               	 2780497	       136.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/1000-12              	 2560122	       131.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGaugeDraw-12                    	   10000	     37361 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScrollRangeMillion/8-12         	45717187	         8.572 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/24-12        	18802293	        22.97 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/80-12        	 5656516	        64.86 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDrawClippedHalf-12        	     906	    561733 ns/op	    1207 B/op	      36 allocs/op
+BenchmarkModalDrawClippedHalf-12         	   28712	     12996 ns/op	     105 B/op	       2 allocs/op
+BenchmarkSelectDrawOpen-12               	    6379	     83734 ns/op	     165 B/op	       9 allocs/op
+BenchmarkSelectDrawClosed-12             	   68822	      5846 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSparklineDraw-12                	    8421	     35927 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSpinnerDraw-12                  	  347426	      1232 ns/op	      96 B/op	       1 allocs/op
+BenchmarkTableDraw-12                    	     247	   1473045 ns/op	    3553 B/op	      41 allocs/op
+BenchmarkTableDrawClippedHalf-12         	    1344	    275515 ns/op	     666 B/op	      32 allocs/op
+BenchmarkTabsDraw-12                     	    2730	    127016 ns/op	     387 B/op	       2 allocs/op
+BenchmarkTextAreaDrawClippedHalf-12      	    3183	    132252 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInputDraw-12                	    2152	    178973 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextAreaLayout/many-lines-400-12         	      42	   8726357 ns/op	  178944 B/op	    9396 allocs/op
+BenchmarkTextAreaLayout/single-line-128KiB-12     	       6	  53022700 ns/op	  835298 B/op	   47536 allocs/op
+BenchmarkTextAreaKeystroke/many-lines-12          	    3081	    190740 ns/op	   13856 B/op	       7 allocs/op
+BenchmarkTextAreaKeystroke/single-line-128KiB-12  	     255	   2034802 ns/op	  262230 B/op	       8 allocs/op
+BenchmarkTextAreaDraw-12                          	     355	   1106480 ns/op	     397 B/op	      28 allocs/op
+BenchmarkTextInput/32-12                          	   19516	     18328 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/1024-12                        	     525	    733809 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/65536-12                       	       9	  37577133 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTreeDraw-12                              	    1374	    224666 ns/op	     416 B/op	      11 allocs/op
+BenchmarkTreeDrawClippedHalf-12                   	    3908	    102562 ns/op	     224 B/op	       5 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/ui	18.244s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12      	    1974	    209380 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12    	    5606	     71819 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollFrame-12      	     538	    713890 ns/op	        62.00 bytes/frame	  385034 B/op	       1 allocs/op
+BenchmarkIdlePresent-12      	    5726	     77161 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/internal/terminal	2.183s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/scene3d
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkRenderer/80x24-12         	     516	    604179 ns/op	   6.36 MB/s	       0 B/op	       0 allocs/op
+BenchmarkRenderer/160x48-12        	     162	   2262036 ns/op	   6.79 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/scene3d	1.452s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12    	   10000	     30961 ns/op	      38 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12   	   39106	      9231 ns/op	       9 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12     	    1194	    276820 ns/op	     322 B/op	       0 allocs/op
+BenchmarkPutMeasured/ascii-12          	 1942656	       201.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/wide-12           	  936255	       418.9 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutMeasured/combining-12      	  490816	       959.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/put-12               	     286	   1386551 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/putcell-12           	     298	   1481732 ns/op	       0 B/op	       0 allocs/op
+BenchmarkPutPaths/fill-12              	   10000	     38746 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                	     406	   1034398 ns/op	     948 B/op	       0 allocs/op
+BenchmarkBufferDiffNoChanges-12        	    1441	    269849 ns/op	     898 B/op	       0 allocs/op
+BenchmarkEqualRowUnchanged-12          	    4470	     70158 ns/op	     172 B/op	       0 allocs/op
+BenchmarkText/visible-ascii-12         	    6570	     66664 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/visible-egc-12           	    3978	     95760 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/tall-overscroll-12       	       4	 114755300 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/clip-band-12             	     217	   1728841 ns/op	       0 B/op	       0 allocs/op
+BenchmarkText/exhausted-columns-12     	     504	    690079 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthLegacy-12            	   13543	     22704 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextWidthOverlay-12           	   55035	      7204 ns/op	      24 B/op	       3 allocs/op
+BenchmarkCanvasTextOverlay-12          	   15277	     29366 ns/op	      33 B/op	       1 allocs/op
+BenchmarkTextWidthAmbiguous2-12        	   16357	     22084 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCanvasTextAmbiguous2-12       	    9854	     33917 ns/op	      39 B/op	       0 allocs/op
+BenchmarkWrapWords64KiB-12             	      15	  28072033 ns/op	  404906 B/op	   30596 allocs/op
+BenchmarkWrapUnbroken64KiB-12          	       8	  51824838 ns/op	  484450 B/op	    4404 allocs/op
+BenchmarkWrapCharMode64KiB-12          	      12	  27542858 ns/op	  196285 B/op	    4382 allocs/op
+BenchmarkCanvasTextWrapParagraph-12    	      90	   4287958 ns/op	   34634 B/op	    2186 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	14.799s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/ui
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkWheelBubbling/2-12              	  964396	       353.8 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/8-12              	  990752	       382.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkWheelBubbling/32-12             	  351782	      1050 ns/op	       0 B/op	       0 allocs/op
+BenchmarkCheckboxDraw-12                 	   18477	     19533 ns/op	     100 B/op	       2 allocs/op
+BenchmarkRadioGroupDraw-12               	   13441	     24987 ns/op	     128 B/op	       4 allocs/op
+BenchmarkRadioGroupDrawClippedHalf-12    	   14988	     26600 ns/op	     128 B/op	       4 allocs/op
+BenchmarkHitRouting/10-12                	 2558780	       149.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/100-12               	 2157868	       143.3 ns/op	       0 B/op	       0 allocs/op
+BenchmarkHitRouting/1000-12              	 2855640	       161.0 ns/op	       0 B/op	       0 allocs/op
+BenchmarkGaugeDraw-12                    	   10000	     35857 ns/op	      96 B/op	       1 allocs/op
+BenchmarkScrollRangeMillion/8-12         	43685608	        10.43 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/24-12        	18721718	        20.10 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollRangeMillion/80-12        	 5534782	        86.03 ns/op	       0 B/op	       0 allocs/op
+BenchmarkSelectDrawClippedHalf-12        	     930	    393056 ns/op	    1206 B/op	      36 allocs/op
+BenchmarkModalDrawClippedHalf-12         	   32311	     12264 ns/op	     105 B/op	       2 allocs/op
+BenchmarkSelectDrawOpen-12               	    6124	     69630 ns/op	     165 B/op	       9 allocs/op
+BenchmarkSelectDrawClosed-12             	   57081	      5513 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSparklineDraw-12                	   10000	     30825 ns/op	      96 B/op	       1 allocs/op
+BenchmarkSpinnerDraw-12                  	  370462	      1066 ns/op	      96 B/op	       1 allocs/op
+BenchmarkTableDraw-12                    	     232	   1794049 ns/op	    3654 B/op	      41 allocs/op
+BenchmarkTableDrawClippedHalf-12         	    1304	    322327 ns/op	     667 B/op	      32 allocs/op
+BenchmarkTabsDraw-12                     	    2688	    157740 ns/op	     387 B/op	       2 allocs/op
+BenchmarkTextAreaDrawClippedHalf-12      	    3700	    110600 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInputDraw-12                	    2402	    145876 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextAreaLayout/many-lines-400-12         	      40	   9582680 ns/op	  178944 B/op	    9396 allocs/op
+BenchmarkTextAreaLayout/single-line-128KiB-12     	       6	  57129200 ns/op	  835298 B/op	   47536 allocs/op
+BenchmarkTextAreaKeystroke/many-lines-12          	    2185	    157635 ns/op	   13856 B/op	       7 allocs/op
+BenchmarkTextAreaKeystroke/single-line-128KiB-12  	     238	   1517373 ns/op	  262228 B/op	       8 allocs/op
+BenchmarkTextAreaDraw-12                          	     294	   1119078 ns/op	     479 B/op	      34 allocs/op
+BenchmarkTextInput/32-12                          	   17677	     17814 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/1024-12                        	     625	    636427 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTextInput/65536-12                       	       8	  44334412 ns/op	       0 B/op	       0 allocs/op
+BenchmarkTreeDraw-12                              	    1342	    336361 ns/op	     416 B/op	      11 allocs/op
+BenchmarkTreeDrawClippedHalf-12                   	    4266	     89071 ns/op	     223 B/op	       5 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/ui	18.655s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkEncodeFrame-12      	    1488	    271866 ns/op	       249.0 bytes/frame	       0 B/op	       0 allocs/op
+BenchmarkScanUnchanged-12    	    4420	     84260 ns/op	       0 B/op	       0 allocs/op
+BenchmarkScrollFrame-12      	     583	    638501 ns/op	        62.00 bytes/frame	  385025 B/op	       1 allocs/op
+BenchmarkIdlePresent-12      	    5085	     80371 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/internal/terminal	2.179s
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/scene3d
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkRenderer/80x24-12         	     668	    608139 ns/op	   6.31 MB/s	       0 B/op	       0 allocs/op
+BenchmarkRenderer/160x48-12        	     146	   2279385 ns/op	   6.74 MB/s	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/scene3d	1.490s

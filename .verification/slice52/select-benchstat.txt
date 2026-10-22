@@ -1,0 +1,12 @@
+                  │ select-before.txt │          select-after.txt           │
+                  │      sec/op       │    sec/op     vs base               │
+SelectDrawOpen-12       111.98µ ± 69%   42.97µ ± 74%  -61.63% (p=0.002 n=6)
+
+                  │ select-before.txt │         select-after.txt         │
+                  │       B/op        │    B/op     vs base              │
+SelectDrawOpen-12          163.0 ± 1%   161.0 ± 0%  -1.23% (p=0.002 n=6)
+
+                  │ select-before.txt │       select-after.txt        │
+                  │     allocs/op     │ allocs/op   vs base           │
+SelectDrawOpen-12          9.000 ± 0%   9.000 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal

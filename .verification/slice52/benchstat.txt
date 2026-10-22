@@ -1,0 +1,281 @@
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/internal/terminal
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+                 │   before.txt    │              after.txt               │
+                 │     sec/op      │    sec/op      vs base               │
+EncodeFrame-12      247.7µ ±  197%   273.2µ ±  23%        ~ (p=1.000 n=6)
+ScanUnchanged-12   110.07µ ±  235%   78.38µ ±  64%        ~ (p=0.093 n=6)
+ScrollFrame-12      1.287m ± 2044%   1.090m ± 142%        ~ (p=0.485 n=6)
+IdlePresent-12     121.04µ ±  258%   84.91µ ±  37%        ~ (p=0.180 n=6)
+geomean             255.2µ           211.0µ         -17.34%
+
+                 │   before.txt   │              after.txt               │
+                 │      B/op      │     B/op      vs base                │
+EncodeFrame-12       0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ScanUnchanged-12     0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ScrollFrame-12     376.0Ki ± 0%     376.0Ki ± 0%       ~ (p=0.223 n=6)
+IdlePresent-12       0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                         ²                 +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                 │  before.txt  │             after.txt              │
+                 │  allocs/op   │ allocs/op   vs base                │
+EncodeFrame-12     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ScanUnchanged-12   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ScrollFrame-12     1.000 ± 0%     1.000 ± 0%       ~ (p=1.000 n=6) ¹
+IdlePresent-12     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                       ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+               │ before.txt  │              after.txt              │
+               │ bytes/frame │ bytes/frame  vs base                │
+EncodeFrame-12    249.0 ± 0%    249.0 ± 0%       ~ (p=1.000 n=6) ¹
+ScrollFrame-12    62.00 ± 0%    62.00 ± 0%       ~ (p=1.000 n=6) ¹
+geomean           124.2         124.2       +0.00%
+¹ all samples are equal
+
+pkg: github.com/GofMan5/lux/render
+                            │    before.txt     │               after.txt               │
+                            │      sec/op       │     sec/op      vs base               │
+CanvasFrame-12                2232.4µ ±    236%   980.5µ ±  324%  -56.08% (p=0.041 n=6)
+BufferDiffNoChanges-12         264.0µ ±    300%   251.4µ ±  286%        ~ (p=1.000 n=6)
+EqualRowUnchanged-12          102.17µ ±    170%   84.67µ ±  219%        ~ (p=0.937 n=6)
+TextWidthLegacy-12             32.55µ ±    112%   31.18µ ±  225%        ~ (p=0.699 n=6)
+TextWidthOverlay-12            6.779µ ±   1583%   8.108µ ±  739%        ~ (p=0.589 n=6)
+CanvasTextOverlay-12           47.64µ ± 785454%   32.50µ ±  200%        ~ (p=0.180 n=6)
+TextWidthAmbiguous2-12         31.41µ ±   2778%   31.55µ ±  254%        ~ (p=0.818 n=6)
+CanvasTextAmbiguous2-12        56.62µ ±    802%   32.34µ ±  232%  -42.89% (p=0.041 n=6)
+WrapWords64KiB-12              51.45m ±    137%   29.59m ± 1076%        ~ (p=0.394 n=6)
+WrapUnbroken64KiB-12           72.43m ±    652%   57.02m ±  578%        ~ (p=0.394 n=6)
+WrapCharMode64KiB-12           38.93m ±   1551%   35.51m ±  177%        ~ (p=0.699 n=6)
+CanvasTextWrapParagraph-12     7.533m ±    610%   5.098m ±  169%        ~ (p=0.394 n=6)
+CanvasFill/clear-120x40-12                        38.68µ ±  195%
+CanvasFill/panel-clipped-12                       9.463µ ±  101%
+CanvasFill/wide-120x40-12                         319.2µ ±   93%
+PutMeasured/ascii-12                              218.3n ±  186%
+PutMeasured/wide-12                               496.8n ±  488%
+PutMeasured/combining-12                          980.6n ±  614%
+PutPaths/put-12                                   1.209m ±  151%
+PutPaths/putcell-12                               1.572m ±  153%
+PutPaths/fill-12                                  46.93µ ±  323%
+Text/visible-ascii-12                             70.33µ ±  390%
+Text/visible-egc-12                               129.9µ ±  148%
+Text/tall-overscroll-12                           116.6m ±  520%
+Text/clip-band-12                                 2.333m ±  121%
+Text/exhausted-columns-12                         942.0µ ±  505%
+geomean                        572.1µ             188.2µ          -23.00%
+
+                            │     before.txt      │                after.txt                │
+                            │        B/op         │      B/op       vs base                 │
+CanvasFrame-12                 2362.0 ±     11%       948.0 ± 215%        ~ (p=0.061 n=6)
+BufferDiffNoChanges-12          872.5 ±     42%       873.0 ± 352%        ~ (p=0.818 n=6)
+EqualRowUnchanged-12            154.0 ±     55%       176.0 ± 136%        ~ (p=0.255 n=6)
+TextWidthLegacy-12              0.000 ±      0%       0.000 ±   0%        ~ (p=1.000 n=6) ¹
+TextWidthOverlay-12             24.00 ±      0%       24.00 ±   0%        ~ (p=1.000 n=6) ¹
+CanvasTextOverlay-12            54.00 ± 712937%       41.00 ± 144%  -24.07% (p=0.032 n=6)
+TextWidthAmbiguous2-12          0.000 ±      0%       0.000 ±   0%        ~ (p=1.000 n=6) ¹
+CanvasTextAmbiguous2-12         47.50 ±     41%       38.50 ±  74%        ~ (p=0.201 n=6)
+WrapWords64KiB-12             397.4Ki ±      1%     397.0Ki ±   3%        ~ (p=0.900 n=6)
+WrapUnbroken64KiB-12          475.0Ki ±      5%     475.0Ki ±   5%        ~ (p=0.920 n=6)
+WrapCharMode64KiB-12          191.5Ki ±     31%     192.6Ki ±   1%        ~ (p=0.844 n=6)
+CanvasTextWrapParagraph-12    36.00Ki ±      4%     34.08Ki ±  13%        ~ (p=0.132 n=6)
+CanvasFill/clear-120x40-12                            38.00 ±  71%
+CanvasFill/panel-clipped-12                           8.500 ± 135%
+CanvasFill/wide-120x40-12                             317.5 ±  38%
+PutMeasured/ascii-12                                  0.000 ±   0%
+PutMeasured/wide-12                                   0.000 ±   0%
+PutMeasured/combining-12                              0.000 ±   0%
+PutPaths/put-12                                       0.000 ±   0%
+PutPaths/putcell-12                                   0.000 ±   0%
+PutPaths/fill-12                                      0.000 ±   0%
+Text/visible-ascii-12                                 0.000 ±   0%
+Text/visible-egc-12                                   0.000 ±   0%
+Text/tall-overscroll-12                               0.000 ±   0%
+Text/clip-band-12                                     0.000 ±   0%
+Text/exhausted-columns-12                             0.000 ±   0%
+geomean                                         ²                   -10.37%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                            │   before.txt   │              after.txt               │
+                            │   allocs/op    │  allocs/op   vs base                 │
+CanvasFrame-12                 0.000 ±  0%      0.000 ± 0%        ~ (p=1.000 n=6) ¹
+BufferDiffNoChanges-12         0.000 ±  0%      0.000 ± 0%        ~ (p=1.000 n=6) ¹
+EqualRowUnchanged-12           0.000 ±  0%      0.000 ± 0%        ~ (p=1.000 n=6) ¹
+TextWidthLegacy-12             0.000 ±  0%      0.000 ± 0%        ~ (p=1.000 n=6) ¹
+TextWidthOverlay-12            3.000 ±  0%      3.000 ± 0%        ~ (p=1.000 n=6) ¹
+CanvasTextOverlay-12           2.000 ± 50%      1.000 ± 0%  -50.00% (p=0.002 n=6)
+TextWidthAmbiguous2-12         0.000 ±  0%      0.000 ± 0%        ~ (p=1.000 n=6) ¹
+CanvasTextAmbiguous2-12        0.000 ±  0%      0.000 ± 0%        ~ (p=1.000 n=6) ¹
+WrapWords64KiB-12             30.60k ±  0%     30.60k ± 0%        ~ (p=1.000 n=6) ¹
+WrapUnbroken64KiB-12          4.404k ±  0%     4.404k ± 0%        ~ (p=1.000 n=6)
+WrapCharMode64KiB-12          4.382k ±  0%     4.382k ± 0%        ~ (p=1.000 n=6)
+CanvasTextWrapParagraph-12    2.186k ±  0%     2.186k ± 0%        ~ (p=1.000 n=6) ¹
+CanvasFill/clear-120x40-12                      0.000 ± 0%
+CanvasFill/panel-clipped-12                     0.000 ± 0%
+CanvasFill/wide-120x40-12                       0.000 ± 0%
+PutMeasured/ascii-12                            0.000 ± 0%
+PutMeasured/wide-12                             0.000 ± 0%
+PutMeasured/combining-12                        0.000 ± 0%
+PutPaths/put-12                                 0.000 ± 0%
+PutPaths/putcell-12                             0.000 ± 0%
+PutPaths/fill-12                                0.000 ± 0%
+Text/visible-ascii-12                           0.000 ± 0%
+Text/visible-egc-12                             0.000 ± 0%
+Text/tall-overscroll-12                         0.000 ± 0%
+Text/clip-band-12                               0.000 ± 0%
+Text/exhausted-columns-12                       0.000 ± 0%
+geomean                                    ²                 -5.61%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+pkg: github.com/GofMan5/lux/scene3d
+                   │  before.txt   │              after.txt              │
+                   │    sec/op     │    sec/op     vs base               │
+Renderer/80x24-12    718.4µ ± 258%   610.5µ ± 11%        ~ (p=0.132 n=6)
+Renderer/160x48-12   3.166m ± 179%   2.597m ± 13%  -17.96% (p=0.041 n=6)
+geomean              1.508m          1.259m        -16.50%
+
+                   │  before.txt  │             after.txt              │
+                   │     B/op     │    B/op     vs base                │
+Renderer/80x24-12    0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+Renderer/160x48-12   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                         ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                   │  before.txt  │             after.txt              │
+                   │  allocs/op   │ allocs/op   vs base                │
+Renderer/80x24-12    0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+Renderer/160x48-12   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                         ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                   │  before.txt   │              after.txt               │
+                   │      B/s      │      B/s       vs base               │
+Renderer/80x24-12    5.121Mi ± 72%   5.999Mi ± 10%        ~ (p=0.132 n=6)
+Renderer/160x48-12   4.649Mi ± 64%   5.641Mi ± 15%  +21.33% (p=0.045 n=6)
+geomean              4.879Mi         5.817Mi        +19.21%
+
+pkg: github.com/GofMan5/lux/ui
+                                        │    before.txt    │                after.txt                 │
+                                        │      sec/op      │      sec/op       vs base                │
+WheelBubbling/2-12                         321.2n ±   143%    355.6n ±    84%         ~ (p=0.937 n=6)
+WheelBubbling/8-12                         490.8n ±   199%    472.3n ±   589%         ~ (p=0.818 n=6)
+WheelBubbling/32-12                        971.7n ±  3005%   1037.5n ±  4192%         ~ (p=0.589 n=6)
+CheckboxDraw-12                            28.62µ ±    88%    27.64µ ±  1330%         ~ (p=0.699 n=6)
+RadioGroupDraw-12                          62.47µ ±   625%    27.46µ ±  1574%         ~ (p=0.065 n=6)
+HitRouting/10-12                           181.5n ±   244%    163.3n ±   458%         ~ (p=0.699 n=6)
+HitRouting/100-12                          171.7n ±   164%    286.9n ±   389%         ~ (p=0.818 n=6)
+HitRouting/1000-12                         173.2n ±   101%    189.3n ±   280%         ~ (p=1.000 n=6)
+GaugeDraw-12                               41.40µ ±   315%    37.37µ ±   170%         ~ (p=1.000 n=6)
+ScrollRangeMillion/8-12                    12.78n ±   102%    10.76n ±    32%         ~ (p=0.240 n=6)
+ScrollRangeMillion/24-12                   31.51n ±   174%    23.98n ±    58%         ~ (p=0.132 n=6)
+ScrollRangeMillion/80-12                  123.65n ±   732%    87.75n ±    52%   -29.03% (p=0.041 n=6)
+SelectDrawOpen-12                          15.43µ ±   110%    84.76µ ±   156%  +449.27% (p=0.002 n=6)
+SelectDrawClosed-12                       13.241µ ±   375%    5.887µ ±    59%   -55.54% (p=0.002 n=6)
+SparklineDraw-12                           38.63µ ±    72%    36.34µ ±    97%         ~ (p=1.000 n=6)
+SpinnerDraw-12                             1.903µ ±   667%    1.222µ ±    62%   -35.80% (p=0.041 n=6)
+TableDraw-12                               4.063m ±   629%    1.861m ±    59%   -54.20% (p=0.002 n=6)
+TabsDraw-12                                189.0µ ±  4506%    155.1µ ±   158%         ~ (p=0.240 n=6)
+TextAreaLayout/many-lines-400-12           10.45m ± 22740%    14.36m ±    39%         ~ (p=0.937 n=6)
+TextAreaLayout/single-line-128KiB-12       70.82m ±   786%    68.49m ±    45%         ~ (p=0.937 n=6)
+TextAreaKeystroke/many-lines-12            157.3µ ±  2265%    196.9µ ±    97%         ~ (p=0.132 n=6)
+TextAreaKeystroke/single-line-128KiB-12    2.078m ±   331%    2.579m ±    99%         ~ (p=0.589 n=6)
+TextAreaDraw-12                            2.072m ±   463%    1.265m ±   130%         ~ (p=0.240 n=6)
+TextInput/32-12                            20.38µ ±   249%    20.13µ ±    83%         ~ (p=0.699 n=6)
+TextInput/1024-12                          834.6µ ±   102%    786.7µ ±   180%         ~ (p=1.000 n=6)
+TextInput/65536-12                         44.02m ±  5892%    41.76m ±    96%         ~ (p=0.485 n=6)
+TreeDraw-12                                532.5µ ±   433%    302.7µ ±    35%   -43.16% (p=0.002 n=6)
+RadioGroupDrawClippedHalf-12                                  31.77µ ± 32321%
+SelectDrawClippedHalf-12                                      526.5µ ±    51%
+ModalDrawClippedHalf-12                                       14.82µ ±   338%
+TableDrawClippedHalf-12                                       332.2µ ±    69%
+TextAreaDrawClippedHalf-12                                    121.4µ ±   205%
+TextInputDraw-12                                              171.3µ ±   117%
+TreeDrawClippedHalf-12                                        114.1µ ±    39%
+geomean                                    23.16µ             29.95µ             -7.72%
+
+                                        │    before.txt    │               after.txt                │
+                                        │       B/op       │     B/op       vs base                 │
+WheelBubbling/2-12                          0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+WheelBubbling/8-12                          0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+WheelBubbling/32-12                         0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+CheckboxDraw-12                             100.0 ±   0%       100.0 ±  1%        ~ (p=1.000 n=6)
+RadioGroupDraw-12                           128.0 ±   1%       128.0 ±  0%        ~ (p=0.455 n=6)
+HitRouting/10-12                            0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+HitRouting/100-12                           0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+HitRouting/1000-12                          0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+GaugeDraw-12                                96.00 ±   1%       96.00 ±  1%        ~ (p=1.000 n=6)
+ScrollRangeMillion/8-12                     0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+ScrollRangeMillion/24-12                    0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+ScrollRangeMillion/80-12                    0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+SelectDrawOpen-12                           97.00 ±   2%      165.00 ±  5%  +70.10% (p=0.002 n=6)
+SelectDrawClosed-12                         96.00 ±   0%       96.00 ±  0%        ~ (p=1.000 n=6) ¹
+SparklineDraw-12                            96.00 ±   0%       96.00 ±  0%        ~ (p=1.000 n=6) ¹
+SpinnerDraw-12                              96.00 ±   0%       96.00 ±  0%        ~ (p=1.000 n=6) ¹
+TableDraw-12                              5.810Ki ±  16%     3.613Ki ± 22%  -37.81% (p=0.002 n=6)
+TabsDraw-12                                 388.0 ±   2%       387.5 ±  1%        ~ (p=0.310 n=6)
+TextAreaLayout/many-lines-400-12          174.8Ki ±   0%     174.8Ki ±  0%        ~ (p=1.000 n=6) ¹
+TextAreaLayout/single-line-128KiB-12      815.7Ki ±   0%     815.7Ki ±  0%        ~ (p=0.076 n=6)
+TextAreaKeystroke/many-lines-12           13.53Ki ±   0%     13.53Ki ±  0%        ~ (p=0.182 n=6)
+TextAreaKeystroke/single-line-128KiB-12   256.1Ki ±   0%     256.1Ki ±  0%        ~ (p=0.139 n=6)
+TextAreaDraw-12                             674.5 ± 327%       476.0 ± 89%        ~ (p=0.225 n=6)
+TextInput/32-12                             0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+TextInput/1024-12                           0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+TextInput/65536-12                          0.000 ±   0%       0.000 ±  0%        ~ (p=1.000 n=6) ¹
+TreeDraw-12                                 428.0 ±  53%       413.5 ±  2%   -3.39% (p=0.002 n=6)
+RadioGroupDrawClippedHalf-12                                   128.0 ± 82%
+SelectDrawClippedHalf-12                                     1.180Ki ±  2%
+ModalDrawClippedHalf-12                                        105.0 ±  3%
+TableDrawClippedHalf-12                                        668.0 ±  2%
+TextAreaDrawClippedHalf-12                                     0.000 ±  0%
+TextInputDraw-12                                               0.000 ±  0%
+TreeDrawClippedHalf-12                                         224.0 ±  3%
+geomean                                                  ²                   -1.21%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                                        │   before.txt    │               after.txt                │
+                                        │    allocs/op    │  allocs/op    vs base                  │
+WheelBubbling/2-12                         0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+WheelBubbling/8-12                         0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+WheelBubbling/32-12                        0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+CheckboxDraw-12                            2.000 ±   0%      2.000 ±  0%         ~ (p=1.000 n=6) ¹
+RadioGroupDraw-12                          4.000 ±   0%      4.000 ±  0%         ~ (p=1.000 n=6) ¹
+HitRouting/10-12                           0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+HitRouting/100-12                          0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+HitRouting/1000-12                         0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+GaugeDraw-12                               1.000 ±   0%      1.000 ±  0%         ~ (p=1.000 n=6) ¹
+ScrollRangeMillion/8-12                    0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+ScrollRangeMillion/24-12                   0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+ScrollRangeMillion/80-12                   0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+SelectDrawOpen-12                          1.000 ±   0%      9.000 ±  0%  +800.00% (p=0.002 n=6)
+SelectDrawClosed-12                        1.000 ±   0%      1.000 ±  0%         ~ (p=1.000 n=6) ¹
+SparklineDraw-12                           1.000 ±   0%      1.000 ±  0%         ~ (p=1.000 n=6) ¹
+SpinnerDraw-12                             1.000 ±   0%      1.000 ±  0%         ~ (p=1.000 n=6) ¹
+TableDraw-12                               41.00 ±   0%      41.00 ±  0%         ~ (p=1.000 n=6) ¹
+TabsDraw-12                                2.000 ±   0%      2.000 ±  0%         ~ (p=1.000 n=6) ¹
+TextAreaLayout/many-lines-400-12          9.396k ±   0%     9.396k ±  0%         ~ (p=1.000 n=6) ¹
+TextAreaLayout/single-line-128KiB-12      47.54k ±   0%     47.54k ±  0%         ~ (p=1.000 n=6) ¹
+TextAreaKeystroke/many-lines-12            7.000 ±   0%      7.000 ±  0%         ~ (p=1.000 n=6) ¹
+TextAreaKeystroke/single-line-128KiB-12    8.000 ±   0%      8.000 ±  0%         ~ (p=1.000 n=6) ¹
+TextAreaDraw-12                            47.50 ± 329%      33.50 ± 88%         ~ (p=0.225 n=6)
+TextInput/32-12                            0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+TextInput/1024-12                          0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+TextInput/65536-12                         0.000 ±   0%      0.000 ±  0%         ~ (p=1.000 n=6) ¹
+TreeDraw-12                                11.00 ±   0%      11.00 ±  0%         ~ (p=1.000 n=6) ¹
+RadioGroupDrawClippedHalf-12                                 4.000 ±  0%
+SelectDrawClippedHalf-12                                     36.00 ±  0%
+ModalDrawClippedHalf-12                                      2.000 ±  0%
+TableDrawClippedHalf-12                                      32.00 ±  0%
+TextAreaDrawClippedHalf-12                                   0.000 ±  0%
+TextInputDraw-12                                             0.000 ±  0%
+TreeDrawClippedHalf-12                                       5.000 ±  0%
+geomean                                                 ²                   +7.08%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

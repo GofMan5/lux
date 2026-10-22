@@ -546,7 +546,67 @@ test doubles and application strings, not framework queues, caches or
 history; a 64-byte-per-event leak injected into the runtime fails all four
 tests. CI runs the soaks on Linux and Windows without race instrumentation.
 
-Still open in stage 5: the final regression report. The comparative harness also publishes lux-lane
+## Stage 5 regression report
+
+Each stage 5 budget against the evidence that closes it. Timing claims come
+only from interleaved runs on one host; CI gates only deterministic
+properties (allocations, bytes, frame counts, live heap).
+
+| Budget | Evidence | Status |
+| --- | --- | --- |
+| Static UI: 0 recurring requests, 0 bytes for an unchanged frame, idle CPU <1% core | 0 bytes/frame over 289 paints; idle 0.09–0.17% of one core (PTY battery); `TestStaticTabsSettleIdle`, `TestCatalogIdlePagesGoQuiet`, idle-`Present` 0-alloc guard | met |
+| 120×40 preparation p95 ≤8 ms without flush | reference flows p95 ≈1–2 ms, quantized to the 0.5–1 ms clock step (below) | met |
+| Interactive reaction p95 ≤50 ms on a local PTY | resize 3.7 / 11.6 ms, rtt 3.1 / 15.4 ms, inputburst 19.6 / 24.0 ms at 120×40 / 240×80 | met |
+| Animation: degrade 60→30→20→10 without backlog | `TestPacerSlowsImmediatelyAndRecoversWithHysteresis`; absolute-time tweens and springs; spinner on glyph deadlines (`TestMotionPageWaitsForGlyphDeadlines`) | met |
+| Virtual data: O(visible rows) for 200k/1M rows | `TestTableVirtualizesRows`; `BenchmarkScrollRangeMillion`; one-million-row table alloc ceiling | met |
+| Bounded long-session memory | `TestLongSessionMemoryIsBounded` on four reference flows (above) | met |
+| Regression: stable alloc/byte budgets, repeated A/B | widget, renderer and encoder allocation guards; encoder byte budgets; the A/B below | met |
+
+### Micro battery, stage 5 start → end
+
+Interleaved A/B of every micro benchmark in `render`, `ui`,
+`internal/terminal` and `scene3d`: baseline `66aefa6` (before slice 36)
+against the stage 5 end, six alternating rounds, `-benchtime 300ms`,
+i5-10400F, Windows, Go 1.25.5. Timing spread on this host is ±100–1000%,
+so only p<0.05 rows are listed; allocation and byte columns are exact.
+
+| Benchmark | Δ sec/op | Δ B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| render `CanvasFrame` | −56.08% (p=0.041) | ~ | 0 → 0 |
+| render `CanvasTextAmbiguous2` | −42.89% (p=0.041) | ~ | 0 → 0 |
+| render `CanvasTextOverlay` | ~ | −24.07% (p=0.032) | 2 → 1 |
+| ui `SelectDrawClosed` | −55.54% (p=0.002) | ~ | = |
+| ui `TableDraw` | −54.20% (p=0.002) | −37.81% (p=0.002) | = |
+| ui `TreeDraw` | −43.16% (p=0.002) | −3.39% (p=0.002) | = |
+| ui `SpinnerDraw` | −35.80% (p=0.041) | ~ | = |
+| ui `ScrollRangeMillion/80` | −29.03% (p=0.041) | ~ | = |
+| scene3d `Renderer/160x48` | −17.96% (p=0.041) | ~ | = |
+
+Apart from the false alarm explained next, no benchmark regressed in
+allocations or bytes; wrapping, text editing and
+the encoder (`EncodeFrame` 0 allocs, `ScrollFrame` 376 KiB / 1 alloc,
+bytes/frame 249 and 62) are unchanged. Geomeans: render −23.00%, ui −7.72%,
+terminal −17.34%, scene3d −16.50% (terminal rows individually not
+significant). One apparent alarm —
+`SelectDrawOpen` +449% time, allocs 1→9 — was a benchmark fix, not a
+regression: the baseline benchmark forgot `Open: true` and measured a closed
+Select. Re-run open against open, it is −61.63% (p=0.002), 9 = 9 allocs,
+B/op 163→161. Reproduce with `.verification/slice52/regress.sh <baseline
+worktree> <head worktree> 6 <outdir>` and `benchstat before.txt after.txt`.
+
+Reference flows at the stage 5 end, 120×40, 10 runs, µs (clock step ≈1 ms):
+
+| Flow | prep p50 | prep p95 | prep p99 | bytes/frame |
+| --- | ---: | ---: | ---: | ---: |
+| tour | 506 | 1523 | 2034 | 2005 |
+| procs | 603 | 1842 | 2524 | 1543 |
+| workspace | 0 | 1009 | 1665 | 288 |
+| jobs | 507 | 1522 | 3520 | 396.5 |
+
+These sit one or two clock steps above the slice 50 table because the host
+was busier; the slice 50 interleaved A/B is the comparison of record.
+
+Stage 5 is closed. The comparative harness also publishes lux-lane
 `prep p50/p95/p99` beside per-present process-CPU, which includes in-process
 background work. Existing dirty-row/diff mechanisms do not imply a need for a
 new damage-tracking API; add one only if profiling warrants it.

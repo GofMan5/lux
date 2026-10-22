@@ -280,7 +280,15 @@ Border не используется по умолчанию для каждог
 - `TestLongSessionMemoryIsBounded` в 08-tour (60 циклов: все страницы, focus, оверлеи), 09-procs, 14-workspace (ввод/стирание строки, palette, undo history до своего cap) и 15-jobs (по 150 циклов); каждый цикл ещё и ресайзит 100×30 → 160×50 → 120×40. Рост после warmup: tour +21 KB / 49 циклов, procs +54 KB / 129, workspace +9 KB / 109, jobs +30 KB / 129; горутины 4 → 4 (`.verification/slice51-soak.txt`).
 - Остаточный рост разобран heap-профилем (MemProfileRate=1, diff циклов 50 и 600 procs): test double `scriptedSource.filterLog`, строки приложения, сами samples, `runtime.malg` и pprof; framework-владельцев (очереди, кэши, history) в нём нет, темп падает (~250 → 140 B/цикл). Negative control: утечка 64 B на event в `applyEvent` ловится во всех четырёх тестах (+240…293 KB при slack 128 KB).
 - Soak — тысячи кадров с pacing 240 FPS (15–25 s на приложение), поэтому opt-in через `LUX_SOAK=1`: обычный и `-race -count=25` прогон examples их пропускает, CI-job `soak` (ubuntu + windows, Go stable, без race — инструментация искажает heap) запускает их явно.
-- Публичный API не менялся — CHANGELOG не затронут. Остаётся итоговый regression report.
+- Публичный API не менялся — CHANGELOG не затронут.
+
+**Этап 5, итоговый regression report (slice 52, закрывает этап 5):**
+
+- [PERFORMANCE.md → Stage 5 regression report](PERFORMANCE.md#stage-5-regression-report): каждый первичный бюджет сопоставлен с evidence — static UI, 120×40 prep p95, interactive reaction, animation, virtual data, bounded memory, regression; все выполнены.
+- Interleaved A/B всей micro battery (`render`, `ui`, `internal/terminal`, `scene3d`): `66aefa6` (до slice 36) против конца этапа, 6 rounds (`.verification/slice52/`). Значимые дельты только улучшения: CanvasFrame −56%, TableDraw −54% (B/op −38%), SelectDrawClosed −56%, TreeDraw −43%, Renderer/160x48 −18%; allocs/bytes без регрессий.
+- Ложная тревога `SelectDrawOpen` (+449%, allocs 1→9) разобрана: в baseline бенчмарк забывал `Open: true` и мерил закрытый Select; open против open — −61.63% (p=0.002), allocs 9 = 9.
+- Свежий профиль reference flows: prep p95 1.0–1.8 ms при шаге часов ≈1 ms — в бюджете 8 ms.
+- Код и публичный API не менялись.
 
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.
 
