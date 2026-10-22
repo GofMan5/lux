@@ -144,6 +144,7 @@ The examples are numbered as a curriculum:
 | `09-procs` | The async data app — a real process explorer: type-to-search filtering, loading/empty/error/retry phases, master-detail, cancellation, and a confirm-then-kill action with auto-refresh |
 | `14-workspace` | A filesystem-backed project/config flow — loading, empty/error/retry states, validation, unsaved preview/protection, and safe same-directory writes ([workspace guide](examples/14-workspace/README.md)) |
 | `15-jobs` | A bounded jobs/log dashboard — progress telemetry, follow-tail logs, cancellation, retry, and stale-result protection ([jobs guide](examples/15-jobs/README.md)) |
+| `16-studio` | **Start here to try LUX by hand** — one polished app with live dashboard, deploy pipeline, sortable/filterable services, a file editor, a motion and 3D lab, three themes, a command palette, and an event inspector ([studio guide](examples/16-studio/README.md)) |
 | `annex` | Sideband channels — taskbar progress, a toast, a clipboard write |
 
 ```sh

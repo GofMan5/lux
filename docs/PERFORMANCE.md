@@ -483,11 +483,11 @@ frame that reached the terminal. The internal `phaseprofile` package drives a
 real model through the real runtime against an in-memory backend that
 diff-encodes every frame like an interactive terminal (true color,
 synchronized output, scroll regions) and discards the bytes, so flush is zero
-and one scripted event is delivered per presented frame. Four reference apps
+and one scripted event is delivered per presented frame. Five reference apps
 ship a scripted `BenchmarkPreparation120x40`:
 
 ```sh
-cd examples && go test -p 1 -run '^$' -bench Preparation120x40 -benchtime 20x ./08-tour ./09-procs ./14-workspace ./15-jobs
+cd examples && go test -p 1 -run '^$' -bench Preparation120x40 -benchtime 20x ./08-tour ./09-procs ./14-workspace ./15-jobs ./16-studio
 ```
 
 Each reports `prep-p50/p95/p99-us`, `update/view/encode-p95-us`,
@@ -523,7 +523,7 @@ before-fix p95 of 4.5–16 ms), so compare only interleaved runs.
 
 ### Long-session bounded memory on reference flows
 
-`TestLongSessionMemoryIsBounded` in the same four examples drives a cycle of
+`TestLongSessionMemoryIsBounded` in the same five examples drives a cycle of
 events (pages and overlays, filters, editing and the palette, log follow) plus
 resizes to 100×30, 160×50 and back, one event per presented frame, and samples
 live heap after a forced GC at the end of every cycle. It fails if heap grows
@@ -531,7 +531,7 @@ more than 128 KiB after warmup, or goroutines grow at all. Soaks are opt-in
 because each paces thousands of frames:
 
 ```bash
-cd examples && LUX_SOAK=1 go test -count=1 -run LongSession -v ./08-tour ./09-procs ./14-workspace ./15-jobs
+cd examples && LUX_SOAK=1 go test -count=1 -run LongSession -v ./08-tour ./09-procs ./14-workspace ./15-jobs ./16-studio
 ```
 
 | Flow | Cycles after warmup | Live heap growth | Goroutines |
@@ -540,10 +540,18 @@ cd examples && LUX_SOAK=1 go test -count=1 -run LongSession -v ./08-tour ./09-pr
 | procs | 129 | +54 KB | 4 → 4 |
 | workspace | 109 | +9 KB | 4 → 4 |
 | jobs | 129 | +30 KB | 4 → 4 |
+| studio | 129 | +43–54 KB | 4 → 4 |
+
+The studio soak starts at 160×50: the runtime's free-surface stack is LIFO,
+so its third surface draws rarely and grows to the largest size whenever
+timing first hands it that size, a bounded one-time step (≈260 KB) that a
+busy, always-animating app can hit after warmup. Starting at the largest size
+allocates all three surfaces at full size and keeps the measurement about
+application state.
 
 A heap profile of the residual growth attributes it to the examples' scripted
 test doubles and application strings, not framework queues, caches or
-history; a 64-byte-per-event leak injected into the runtime fails all four
+history; a 64-byte-per-event leak injected into the runtime fails all five
 tests. CI runs the soaks on Linux and Windows without race instrumentation.
 
 ## Stage 5 regression report
@@ -559,7 +567,7 @@ properties (allocations, bytes, frame counts, live heap).
 | Interactive reaction p95 ≤50 ms on a local PTY | resize 3.7 / 11.6 ms, rtt 3.1 / 15.4 ms, inputburst 19.6 / 24.0 ms at 120×40 / 240×80 | met |
 | Animation: degrade 60→30→20→10 without backlog | `TestPacerSlowsImmediatelyAndRecoversWithHysteresis`; absolute-time tweens and springs; spinner on glyph deadlines (`TestMotionPageWaitsForGlyphDeadlines`) | met |
 | Virtual data: O(visible rows) for 200k/1M rows | `TestTableVirtualizesRows`; `BenchmarkScrollRangeMillion`; one-million-row table alloc ceiling | met |
-| Bounded long-session memory | `TestLongSessionMemoryIsBounded` on four reference flows (above) | met |
+| Bounded long-session memory | `TestLongSessionMemoryIsBounded` on five reference flows (above) | met |
 | Regression: stable alloc/byte budgets, repeated A/B | widget, renderer and encoder allocation guards; encoder byte budgets; the A/B below | met |
 
 ### Micro battery, stage 5 start → end

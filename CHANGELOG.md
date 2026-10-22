@@ -15,6 +15,15 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+### Added
+
+- `examples/16-studio`: a hands-on tour that exercises nearly every feature in
+  one app — metric cards with springs, an async deploy pipeline with taskbar
+  progress and notifications, a sortable filtered table with OSC 8 links and a
+  confirm modal, a tree plus `TextArea` editor, a motion and 3D lab, three
+  themes, a fuzzy command palette and a live event inspector. It sleeps when
+  idle and ships a preparation benchmark and a bounded-memory soak.
+
 ## [0.2.0-rc.2] - 2026-10-22
 
 ### Performance
