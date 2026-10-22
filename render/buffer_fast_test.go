@@ -54,3 +54,46 @@ func TestReplacementFitsMatchesReference(t *testing.T) {
 		}
 	}
 }
+
+// In-place Resize against the original allocate-and-copy version over chains
+// of random sizes, so reused capacity sees every narrow/widen/grow/shrink mix.
+func TestResizeMatchesReference(t *testing.T) {
+	reference := func(b *Buffer, width, height int) *Buffer {
+		r := &Buffer{width: width, height: height, cells: make([]Cell, width*height)}
+		fillCells(r.cells, BlankCell)
+		for y := 0; y < min(height, b.height); y++ {
+			copy(r.cells[y*width:y*width+min(width, b.width)], b.cells[y*b.width:])
+		}
+		r.repair()
+		return r
+	}
+	random := rand.New(rand.NewSource(59))
+	for chain := 0; chain < 300; chain++ {
+		b := NewBuffer(random.Intn(12), random.Intn(6))
+		for step := 0; step < 12; step++ {
+			canvas := NewCanvas(b)
+			for i := 0; i < b.width*b.height/2; i++ {
+				canvas.Text(random.Intn(b.width+1), random.Intn(b.height+1), []string{"a", "汉", "bc"}[random.Intn(3)], Style{Foreground: RGBColor(uint8(i), 0, 0)})
+			}
+			width, height := random.Intn(12), random.Intn(6)
+			want := reference(b, width, height)
+			b.Resize(width, height)
+			if !b.Equal(want) {
+				t.Fatalf("chain %d step %d: Resize(%d, %d) differs from reference", chain, step, width, height)
+			}
+			for _, cell := range b.cells[len(b.cells):cap(b.cells)] {
+				if cell != (Cell{}) {
+					t.Fatalf("chain %d step %d: stale cell %+v kept past the end", chain, step, cell)
+				}
+			}
+		}
+	}
+}
+
+func BenchmarkResizeAlternating(b *testing.B) {
+	buffer := NewBuffer(160, 53)
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		buffer.Resize(120+40*(i%2), 40+13*(i%2))
+	}
+}

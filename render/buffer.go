@@ -174,13 +174,19 @@ func (b *Buffer) Resize(width, height int) bool {
 	if height != 0 && width > int(^uint(0)>>1)/height {
 		panic("render: buffer dimensions overflow")
 	}
-	cells := make([]Cell, width*height)
-	fillCells(cells, BlankCell)
+	need := width * height
 	copyWidth, copyHeight := min(width, b.width), min(height, b.height)
-	for y := 0; y < copyHeight; y++ {
-		copy(cells[y*width:y*width+copyWidth], b.cells[y*b.width:y*b.width+copyWidth])
+	if need > cap(b.cells) {
+		cells := make([]Cell, need)
+		fillCells(cells, BlankCell)
+		for y := 0; y < copyHeight; y++ {
+			copy(cells[y*width:y*width+copyWidth], b.cells[y*b.width:y*b.width+copyWidth])
+		}
+		b.cells = cells
+	} else {
+		b.resizeInPlace(width, need, copyWidth, copyHeight)
 	}
-	b.width, b.height, b.cells = width, height, cells
+	b.width, b.height = width, height
 	b.caretActive = false
 	b.repair()
 	return true
@@ -370,6 +376,31 @@ func (b *Buffer) repair() {
 			}
 		}
 	}
+}
+
+// resizeInPlace reuses the backing array, so alternating sizes (a window
+// being dragged) stop allocating once the largest has been seen. Rows move
+// toward the front when narrowing and toward the back when widening; walking
+// in that direction never overwrites a source row before it has moved.
+func (b *Buffer) resizeInPlace(width, need, copyWidth, copyHeight int) {
+	cells := b.cells[:max(need, len(b.cells))]
+	move := func(y int) {
+		copy(cells[y*width:y*width+copyWidth], b.cells[y*b.width:y*b.width+copyWidth])
+		fillCells(cells[y*width+copyWidth:(y+1)*width], BlankCell)
+	}
+	if width <= b.width {
+		for y := 0; y < copyHeight; y++ {
+			move(y)
+		}
+	} else {
+		for y := copyHeight - 1; y >= 0; y-- {
+			move(y)
+		}
+	}
+	fillCells(cells[copyHeight*width:need], BlankCell)
+	// Drop grapheme and link references past the new end.
+	clear(cells[need:])
+	b.cells = cells[:need]
 }
 
 // fillCells doubles the filled prefix with copy: a few bulk moves replace one

@@ -76,3 +76,13 @@ func benchmarkScene(b *testing.B, kind string) {
 func BenchmarkSceneList120x40(b *testing.B)   { benchmarkScene(b, "list") }
 func BenchmarkSceneEGC120x40(b *testing.B)    { benchmarkScene(b, "egc") }
 func BenchmarkSceneStatic120x40(b *testing.B) { benchmarkScene(b, "static") }
+
+// BenchmarkSceneResize120x40 alternates 120x40 and 160x53 like the harness's
+// resize scene, redrawing the static rows at every size.
+func BenchmarkSceneResize120x40(b *testing.B) {
+	script := make([]event.Event, 40)
+	for i := range script {
+		script[i] = event.ResizeTo(120+40*(1-i%2), 40+13*(1-i%2))
+	}
+	Benchmark(b, 120, 40, func() lux.Model { return newSceneModel("static", 53) }, script)
+}

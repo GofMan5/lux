@@ -30,6 +30,12 @@ semver: breaking changes land only in a new major.
   from 4.0 ms to 0.6 ms on a static screen, and from 3.5 ms to 1.5 ms on
   emoji- and CJK-heavy text. `Canvas.Text` is 2.5–3.9x faster, word and
   character wrapping 3.0–3.7x, `TextArea`/`Input` drawing 2.6–3.5x.
+- Resizing no longer allocates once the largest size has been seen.
+  `Buffer.Resize` reuses the backing array and moves rows in place, so a
+  window being dragged back and forth stops churning the heap: 230 → 40 µs
+  and 532 KB → 0 per resize at 160x53. On a quick Linux comparison run, lux
+  has the lowest CPU per resize frame of the three lanes and a 0.9 ms
+  latency p50 against 5.8 ms for Bubble Tea.
 
 ## [0.2.0-rc.1] - 2026-10-22
 

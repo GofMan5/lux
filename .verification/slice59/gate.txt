@@ -1,0 +1,17 @@
+## gofmt
+## vet
+vet ok
+vet linux ok
+vet darwin ok
+vet freebsd ok
+linux terminal test build ok
+## test -race
+test exit 0
+## lint
+windows: 0 issues.
+linux: 0 issues.
+darwin: 0 issues.
+## nested (GOOS=linux vet)
+e2e ok
+examples/07-ssh ok
+benchmarks ok

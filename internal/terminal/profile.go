@@ -65,8 +65,9 @@ func (b *ProfileBackend) PresentWithTiming(ctx context.Context, frame *render.Bu
 	b.scratch = appendFrame(b.scratch[:0], frame, b.previous, b.features.Color, b.features.ScrollRegions, b.features.SynchronizedOutput, false)
 	timing.DiffEncode = time.Since(started)
 	b.Bytes += len(b.scratch)
-	width, height := frame.Size()
-	if previousWidth, previousHeight := b.previous.Size(); b.previous == nil || previousWidth != width || previousHeight != height {
+	// Same model update as the real backend's present, so profiles see its
+	// allocations: a resize reuses the previous frame's capacity.
+	if b.previous == nil {
 		b.previous = frame.Clone()
 	} else {
 		b.previous.CopyFrom(frame)

@@ -1,0 +1,24 @@
+b BenchmarkResizeAlternating-12    	   20000	    233298 ns/op	  532515 B/op	       1 allocs/op
+b BenchmarkSceneResize120x40-12    	      10	 425989150 ns/op	      7720 bytes/frame	      1008 clock-step-us	      1146 encode-p95-us	        41.00 frames/op	       521.3 prep-p50-us	      1794 prep-p95-us	      3038 prep-p99-us	         0 update-p95-us	      1015 view-p95-us	23708284 B/op	     457 allocs/op
+a BenchmarkResizeAlternating-12    	   20000	     42131 ns/op	      33 B/op	       0 allocs/op
+a BenchmarkSceneResize120x40-12    	      10	 443698020 ns/op	      7720 bytes/frame	      1001 clock-step-us	      1067 encode-p95-us	        41.00 frames/op	      1007 prep-p50-us	      2248 prep-p95-us	      3481 prep-p99-us	         0 update-p95-us	      1512 view-p95-us	23708692 B/op	     456 allocs/op
+b BenchmarkResizeAlternating-12    	   20000	    274990 ns/op	  532515 B/op	       1 allocs/op
+b BenchmarkSceneResize120x40-12    	      10	 445949780 ns/op	      7720 bytes/frame	       535.2 clock-step-us	      1017 encode-p95-us	        41.00 frames/op	       630.7 prep-p50-us	      2008 prep-p95-us	      2516 prep-p99-us	         0 update-p95-us	      1094 view-p95-us	23708504 B/op	     455 allocs/op
+a BenchmarkResizeAlternating-12    	   20000	     42859 ns/op	      33 B/op	       0 allocs/op
+a BenchmarkSceneResize120x40-12    	      10	 171978940 ns/op	      7720 bytes/frame	      1009 clock-step-us	      1013 encode-p95-us	        41.00 frames/op	       507.0 prep-p50-us	      1519 prep-p95-us	      2105 prep-p99-us	         0 update-p95-us	      1012 view-p95-us	23707860 B/op	     453 allocs/op
+b BenchmarkResizeAlternating-12    	   20000	    232857 ns/op	  532515 B/op	       1 allocs/op
+b BenchmarkSceneResize120x40-12    	      10	 204005080 ns/op	      7720 bytes/frame	      1000 clock-step-us	      1011 encode-p95-us	        41.00 frames/op	       509.7 prep-p50-us	      1672 prep-p95-us	      2111 prep-p99-us	         0 update-p95-us	      1011 view-p95-us	23708684 B/op	     460 allocs/op
+a BenchmarkResizeAlternating-12    	   20000	     40946 ns/op	      33 B/op	       0 allocs/op
+a BenchmarkSceneResize120x40-12    	      10	 236293670 ns/op	      7720 bytes/frame	       999.2 clock-step-us	      1013 encode-p95-us	        41.00 frames/op	       519.9 prep-p50-us	      1680 prep-p95-us	      2535 prep-p99-us	         0 update-p95-us	      1037 view-p95-us	23708744 B/op	     457 allocs/op
+b BenchmarkResizeAlternating-12    	   20000	    226201 ns/op	  532515 B/op	       1 allocs/op
+b BenchmarkSceneResize120x40-12    	      10	 189587450 ns/op	      7720 bytes/frame	      1508 clock-step-us	      1060 encode-p95-us	        41.00 frames/op	       509.9 prep-p50-us	      1567 prep-p95-us	      2156 prep-p99-us	         0 update-p95-us	      1012 view-p95-us	23708369 B/op	     454 allocs/op
+a BenchmarkResizeAlternating-12    	   20000	     39029 ns/op	      33 B/op	       0 allocs/op
+a BenchmarkSceneResize120x40-12    	      10	 168924850 ns/op	      7720 bytes/frame	      1012 clock-step-us	      1045 encode-p95-us	        41.00 frames/op	       508.4 prep-p50-us	      1518 prep-p95-us	      1702 prep-p99-us	         0 update-p95-us	      1012 view-p95-us	23708083 B/op	     454 allocs/op
+b BenchmarkResizeAlternating-12    	   20000	    223555 ns/op	  532515 B/op	       1 allocs/op
+b BenchmarkSceneResize120x40-12    	      10	 200501560 ns/op	      7720 bytes/frame	       575.1 clock-step-us	      1012 encode-p95-us	        41.00 frames/op	       507.3 prep-p50-us	      1522 prep-p95-us	      2068 prep-p99-us	         0 update-p95-us	      1011 view-p95-us	23708678 B/op	     456 allocs/op
+a BenchmarkResizeAlternating-12    	   20000	     38107 ns/op	      33 B/op	       0 allocs/op
+a BenchmarkSceneResize120x40-12    	      10	 168519350 ns/op	      7720 bytes/frame	       725.0 clock-step-us	      1012 encode-p95-us	        41.00 frames/op	       507.6 prep-p50-us	      1519 prep-p95-us	      1823 prep-p99-us	         0 update-p95-us	      1010 view-p95-us	23708147 B/op	     455 allocs/op
+b BenchmarkResizeAlternating-12    	   20000	    233147 ns/op	  532515 B/op	       1 allocs/op
+b BenchmarkSceneResize120x40-12    	      10	 264603770 ns/op	      7720 bytes/frame	       997.5 clock-step-us	      1012 encode-p95-us	        41.00 frames/op	       507.3 prep-p50-us	      1573 prep-p95-us	      2529 prep-p99-us	         0 update-p95-us	      1013 view-p95-us	23708598 B/op	     455 allocs/op
+a BenchmarkResizeAlternating-12    	   20000	     40922 ns/op	      33 B/op	       0 allocs/op
+a BenchmarkSceneResize120x40-12    	      10	 410725280 ns/op	      7720 bytes/frame	      1746 clock-step-us	      1015 encode-p95-us	        41.00 frames/op	       508.9 prep-p50-us	      1556 prep-p95-us	      2120 prep-p99-us	         0 update-p95-us	      1016 view-p95-us	23707572 B/op	     454 allocs/op
