@@ -184,7 +184,10 @@ func (app *studio) Update(next event.Event) lux.Command {
 	case event.Message:
 		return app.message(next)
 	}
-	if action, handled := app.ui.Handle(next); handled {
+	action, handled := app.ui.Handle(next)
+	// A dialog closed since the last presented frame keeps swallowing keys
+	// until the next frame commits; with no dialog open they belong to key().
+	if handled && (next.Kind != event.Key || action.Target != "" || app.help || app.confirm != "") {
 		return app.route(action)
 	}
 	if next.Kind == event.Key && next.Key.Action != event.ActionRelease {
@@ -279,10 +282,7 @@ func (app *studio) route(action ui.Action) lux.Command {
 			app.palette = false
 		}
 	case "palette-query":
-		if app.query.Apply(action) {
-			app.commands = ui.ListState{}
-		}
-		return app.paletteKey(action.Event)
+		return app.paletteInput(action)
 	case "palette-list":
 		count := len(app.matches())
 		if _, activated := app.commands.Apply(action, count, max(action.Bounds.H, 1)); activated {
@@ -417,7 +417,17 @@ func keyCode(action ui.Action) event.KeyCode {
 // navigation while the query field keeps focus.
 func (app *studio) key(key event.KeyEvent) lux.Command {
 	if app.palette {
-		return app.paletteKey(event.Event{Kind: event.Key, Key: key})
+		// Keys typed before the palette's first frame is presented reach
+		// here, not the query field; they still edit, navigate or close it.
+		return app.paletteInput(ui.Action{Kind: ui.Input, Event: event.Event{Kind: event.Key, Key: key}})
+	}
+	if app.help || app.confirm != "" {
+		// Likewise for a dialog not presented yet: Esc closes it, and other
+		// keys must not act on the page underneath.
+		if key.Code == event.KeyEscape {
+			app.help, app.confirm = false, ""
+		}
+		return nil
 	}
 	switch {
 	case key.Rune == 'q' && key.Mod == 0, key.Is(event.KeyRune, event.ModCtrl) && key.Rune == 'c':
@@ -683,14 +693,20 @@ func (app *studio) togglePalette() {
 	app.commands = ui.ListState{}
 }
 
-// paletteKey moves the palette selection and runs it on Enter while the
-// query field keeps the keyboard.
-func (app *studio) paletteKey(next event.Event) lux.Command {
-	if next.Kind != event.Key {
+// paletteInput edits the query, moves the selection and runs it on Enter
+// while the query field keeps the keyboard; Esc closes the palette.
+func (app *studio) paletteInput(action ui.Action) lux.Command {
+	if app.query.Apply(action) {
+		app.commands = ui.ListState{}
+	}
+	next := action.Event
+	if next.Kind != event.Key || next.Key.Action == event.ActionRelease {
 		return nil
 	}
 	count := len(app.matches())
 	switch next.Key.Code {
+	case event.KeyEscape:
+		app.palette = false
 	case event.KeyUp:
 		app.commands.Selected = max(app.commands.Selected-1, 0)
 	case event.KeyDown:

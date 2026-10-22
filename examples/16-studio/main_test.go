@@ -166,9 +166,44 @@ func TestPaletteFuzzyRunsCommand(t *testing.T) {
 	if rows := screen(app, 120, 36); !contains(rows, "Go to Files") || contains(rows, "Go to Motion") {
 		t.Fatalf("palette list not filtered:\n%s", strings.Join(rows, "\n"))
 	}
-	app.paletteKey(event.KeyPress(event.KeyEnter, 0))
+	app.paletteInput(ui.Action{Kind: ui.Input, Event: event.KeyPress(event.KeyEnter, 0)})
 	if app.palette || app.tabs.Selected != pageFiles {
 		t.Fatalf("Enter did not run the command: palette=%v page=%d", app.palette, app.tabs.Selected)
+	}
+}
+
+// TestPaletteKeysBeforeItsFirstFrame types into a palette whose modal has
+// not been presented yet, so ui.Handle routes nothing and keys fall through.
+func TestPaletteKeysBeforeItsFirstFrame(t *testing.T) {
+	app := newStudio()
+	app.route(ui.Action{Target: "open-palette", Kind: ui.Activate})
+	for _, r := range "gtf" {
+		app.Update(event.RuneKey(r, 0))
+	}
+	if app.query.Value != "gtf" || app.tabs.Selected != pageDashboard {
+		t.Fatalf("early keys lost: query=%q page=%d", app.query.Value, app.tabs.Selected)
+	}
+	app.Update(event.KeyPress(event.KeyEscape, 0))
+	if app.palette {
+		t.Fatal("Esc did not close an unpresented palette")
+	}
+	if app.Update(event.RuneKey('d', 0)); !app.deploy.running {
+		t.Fatal("d after closing the palette did not reach the dashboard")
+	}
+}
+
+// TestDialogKeysBeforeItsFirstFrame keeps keys off the page under a help
+// dialog that has not been presented, and lets Esc close it.
+func TestDialogKeysBeforeItsFirstFrame(t *testing.T) {
+	app := newStudio()
+	app.Update(event.RuneKey('?', 0))
+	app.Update(event.RuneKey('2', 0))
+	if app.Update(event.RuneKey('d', 0)); app.tabs.Selected != pageDashboard || app.deploy.running {
+		t.Fatalf("keys leaked under help: page=%d deploy=%v", app.tabs.Selected, app.deploy.running)
+	}
+	app.Update(event.KeyPress(event.KeyEscape, 0))
+	if app.Update(event.RuneKey('2', 0)); app.help || app.tabs.Selected != pageServices {
+		t.Fatalf("Esc did not close help: help=%v page=%d", app.help, app.tabs.Selected)
 	}
 }
 
