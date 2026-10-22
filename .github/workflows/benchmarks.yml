@@ -1,0 +1,35 @@
+name: Comparative benchmarks
+
+# Manual only: the full suite is ~1 h and shared runners are noisy, so the
+# numbers are compared within one run, never against the committed report.
+on:
+  workflow_dispatch:
+    inputs:
+      args:
+        description: "benchmarks/run.sh flags (e.g. -quick, -scenes resize,static)"
+        default: "-quick"
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: lux vs tea vs tview (ubuntu)
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      # The documented one-command run, so CI and the README cannot drift.
+      - name: Run the suite
+        env:
+          ARGS: ${{ inputs.args }}
+        run: |
+          docker run --rm -v "$PWD":/src -w /src -e BENCH_IMAGE=golang:1.26-alpine \
+            golang:1.26-alpine sh benchmarks/run.sh $ARGS
+      - name: Report
+        run: cat benchmarks/results/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results
+          retention-days: 30
