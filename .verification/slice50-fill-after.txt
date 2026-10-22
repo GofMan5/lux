@@ -1,0 +1,24 @@
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkCanvasFill/clear-120x40-12         	   53341	     22069 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/clear-120x40-12         	   52768	     22181 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/clear-120x40-12         	   54506	     22598 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/clear-120x40-12         	   51140	     22111 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/clear-120x40-12         	   53055	     22129 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/clear-120x40-12         	   53982	     22540 ns/op	       7 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  220567	      5107 ns/op	       1 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  238386	      5065 ns/op	       1 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  235474	      5290 ns/op	       1 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  219964	      5122 ns/op	       1 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  225262	      5374 ns/op	       1 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  229008	      5058 ns/op	       1 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    8456	    147520 ns/op	      45 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    8480	    154755 ns/op	      45 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    8481	    148829 ns/op	      45 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    8731	    150750 ns/op	      44 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    8372	    157227 ns/op	      45 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    6862	    149637 ns/op	      56 B/op	       0 allocs/op
+PASS
+ok  	github.com/GofMan5/lux/render	23.824s

@@ -1,0 +1,26 @@
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/render
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+                            │ .verification/slice50-fill-before.txt │ .verification/slice50-fill-after.txt │
+                            │                sec/op                 │    sec/op      vs base               │
+CanvasFill/clear-120x40-12                            820.90µ ± 24%     22.16µ ± 2%  -97.30% (p=0.002 n=6)
+CanvasFill/panel-clipped-12                          273.703µ ± 15%     5.115µ ± 5%  -98.13% (p=0.002 n=6)
+CanvasFill/wide-120x40-12                              696.8µ ± 13%     150.2µ ± 5%  -78.45% (p=0.002 n=6)
+geomean                                                539.0µ           25.72µ       -95.23%
+
+                            │ .verification/slice50-fill-before.txt │ .verification/slice50-fill-after.txt │
+                            │                 B/op                  │     B/op       vs base               │
+CanvasFill/clear-120x40-12                            229.000 ± 19%     7.000 ±  0%  -96.94% (p=0.002 n=6)
+CanvasFill/panel-clipped-12                            81.500 ± 17%     1.000 ±  0%  -98.77% (p=0.002 n=6)
+CanvasFill/wide-120x40-12                              207.50 ± 15%     45.00 ± 24%  -78.31% (p=0.002 n=6)
+geomean                                                 157.0           6.804        -95.67%
+
+                            │ .verification/slice50-fill-before.txt │ .verification/slice50-fill-after.txt │
+                            │               allocs/op               │  allocs/op    vs base                │
+CanvasFill/clear-120x40-12                             0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+CanvasFill/panel-clipped-12                            0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+CanvasFill/wide-120x40-12                              0.000 ± 0%       0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                                                           ²                 +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

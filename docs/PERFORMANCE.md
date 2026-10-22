@@ -474,12 +474,58 @@ Reproduce the widget calibration with:
 go test ./ui -run '^TestWidgetDrawAllocationBudgets$' -count=5 -v
 ```
 
-Still open in stage 5: phase-level profiling on reference application flows,
-p95 frame preparation excluding flush, and long-session bounded-memory
-checks. The comparative harness already publishes per-present process-CPU
-p50/p95/p99; those include in-process background work and are not a substitute
-for preparation-only timing. Existing dirty-row/diff mechanisms do not imply
-a need for a new damage-tracking API; add one only if profiling warrants it.
+## Preparation-only frame profile on reference flows
+
+`lux.Metrics` carries per-frame phases (`UpdateTime`, `ViewTime`,
+`DiffEncodeTime`, `EncodeTime`, `FlushTime`) and `PreparationTime`, their sum
+without flush; `Frame.OnPresentedWithMetrics` reports them for exactly the
+frame that reached the terminal. The internal `phaseprofile` package drives a
+real model through the real runtime against an in-memory backend that
+diff-encodes every frame like an interactive terminal (true color,
+synchronized output, scroll regions) and discards the bytes, so flush is zero
+and one scripted event is delivered per presented frame. Four reference apps
+ship a scripted `BenchmarkPreparation120x40`:
+
+```sh
+cd examples && go test -p 1 -run '^$' -bench Preparation120x40 -benchtime 20x ./08-tour ./09-procs ./14-workspace ./15-jobs
+```
+
+Each reports `prep-p50/p95/p99-us`, `update/view/encode-p95-us`,
+`bytes/frame`, `frames/op` and `clock-step-us`. Phases are timed with
+`time.Now`; on the Windows reference host its step is 0.5–1 ms, so phases
+shorter than a step read 0 and p95 there is an upper bound quantized to the
+step. Linux steps are tens of nanoseconds.
+
+The first profile showed `Canvas.Fill` (and `Clear`, built on it) at 43% of
+procs CPU: every cell re-segmented and re-measured the same grapheme through
+`Put`. Fill now measures once; single-cell graphemes fill each row's visible
+span as a slice and route only the two end cells through the per-cell
+wide-cell repair, which is cell-for-cell identical to the old per-cell loop
+(`TestFillMatchesPerCellReference`, 4000 randomized buffers with wide cells,
+subviews and clips; both mutants that skip an end cell fail it).
+`BenchmarkCanvasFill`: Clear 120×40 821→22 µs (−97.3%), clipped panel
+274→5 µs (−98.1%), wide-grapheme fill 697→150 µs (−78.5%), 0 allocs.
+
+Interleaved A/B on the reference flows, 3 rounds × 10 runs, i5-10400F,
+Windows, Go 1.25.5, 120×40, ms:
+
+| Flow | p95 before | p95 after | p99 before | p99 after |
+| --- | ---: | ---: | ---: | ---: |
+| tour (9 pages, overlays) | 2.01 | 1.04 | 3.00 | 1.30 |
+| procs (500 rows, filter) | 2.15 | 1.01 | 3.14 | 1.13 |
+| workspace (editor, palette) | 1.67 | 0.51 | 2.11 | 0.67 |
+| jobs (log follow, filters) | 1.39 | 0.51 | 2.02 | 0.91 |
+
+Every flow's preparation p95 is now within about one clock step of zero and
+far inside the 8 ms budget. Wire bytes per frame are unchanged. Absolute
+numbers move with host load (an earlier run on a host at 88% CPU load showed
+before-fix p95 of 4.5–16 ms), so compare only interleaved runs.
+
+Still open in stage 5: long-session bounded-memory checks and the final
+regression report. The comparative harness also publishes lux-lane
+`prep p50/p95/p99` beside per-present process-CPU, which includes in-process
+background work. Existing dirty-row/diff mechanisms do not imply a need for a
+new damage-tracking API; add one only if profiling warrants it.
 
 Until those steps are complete, describe LUX TUI as performance-oriented, not
 as the fastest TUI framework.

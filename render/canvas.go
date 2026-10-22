@@ -214,13 +214,38 @@ func (c *Canvas) Fill(rect Rect, grapheme string, style Style) {
 		return
 	}
 	rect = rect.Intersect(c.Bounds())
+	if width == 1 {
+		c.fillNarrow(rect, grapheme, style)
+		return
+	}
 	for y := rect.Y; y < rect.Bottom(); y++ {
 		for x := rect.X; x < rect.Right(); x += width {
 			if x+width <= rect.Right() {
-				c.Put(x, y, grapheme, style)
+				c.putMeasured(x, y, grapheme, width, style, Link{})
 			} else {
-				c.Put(x, y, " ", style)
+				c.putMeasured(x, y, " ", 1, style, Link{})
 			}
+		}
+	}
+}
+
+// fillNarrow gives a single-cell grapheme the same result as one putMeasured
+// per cell at slice-fill cost. Within a row's visible span only the two end
+// cells can be refused by wide-cell clip repair or blank a neighbor outside
+// the span, so they take putMeasured; every interior write always fits and
+// any wide cell it would erase is overwritten by the fill anyway.
+func (c *Canvas) fillNarrow(rect Rect, grapheme string, style Style) {
+	span := Rect{X: c.originX + rect.X, Y: c.originY + rect.Y, W: rect.W, H: rect.H}.Intersect(c.ClipRect())
+	if span.Empty() {
+		return
+	}
+	cell := Cell{Grapheme: grapheme, Width: 1, Style: style}
+	left, right := span.X-c.originX, span.Right()-1-c.originX
+	for y := span.Y; y < span.Bottom(); y++ {
+		c.putMeasured(left, y-c.originY, grapheme, 1, style, Link{})
+		if right > left {
+			fillCells(c.buffer.row(y)[span.X+1:span.Right()-1], cell)
+			c.putMeasured(right, y-c.originY, grapheme, 1, style, Link{})
 		}
 	}
 }

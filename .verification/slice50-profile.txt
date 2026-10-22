@@ -1,0 +1,20 @@
+pkg: github.com/GofMan5/lux/examples/08-tour
+BenchmarkPreparation120x40-12 	 20	 532993550 ns/op	 2003 bytes/frame	 1694 clock-step-us	 1015 encode-p95-us	 51.00 frames/op	 2009 prep-p50-us	 5039 prep-p95-us	 10173 prep-p99-us	 0 update-p95-us	 4516 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 584395250 ns/op	 2004 bytes/frame	 1006 clock-step-us	 1376 encode-p95-us	 51.00 frames/op	 2012 prep-p50-us	 5544 prep-p95-us	 15977 prep-p99-us	 0 update-p95-us	 4526 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 418847545 ns/op	 2005 bytes/frame	 694.1 clock-step-us	 1035 encode-p95-us	 51.00 frames/op	 2007 prep-p50-us	 4538 prep-p95-us	 14025 prep-p99-us	 0 update-p95-us	 4010 view-p95-us
+ok 	github.com/GofMan5/lux/examples/08-tour	31.921s
+pkg: github.com/GofMan5/lux/examples/09-procs
+BenchmarkPreparation120x40-12 	 20	 607379775 ns/op	 1754 bytes/frame	 1002 clock-step-us	 2329 encode-p95-us	 37.00 frames/op	 4126 prep-p50-us	 11244 prep-p95-us	 30032 prep-p99-us	 0 update-p95-us	 9528 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 866972520 ns/op	 1649 bytes/frame	 998.7 clock-step-us	 3523 encode-p95-us	 37.00 frames/op	 4398 prep-p50-us	 16160 prep-p95-us	 51577 prep-p99-us	 0 update-p95-us	 11652 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 477614330 ns/op	 1668 bytes/frame	 544.1 clock-step-us	 1515 encode-p95-us	 37.00 frames/op	 3079 prep-p50-us	 7008 prep-p95-us	 17531 prep-p99-us	 0 update-p95-us	 5974 view-p95-us
+ok 	github.com/GofMan5/lux/examples/09-procs	42.603s
+pkg: github.com/GofMan5/lux/examples/14-workspace
+BenchmarkPreparation120x40-12 	 20	 471050160 ns/op	 288.1 bytes/frame	 1506 clock-step-us	 1008 encode-p95-us	 49.00 frames/op	 1980 prep-p50-us	 4521 prep-p95-us	 9881 prep-p99-us	 0 update-p95-us	 4006 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 484756335 ns/op	 288.2 bytes/frame	 522.2 clock-step-us	 1010 encode-p95-us	 49.00 frames/op	 1038 prep-p50-us	 2636 prep-p95-us	 7320 prep-p99-us	 0 update-p95-us	 2515 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 240641840 ns/op	 288.1 bytes/frame	 7558 clock-step-us	 1008 encode-p95-us	 49.00 frames/op	 1258 prep-p50-us	 3682 prep-p95-us	 7520 prep-p99-us	 0 update-p95-us	 3510 view-p95-us
+ok 	github.com/GofMan5/lux/examples/14-workspace	24.986s
+pkg: github.com/GofMan5/lux/examples/15-jobs
+BenchmarkPreparation120x40-12 	 20	 293768545 ns/op	 397.2 bytes/frame	 1008 clock-step-us	 1009 encode-p95-us	 28.05 frames/op	 1049 prep-p50-us	 4161 prep-p95-us	 11770 prep-p99-us	 0 update-p95-us	 3638 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 377199650 ns/op	 397.2 bytes/frame	 1007 clock-step-us	 1009 encode-p95-us	 28.00 frames/op	 1013 prep-p50-us	 3518 prep-p95-us	 9475 prep-p99-us	 0 update-p95-us	 2533 view-p95-us
+BenchmarkPreparation120x40-12 	 20	 220627495 ns/op	 396.7 bytes/frame	 572.0 clock-step-us	 1008 encode-p95-us	 28.00 frames/op	 1040 prep-p50-us	 2754 prep-p95-us	 6435 prep-p99-us	 0 update-p95-us	 2193 view-p95-us
+ok 	github.com/GofMan5/lux/examples/15-jobs	18.607s

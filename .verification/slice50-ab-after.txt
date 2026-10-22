@@ -1,0 +1,60 @@
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/08-tour
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 211038770 ns/op	      1998 bytes/frame	      1005 clock-step-us	       789.1 encode-p95-us	        51.00 frames/op	         0 prep-p50-us	      1038 prep-p95-us	      1297 prep-p99-us	         0 update-p95-us	       544.4 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/09-procs
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 152612540 ns/op	      1530 bytes/frame	      1002 clock-step-us	       526.6 encode-p95-us	        37.00 frames/op	         0 prep-p50-us	      1006 prep-p95-us	      1113 prep-p99-us	         0 update-p95-us	       669.5 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/14-workspace
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 201269560 ns/op	       288.1 bytes/frame	       526.7 clock-step-us	         0 encode-p95-us	        49.00 frames/op	         0 prep-p50-us	       505.1 prep-p95-us	       673.4 prep-p99-us	         0 update-p95-us	         0 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/15-jobs
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 113756550 ns/op	       396.3 bytes/frame	       785.8 clock-step-us	       507.1 encode-p95-us	        28.00 frames/op	         0 prep-p50-us	       508.5 prep-p95-us	       886.1 prep-p99-us	         0 update-p95-us	         0 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/08-tour
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 210826770 ns/op	      1996 bytes/frame	      1000 clock-step-us	       728.6 encode-p95-us	        51.00 frames/op	         0 prep-p50-us	      1010 prep-p95-us	      1168 prep-p99-us	         0 update-p95-us	       534.8 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/09-procs
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 151946790 ns/op	      1530 bytes/frame	      1000 clock-step-us	       539.5 encode-p95-us	        37.00 frames/op	         0 prep-p50-us	      1008 prep-p95-us	      1514 prep-p99-us	         0 update-p95-us	       663.5 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/14-workspace
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 201701640 ns/op	       288.1 bytes/frame	      1548 clock-step-us	         0 encode-p95-us	        49.00 frames/op	         0 prep-p50-us	       505.0 prep-p95-us	       577.0 prep-p99-us	         0 update-p95-us	         0 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/15-jobs
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 113757720 ns/op	       396.3 bytes/frame	       999.9 clock-step-us	         0 encode-p95-us	        28.00 frames/op	         0 prep-p50-us	       505.3 prep-p95-us	       914.7 prep-p99-us	         0 update-p95-us	         0 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/08-tour
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 211704350 ns/op	      1997 bytes/frame	      1008 clock-step-us	      1006 encode-p95-us	        51.00 frames/op	         0 prep-p50-us	      1109 prep-p95-us	      2011 prep-p99-us	         0 update-p95-us	      1010 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/09-procs
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 152585230 ns/op	      1530 bytes/frame	      1000 clock-step-us	       535.2 encode-p95-us	        37.00 frames/op	         0 prep-p50-us	      1007 prep-p95-us	      1129 prep-p99-us	         0 update-p95-us	       581.7 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/14-workspace
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 201712560 ns/op	       288.1 bytes/frame	       999.3 clock-step-us	         0 encode-p95-us	        49.00 frames/op	         0 prep-p50-us	       521.7 prep-p95-us	      1008 prep-p99-us	         0 update-p95-us	         0 view-p95-us
+goos: windows
+goarch: amd64
+pkg: github.com/GofMan5/lux/examples/15-jobs
+cpu: Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz
+BenchmarkPreparation120x40-12    	      10	 113902470 ns/op	       396.3 bytes/frame	      1002 clock-step-us	         0 encode-p95-us	        28.00 frames/op	         0 prep-p50-us	         0 prep-p95-us	      1021 prep-p99-us	         0 update-p95-us	         0 view-p95-us
