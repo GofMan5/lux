@@ -62,6 +62,9 @@ type scriptedSource struct {
 	calls     int
 	filterLog []string
 	killDelay time.Duration
+	// killGate, when set, holds every Kill until it is closed, so a test
+	// can observe the in-flight state before the outcome replaces it.
+	killGate  chan struct{}
 	killErr   error
 	kills     []int
 	cancelled atomic.Int32
@@ -111,6 +114,14 @@ func (s *scriptedSource) Kill(ctx context.Context, pid int) error {
 	s.mu.Lock()
 	s.kills = append(s.kills, pid)
 	s.mu.Unlock()
+	if s.killGate != nil {
+		select {
+		case <-s.killGate:
+		case <-ctx.Done():
+			s.cancelled.Add(1)
+			return ctx.Err()
+		}
+	}
 	if s.killDelay > 0 {
 		timer := time.NewTimer(s.killDelay)
 		defer timer.Stop()
@@ -450,7 +461,10 @@ func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
 		scriptStep{delay: 40 * time.Millisecond, rows: full},  // initial load, empty filter
 		scriptStep{delay: 30 * time.Millisecond, rows: after}, // post-kill auto-refresh
 	)
-	source.killDelay = 30 * time.Millisecond
+	// The gate, not a delay, keeps the kill in flight: under a loaded -race
+	// run a 30 ms kill finished before any frame committed "terminating",
+	// and the transient beacon this test waits for was never sent.
+	source.killGate = make(chan struct{})
 	backend := &interactiveBackend{events: make(chan event.Event, 32), frames: make(chan *render.Buffer, 32)}
 	app := newProcsApp(source, make(chan procsState, 64), make(chan procsState, 64))
 	done := make(chan error, 1)
@@ -512,6 +526,7 @@ func TestProcsEndToEndKillConfirmCancelAndExecute(t *testing.T) {
 	waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.confirm == 0 && strings.Contains(state.notice, "terminating pid 1000")
 	})
+	close(source.killGate)
 	final := waitCommittedWhere(t, app, done, func(state procsState) bool {
 		return state.phase == phaseData && state.rows == 39 && strings.Contains(state.notice, "terminated pid 1000")
 	})
