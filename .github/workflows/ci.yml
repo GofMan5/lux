@@ -98,6 +98,27 @@ jobs:
       - run: go vet ./...
       - run: go test -race ./...
 
+  soak:
+    name: Long-session memory (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - run: go mod download
+      # Soaks drive reference apps for thousands of paced frames and compare
+      # live heap after GC; race instrumentation would distort both.
+      - name: Run reference-app soaks
+        env:
+          LUX_SOAK: "1"
+        run: go test -count=1 -run '^TestLongSessionMemoryIsBounded$' -v ./examples/...
+
   ssh-example:
     name: SSH example (${{ matrix.os }})
     strategy:

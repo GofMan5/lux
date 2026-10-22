@@ -274,6 +274,14 @@ Border не используется по умолчанию для каждог
 - Ограничение измерения: на Windows-хосте шаг `time.Now` 0.5–1 ms — фазы короче шага читаются 0, p95 — верхняя оценка, квантованная шагом (отсюда метрика `clock-step-us`). Абсолютные числа зависят от нагрузки хоста (при 88% CPU до-фикс p95 был 4.5–16 ms) — сравнивать только чередующиеся прогоны; Linux-прогон даёт sub-µs шаг.
 - Поведение byte-identical (эквивалентность по ячейкам) — CHANGELOG не затронут. Остаются long-session bounded memory и итоговый regression report.
 
+**Этап 5, Long-session bounded memory на reference flows (slice 51):**
+
+- `phaseprofile.Soak` гоняет модель через N повторов цикла событий (один event на presented кадр) и после каждого завершённого цикла снимает live heap после `runtime.GC()` и число горутин. `CheckBounded` падает, если heap от конца warmup до конца прогона вырос больше slack или выросли горутины. Тест механизма: модель, удерживающая 1 KiB на клавишу, даёт 40 samples и рост ≥ 70 KiB; counter-модель проходит `CheckBounded`.
+- `TestLongSessionMemoryIsBounded` в 08-tour (60 циклов: все страницы, focus, оверлеи), 09-procs, 14-workspace (ввод/стирание строки, palette, undo history до своего cap) и 15-jobs (по 150 циклов); каждый цикл ещё и ресайзит 100×30 → 160×50 → 120×40. Рост после warmup: tour +21 KB / 49 циклов, procs +54 KB / 129, workspace +9 KB / 109, jobs +30 KB / 129; горутины 4 → 4 (`.verification/slice51-soak.txt`).
+- Остаточный рост разобран heap-профилем (MemProfileRate=1, diff циклов 50 и 600 procs): test double `scriptedSource.filterLog`, строки приложения, сами samples, `runtime.malg` и pprof; framework-владельцев (очереди, кэши, history) в нём нет, темп падает (~250 → 140 B/цикл). Negative control: утечка 64 B на event в `applyEvent` ловится во всех четырёх тестах (+240…293 KB при slack 128 KB).
+- Soak — тысячи кадров с pacing 240 FPS (15–25 s на приложение), поэтому opt-in через `LUX_SOAK=1`: обычный и `-race -count=25` прогон examples их пропускает, CI-job `soak` (ubuntu + windows, Go stable, без race — инструментация искажает heap) запускает их явно.
+- Публичный API не менялся — CHANGELOG не затронут. Остаётся итоговый regression report.
+
 **Gate:** before/after profiles и повторяемые цифры; snapshots и error paths не ухудшились; никакого «оптимизировано» без проверки конечного сценария.
 
 ## 10. Этап 6 — дизайн-workbench и reference applications

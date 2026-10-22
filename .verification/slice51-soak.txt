@@ -1,0 +1,16 @@
+=== RUN   TestLongSessionMemoryIsBounded
+    profile_test.go:32: live heap after cycle 11: 2973888 B, after cycle 60: 2994912 B (peak 2994912 B); goroutines 4 -> 4
+--- PASS: TestLongSessionMemoryIsBounded (24.15s)
+ok  	github.com/GofMan5/lux/examples/08-tour	25.221s
+=== RUN   TestLongSessionMemoryIsBounded
+    profile_test.go:44: live heap after cycle 21: 2629592 B, after cycle 150: 2683656 B (peak 2683656 B); goroutines 4 -> 4
+--- PASS: TestLongSessionMemoryIsBounded (20.34s)
+ok  	github.com/GofMan5/lux/examples/09-procs	21.417s
+=== RUN   TestLongSessionMemoryIsBounded
+    profile_test.go:49: live heap after cycle 41: 2946584 B, after cycle 150: 2956056 B (peak 2956072 B); goroutines 4 -> 4
+--- PASS: TestLongSessionMemoryIsBounded (24.31s)
+ok  	github.com/GofMan5/lux/examples/14-workspace	25.374s
+=== RUN   TestLongSessionMemoryIsBounded
+    profile_test.go:32: live heap after cycle 21: 2472976 B, after cycle 150: 2503488 B (peak 2503488 B); goroutines 4 -> 4
+--- PASS: TestLongSessionMemoryIsBounded (14.73s)
+ok  	github.com/GofMan5/lux/examples/15-jobs	15.767s

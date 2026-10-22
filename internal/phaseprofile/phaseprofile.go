@@ -10,6 +10,8 @@ package phaseprofile
 import (
 	"context"
 	"math"
+	"os"
+	"runtime"
 	"slices"
 	"sync"
 	"testing"
@@ -99,6 +101,90 @@ func Benchmark(b *testing.B, width, height int, newModel func() lux.Model, scrip
 	b.ReportMetric(float64(len(pooled.Frames))/float64(b.N), "frames/op")
 	if len(pooled.Frames) > 0 {
 		b.ReportMetric(float64(pooled.Bytes)/float64(len(pooled.Frames)), "bytes/frame")
+	}
+}
+
+// Sample is the live heap and goroutine count after a forced GC.
+type Sample struct {
+	Heap       uint64
+	Goroutines int
+}
+
+// Soak drives model through cycles repetitions of cycle, one event per
+// presented frame, and samples after every completed cycle: all its events
+// were applied and their frames presented. A cycle should leave application
+// state where it found it, so growth across samples is framework-owned
+// queues, caches and history.
+func Soak(ctx context.Context, model lux.Model, width, height int, cycle []event.Event, cycles int) ([]Sample, error) {
+	script := make([]event.Event, 0, len(cycle)*cycles)
+	for range cycles {
+		script = append(script, cycle...)
+	}
+	backend := &soakBackend{ProfileBackend: terminal.NewProfileBackend(width, height, Features, script), cycle: len(cycle), last: len(script)}
+	err := lux.Run(ctx, model, lux.WithBackend(backend), lux.WithMaxFPS(240))
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	return backend.samples, err
+}
+
+// soakBackend samples between cycles. The embedded backend's NextEvent
+// returns only after the previous event's frame was presented, so call
+// k*cycle sees cycle k finished.
+type soakBackend struct {
+	*terminal.ProfileBackend
+	cycle, last, calls int
+	mu                 sync.Mutex
+	samples            []Sample
+}
+
+func (b *soakBackend) NextEvent(ctx context.Context) (event.Event, error) {
+	next, err := b.ProfileBackend.NextEvent(ctx)
+	if err != nil {
+		return next, err
+	}
+	b.calls++
+	if index := b.calls - 1; b.cycle > 0 && index > 0 && index <= b.last && index%b.cycle == 0 {
+		runtime.GC()
+		var stats runtime.MemStats
+		runtime.ReadMemStats(&stats)
+		b.mu.Lock()
+		b.samples = append(b.samples, Sample{Heap: stats.HeapAlloc, Goroutines: runtime.NumGoroutine()})
+		b.mu.Unlock()
+	}
+	return next, nil
+}
+
+// CheckBounded soaks a fresh model and fails tb when the live heap after the
+// first warmup cycles grows by more than slack bytes, or goroutines grow at
+// all, by the end of the run. Warmup absorbs caches and capped histories
+// filling to their bounds.
+//
+// Soaks run thousands of frames paced at 240 FPS, so they are opt-in:
+// set LUX_SOAK=1 (CI's soak job does, without race instrumentation).
+func CheckBounded(tb testing.TB, width, height int, model lux.Model, cycle []event.Event, cycles, warmup int, slack uint64) {
+	tb.Helper()
+	if os.Getenv("LUX_SOAK") == "" {
+		tb.Skip("long-session soak; set LUX_SOAK=1 to run")
+	}
+	samples, err := Soak(context.Background(), model, width, height, cycle, cycles)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	if len(samples) != cycles || warmup < 0 || warmup >= cycles {
+		tb.Fatalf("soak sampled %d of %d cycles (warmup %d)", len(samples), cycles, warmup)
+	}
+	base, end := samples[warmup], samples[len(samples)-1]
+	peak := base.Heap
+	for _, sample := range samples[warmup:] {
+		peak = max(peak, sample.Heap)
+	}
+	tb.Logf("live heap after cycle %d: %d B, after cycle %d: %d B (peak %d B); goroutines %d -> %d",
+		warmup+1, base.Heap, cycles, end.Heap, peak, base.Goroutines, end.Goroutines)
+	if end.Heap > base.Heap+slack {
+		tb.Fatalf("live heap grew %d B over %d cycles, slack %d B", end.Heap-base.Heap, cycles-warmup-1, slack)
+	}
+	if end.Goroutines > base.Goroutines {
+		tb.Fatalf("goroutines grew %d -> %d", base.Goroutines, end.Goroutines)
 	}
 }
 

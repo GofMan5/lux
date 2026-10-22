@@ -71,3 +71,34 @@ func TestClockStepIsPositiveAndBounded(t *testing.T) {
 		t.Fatalf("clock step = %v, want (0, 100ms]", step)
 	}
 }
+
+// leaky retains one KiB per key, the shape of an unbounded history.
+type leaky struct{ kept [][]byte }
+
+func (l *leaky) Update(next event.Event) lux.Command {
+	if next.Kind == event.Key {
+		l.kept = append(l.kept, make([]byte, 1024))
+	}
+	return nil
+}
+
+func (l *leaky) View(frame *lux.Frame) {
+	frame.Canvas.Text(0, 0, fmt.Sprint(len(l.kept)), render.Style{})
+}
+
+func TestSoakSamplesEveryCycleAndSeesGrowth(t *testing.T) {
+	cycle := []event.Event{event.RuneKey('a', 0), event.ResizeTo(100, 30), event.RuneKey('b', 0), event.ResizeTo(120, 40)}
+	model := &leaky{}
+	samples, err := Soak(context.Background(), model, 120, 40, cycle, 40)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 40 || len(model.kept) != 80 {
+		t.Fatalf("samples=%d keys=%d, want 40 and 80", len(samples), len(model.kept))
+	}
+	if grown := int64(samples[39].Heap) - int64(samples[4].Heap); grown < 35*2*1024 {
+		t.Fatalf("leak of 2 KiB/cycle grew live heap only %d B over 35 cycles", grown)
+	}
+	t.Setenv("LUX_SOAK", "1")
+	CheckBounded(t, 120, 40, &counter{}, cycle, 40, 4, 64<<10)
+}

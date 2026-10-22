@@ -521,8 +521,32 @@ far inside the 8 ms budget. Wire bytes per frame are unchanged. Absolute
 numbers move with host load (an earlier run on a host at 88% CPU load showed
 before-fix p95 of 4.5–16 ms), so compare only interleaved runs.
 
-Still open in stage 5: long-session bounded-memory checks and the final
-regression report. The comparative harness also publishes lux-lane
+### Long-session bounded memory on reference flows
+
+`TestLongSessionMemoryIsBounded` in the same four examples drives a cycle of
+events (pages and overlays, filters, editing and the palette, log follow) plus
+resizes to 100×30, 160×50 and back, one event per presented frame, and samples
+live heap after a forced GC at the end of every cycle. It fails if heap grows
+more than 128 KiB after warmup, or goroutines grow at all. Soaks are opt-in
+because each paces thousands of frames:
+
+```bash
+cd examples && LUX_SOAK=1 go test -count=1 -run LongSession -v ./08-tour ./09-procs ./14-workspace ./15-jobs
+```
+
+| Flow | Cycles after warmup | Live heap growth | Goroutines |
+| --- | ---: | ---: | ---: |
+| tour | 49 | +21 KB | 4 → 4 |
+| procs | 129 | +54 KB | 4 → 4 |
+| workspace | 109 | +9 KB | 4 → 4 |
+| jobs | 129 | +30 KB | 4 → 4 |
+
+A heap profile of the residual growth attributes it to the examples' scripted
+test doubles and application strings, not framework queues, caches or
+history; a 64-byte-per-event leak injected into the runtime fails all four
+tests. CI runs the soaks on Linux and Windows without race instrumentation.
+
+Still open in stage 5: the final regression report. The comparative harness also publishes lux-lane
 `prep p50/p95/p99` beside per-present process-CPU, which includes in-process
 background work. Existing dirty-row/diff mechanisms do not imply a need for a
 new damage-tracking API; add one only if profiling warrants it.

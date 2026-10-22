@@ -1,0 +1,22 @@
+## gofmt
+.verification\refactor44.go
+## vet
+vet ok
+## test
+?   	github.com/GofMan5/lux/examples/01-counter	[no test files]
+?   	github.com/GofMan5/lux/examples/02-animation	[no test files]
+?   	github.com/GofMan5/lux/examples/annex	[no test files]
+test exit 0
+## race/shuffle phaseprofile
+ok  	github.com/GofMan5/lux/internal/phaseprofile	49.551s
+ok  	github.com/GofMan5/lux/internal/terminal	13.994s
+## lint root
+0 issues.
+## lint examples
+0 issues.
+## cross
+cross done
+## nested
+e2e ok
+examples/07-ssh ok
+benchmarks ok
