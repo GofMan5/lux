@@ -115,6 +115,12 @@ func main() {
 model. Call `frame.RequestFrame()`, `RequestFrameAfter`, or `RequestFrameAt`
 only while animation is active; an idle application has no redraw ticker.
 
+Async work goes in a `Command`, which runs on its own goroutine and returns
+one event to `Update`; it should stop when its context is canceled, because
+`Run` cancels that context on return and does not wait. `Frame` is valid only
+during `View`, and `OnPresented` callbacks run on the presentation goroutine,
+so they must not touch model state.
+
 Run the checks:
 
 ```sh

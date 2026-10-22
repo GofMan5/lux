@@ -25,7 +25,9 @@ type Model interface {
 }
 
 // Command performs optional asynchronous work and returns one event. Commands
-// receive the application context and should honor its cancellation.
+// receive the application context and should honor its cancellation. Run does
+// not wait for commands: it cancels their context on every return path, and a
+// result that arrives after Run returned is discarded.
 type Command func(context.Context) event.Event
 
 // Emit turns a value into an immediate command.

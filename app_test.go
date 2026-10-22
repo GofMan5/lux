@@ -3,6 +3,7 @@ package lux
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -892,5 +893,70 @@ func TestCommandErrorStillTerminatesRun(t *testing.T) {
 	defer backend.mu.Unlock()
 	if !backend.closed {
 		t.Fatal("backend was not closed after the fatal command error")
+	}
+}
+
+// TestRunDoesNotWaitForCommands pins the cancellation contract: Run returns
+// without joining in-flight commands, every command's context is canceled
+// by then, and commands that ignore cancellation neither block Run nor leak
+// once they finish, because their late results are discarded. More late
+// commands run than the result queue holds, so a send that waited for a
+// reader would strand the overflow.
+func TestRunDoesNotWaitForCommands(t *testing.T) {
+	backend := newFakeBackend(24, 6)
+	canceled := make(chan error, 1)
+	release := make(chan struct{})
+	var finished sync.WaitGroup
+	model := &messageModel{
+		onResize: func() Command {
+			return func(ctx context.Context) event.Event {
+				<-ctx.Done()
+				canceled <- context.Cause(ctx)
+				return event.Event{Kind: event.Message}
+			}
+		},
+		onKey: func() Command {
+			finished.Add(1)
+			return func(context.Context) event.Event {
+				defer finished.Done()
+				<-release
+				return event.Event{Kind: event.Message, Data: appMessage{value: "late"}}
+			}
+		},
+	}
+	baseline := runtime.NumGoroutine()
+	done := make(chan error, 1)
+	go func() { done <- Run(context.Background(), model, WithBackend(backend)) }()
+	for range 100 {
+		backend.events <- event.RuneKey('x', 0)
+	}
+	backend.events <- event.KeyPress(event.KeyEscape, 0)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v; want a clean quit", err)
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("Run waited for commands that ignore cancellation")
+	}
+	select {
+	case cause := <-canceled:
+		if cause == nil {
+			t.Fatal("command context ended without a cause")
+		}
+	case <-time.After(hangTimeout):
+		t.Fatal("command context was not canceled when Run returned")
+	}
+	close(release)
+	finished.Wait()
+	deadline := time.Now().Add(hangTimeout)
+	for runtime.NumGoroutine() > baseline {
+		if time.Now().After(deadline) {
+			t.Fatalf("goroutines = %d, baseline = %d; a late command's result send blocked", runtime.NumGoroutine(), baseline)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if got := model.messages(); len(got) != 0 {
+		t.Fatalf("late result reached the model after Run returned: %#v", got)
 	}
 }

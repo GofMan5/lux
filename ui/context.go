@@ -93,6 +93,8 @@ type snapshot struct {
 // Context owns focus and pointer routing. Its zero value is ready to use.
 // Register regions in paint order between Begin and End; the last matching
 // region receives pointer input. Context must not be copied after first use.
+// Use it where the model runs, in Update and View: widgets mutate the caller's
+// state and canvas, so drawing from another goroutine races with the frame.
 // A nil *Context is inert: it registers and routes nothing, its queries
 // report false or zero, and widgets drawn through it paint but take no input.
 type Context struct {
