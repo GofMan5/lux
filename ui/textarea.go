@@ -237,7 +237,7 @@ func (t *TextArea) Apply(action Action) bool {
 // inert. Drawing lays the content out at the clipped width, keeps the caret
 // row inside the viewport, and draws only the visible wrapped rows.
 func (c *Context) TextArea(id ID, canvas *render.Canvas, rect render.Rect, area *TextArea, style TextAreaStyle) {
-	if c == nil || canvas == nil || area == nil || id == "" {
+	if canvas == nil || area == nil || id == "" {
 		return
 	}
 	area.widthPolicy = canvas.WidthPolicy()

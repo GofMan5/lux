@@ -376,6 +376,16 @@ Border не используется по умолчанию для каждог
 - Reproducible benchmark report, changelog, tagged artifact, checksums для demo binaries если они распространяются.
 - Нет известных неисправленных P0/P1 в заявленных сценариях; непокрытые платформы/IME/RTL/native screen reader остаются explicit limits.
 
+**Этап 7, аудит nil/zero-value публичного API (slice 53):**
+
+- `internal/apiaudit`: reflection-sweep вызывает каждый экспортированный метод и каждую функцию пакетов `lux`, `capability`, `event`, `layout`, `motion`, `render`, `scene3d`, `ui` на receiver'ах `T{}`, `&T{}` и `(*T)(nil)`, с nil- и zero-аргументами. Таймаут на вызов — 2 s. Value-методы через nil-указатель пропускаются: паника там языковая, и метод не может её поймать. `TestSweepReportsPanicsAndHangs` — negative control: пойманы и паника, и зависание.
+- Нашлись две дыры. Zero values чисты.
+  - Nil `*ui.Context` паниковал в `Region`, `Focused`, `Handle`, `Begin`, `End`, `ScrollViewport` и др. Из-за этого `Button`, `List` и другие интерактивные виджеты падали на непустом прямоугольнике, `Gauge` и `Spinner` работали, а `Input` и `TextArea` молча ничего не рисовали.
+  - `(*lux.Frame)(nil).RequestFrame` и `RequestFrameAfter` падали, хотя остальные методы `Frame` nil-safe.
+- Правило одно: nil `*Context` ничего не делает. Он не маршрутизирует события, запросы возвращают false/0, виджеты рисуются без регистрации. Guard'ы стоят в общих точках входа (`RegionWithOptions`, `Focused`, `revealDelta`, `focusPending` и т.д.), поэтому лишние проверки в `Input`/`TextArea` удалены.
+- Покрытие: `TestNilContextPaintsWithoutRouting` (все виджеты на реальном canvas) и `TestSurfaceSweep` как постоянная проверка в `go test ./...`. Мутанты отловлены: без guard в `RegionWithOptions` падает widget-тест, без guard в `RequestFrameAfter` — sweep.
+- Изменение поведения для nil-случаев внесено в CHANGELOG в раздел Fixed. Сигнатуры не менялись.
+
 **Gate v1.0:** доказанная стабильность выбранного контракта + production evidence + usable recipes. «Нет никогда никаких багов» не является обещанием.
 
 ## 12. Порядок релизов и первые десять slices

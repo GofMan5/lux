@@ -223,6 +223,18 @@ semver: breaking changes land only in a new major.
 
 ### Fixed
 
+- A nil `*ui.Context` is now inert everywhere instead of panicking in
+  routing methods: `Begin`, `End`, `Region`, `BeginModal`, `EndModal`,
+  `Handle`, `Focus`, `Focused`, `Hovered`, `Pressed`, `ModalOpen` and
+  `FocusDelta` return false or zero, and every widget drawn through it
+  paints without registering — previously `Button`, `List` and the other
+  interactive widgets panicked on a non-empty rectangle, while `Input` and
+  `TextArea` silently drew nothing. `(*lux.Frame)(nil).RequestFrame` and
+  `RequestFrameAfter` are no-ops like the other `Frame` methods. Pinned by
+  `TestNilContextPaintsWithoutRouting` and by `internal/apiaudit`, which
+  calls every exported method and function of the public packages on zero
+  values, fresh zero pointers and nil receivers and fails on any panic or
+  hang.
 - `render.Canvas.Text` reuses its own grapheme measurement instead of
   sending each cluster through `Put` for a second segmentation/width pass.
   Rows outside the canvas or active clip skip drawing, and exhausted

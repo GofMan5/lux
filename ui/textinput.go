@@ -178,7 +178,7 @@ func (t *TextInput) Apply(action Action) bool {
 // Input registers and paints a one-line text input. Read-only fields remain
 // focusable but do not receive Input actions; disabled fields are inert.
 func (c *Context) Input(id ID, canvas *render.Canvas, rect render.Rect, input *TextInput, style InputStyle) {
-	if c == nil || canvas == nil || input == nil || id == "" {
+	if canvas == nil || input == nil || id == "" {
 		return
 	}
 	input.widthPolicy = canvas.WidthPolicy()

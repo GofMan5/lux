@@ -1,0 +1,15 @@
+## gofmt
+## vet
+vet ok
+## test -race
+test exit 0
+## apiaudit -v
+--- PASS: TestSurfaceSweep (0.01s)
+--- PASS: TestSweepReportsPanicsAndHangs (2.00s)
+## lint
+0 issues.
+lint ok
+## nested (GOOS=linux vet)
+e2e ok
+examples/07-ssh ok
+benchmarks ok

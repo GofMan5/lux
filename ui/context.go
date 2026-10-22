@@ -93,6 +93,8 @@ type snapshot struct {
 // Context owns focus and pointer routing. Its zero value is ready to use.
 // Register regions in paint order between Begin and End; the last matching
 // region receives pointer input. Context must not be copied after first use.
+// A nil *Context is inert: it registers and routes nothing, its queries
+// report false or zero, and widgets drawn through it paint but take no input.
 type Context struct {
 	mu sync.Mutex
 
@@ -131,7 +133,7 @@ type Context struct {
 // Begin starts registration for frame. A viewport change immediately
 // invalidates old hit geometry; focus identity is retained when possible.
 func (c *Context) Begin(frame *lux.Frame) {
-	if frame == nil {
+	if c == nil || frame == nil {
 		return
 	}
 	width, height := frame.Size()
@@ -158,7 +160,7 @@ func (c *Context) Region(id ID, canvas *render.Canvas, bounds render.Rect, flags
 
 // RegionWithOptions registers a clipped region with optional content limits.
 func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.Rect, flags Flags, options RegionOptions) {
-	if id == "" || canvas == nil {
+	if c == nil || id == "" || canvas == nil {
 		return
 	}
 	absolute := canvas.GlobalRect(bounds)
@@ -203,6 +205,9 @@ func (c *Context) RegionWithOptions(id ID, canvas *render.Canvas, bounds render.
 // ScrollViewport applies this itself; a hand-rolled container adds the result to
 // its own offset.
 func (c *Context) FocusDelta(container ID) int {
+	if c == nil {
+		return 0
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.focusDeltaLocked(container)
@@ -212,6 +217,9 @@ func (c *Context) FocusDelta(container ID) int {
 // so scrolling a container away from the focused control is not undone on the
 // next event.
 func (c *Context) revealDelta(container ID) int {
+	if c == nil {
+		return 0
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.focused == c.revealed {
@@ -227,6 +235,9 @@ func (c *Context) revealDelta(container ID) int {
 // this prediction so the first frame a static app paints already shows the
 // caret; such an app may never repaint otherwise.
 func (c *Context) focusPending() bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.begun && c.viewFocus == "" && c.focused == ""
@@ -290,7 +301,7 @@ func containsRect(outer, inner render.Rect) bool {
 // End binds the registered geometry to this exact presented frame. Dropped,
 // failed, and pre-resize frames never become interactive.
 func (c *Context) End(frame *lux.Frame) {
-	if frame == nil {
+	if c == nil || frame == nil {
 		return
 	}
 	c.mu.Lock()
@@ -322,7 +333,7 @@ func (c *Context) End(frame *lux.Frame) {
 // BeginModal starts a modal scope. Regions registered until EndModal receive
 // input exclusively once this frame is presented.
 func (c *Context) BeginModal(id ID, canvas *render.Canvas, bounds render.Rect) {
-	if id == "" || canvas == nil {
+	if c == nil || id == "" || canvas == nil {
 		return
 	}
 	absolute := canvas.GlobalRect(bounds)
@@ -346,6 +357,9 @@ func (c *Context) BeginModal(id ID, canvas *render.Canvas, bounds render.Rect) {
 
 // EndModal ends the current modal registration scope.
 func (c *Context) EndModal() {
+	if c == nil {
+		return
+	}
 	c.mu.Lock()
 	c.currentModal = ""
 	c.mu.Unlock()
@@ -353,6 +367,9 @@ func (c *Context) EndModal() {
 
 // Focus moves keyboard focus to a currently visible, enabled region.
 func (c *Context) Focus(id ID) bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !focusValid(c.committed, id) {
@@ -368,6 +385,9 @@ func (c *Context) Focus(id ID) bool {
 // Focused reports whether id has keyboard focus. During View it reports the
 // focus intended for the frame being built, so first paints are correct.
 func (c *Context) Focused(id ID) bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.begun {
@@ -382,6 +402,9 @@ func (c *Context) Focused(id ID) bool {
 // here only after its frame has actually been presented. Waiting on it is
 // how callers outside View prove the router caught up.
 func (c *Context) ModalOpen() bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.committed.modal.id != ""
@@ -389,6 +412,9 @@ func (c *Context) ModalOpen() bool {
 
 // Hovered reports whether the pointer is over id in the last presented frame.
 func (c *Context) Hovered(id ID) bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return id != "" && c.hovered == id
@@ -396,6 +422,9 @@ func (c *Context) Hovered(id ID) bool {
 
 // Pressed reports whether an activatable id owns the current left press.
 func (c *Context) Pressed(id ID) bool {
+	if c == nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return id != "" && c.pressed == id
@@ -404,6 +433,9 @@ func (c *Context) Pressed(id ID) bool {
 // Handle routes one terminal event against the last successfully presented
 // snapshot. The bool reports whether the interaction was consumed.
 func (c *Context) Handle(next event.Event) (Action, bool) {
+	if c == nil {
+		return Action{}, false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

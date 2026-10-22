@@ -114,10 +114,13 @@ func (f *Frame) Size() (int, int) {
 
 // RequestFrame schedules another animation frame at the runtime's current
 // adaptive rate. Multiple requests coalesce.
-func (f *Frame) RequestFrame() { f.RequestFrameAt(f.Now) }
+func (f *Frame) RequestFrame() { f.RequestFrameAfter(0) }
 
 // RequestFrameAfter schedules another animation frame after delay.
 func (f *Frame) RequestFrameAfter(delay time.Duration) {
+	if f == nil {
+		return
+	}
 	if delay < 0 {
 		delay = 0
 	}
