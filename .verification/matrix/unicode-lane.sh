@@ -11,7 +11,7 @@ set -e
 cd /src
 apk add --no-cache tmux >/dev/null
 echo "tmux: $(tmux -V)"
-go build -o /tmp/showcase ./examples/showcase
+go build -o /tmp/showcase ./examples/06-showcase
 
 tmux -f /dev/null new-session -d -s uni -x 110 -y 32 /tmp/showcase
 sleep 2

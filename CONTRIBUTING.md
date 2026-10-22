@@ -37,6 +37,28 @@ machine.
 - Update compatibility, notices, and status documentation when behavior changes.
 - Avoid unrelated formatting or generated-file churn.
 
+## Releasing
+
+A release, including a release candidate, is cut from a `main` commit whose
+CI run is green on every job: tests with `-race` on Linux, macOS and Windows
+for both Go versions, lint, the nested `e2e`, `examples/07-ssh` and
+`benchmarks` modules, and govulncheck. Before tagging, also run:
+
+```sh
+gofmt -l $(git ls-files '*.go')
+for os in linux darwin windows freebsd; do GOOS=$os go build ./...; done
+for m in . e2e examples/07-ssh benchmarks; do (cd $m && go mod tidy -diff); done
+```
+
+The nested modules are Unix-only (`benchmarks` is Linux-only); on a Windows
+host, vet them with `GOOS=linux go vet ./...`. Re-run the lanes in
+[`.verification/matrix/`](.verification/matrix/README.md) that the release
+touches, and refresh their evidence.
+
+Move `[Unreleased]` in CHANGELOG.md to a dated version section, add the
+upgrade steps to [docs/MIGRATION.md](docs/MIGRATION.md), then create an
+annotated tag (`git tag -a vX.Y.Z[-rc.N]`) and push the commit before the tag.
+
 ## Commits and pull requests
 
 Use clear, imperative commits. A pull request should state:

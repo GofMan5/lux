@@ -23,7 +23,7 @@ if (-not (Test-Path $conhost)) { throw "System32 conhost.exe not found" }
 $os = [System.Environment]::OSVersion.VersionString
 Write-Output "OS: $os"
 
-go build -o .probe\showcase.exe ./examples/showcase
+go build -o .probe\showcase.exe ./examples/06-showcase
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 # Self-contained launcher batch (trailing space before `>` is deliberate,

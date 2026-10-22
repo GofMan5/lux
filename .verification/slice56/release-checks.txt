@@ -1,0 +1,32 @@
+## build GOOS=linux
+ok
+## build GOOS=darwin
+ok
+## build GOOS=windows
+ok
+## build GOOS=freebsd
+ok
+## tidy .
+tidy ok
+## tidy e2e
+tidy ok
+## tidy examples/07-ssh
+tidy ok
+## tidy benchmarks
+go: downloading github.com/charmbracelet/x/exp/golden v0.0.0-20250806222409-83e3a29d542f
+go: downloading golang.org/x/exp v0.0.0-20231006140011-7918f672742d
+go: downloading github.com/aymanbagabas/go-udiff v0.4.1
+tidy ok
+## build e2e GOOS=linux,darwin
+ok
+## build examples/07-ssh GOOS=linux,darwin
+ok
+## build benchmarks GOOS=linux,darwin
+# github.com/GofMan5/lux/benchmarks
+.\adapter_tview.go:83:50: undefined: unix.TCGETS
+.\adapter_tview.go:99:44: undefined: unix.TCSETS
+.\adapter_tview.go:133:45: undefined: unix.TCSETS
+.\adapter_tview.go:148:50: undefined: unix.TCGETS
+.\adapter_tview.go:155:38: undefined: unix.TCSETS
+.\metrics.go:124:18: undefined: syscall.Utsname
+.\metrics.go:125:20: undefined: syscall.Uname

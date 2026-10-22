@@ -11,7 +11,7 @@ set -e
 cd /src
 apk add --no-cache screen >/dev/null
 echo "screen: $(screen --version 2>&1 | head -n1)"
-go build -o /tmp/showcase ./examples/showcase
+go build -o /tmp/showcase ./examples/06-showcase
 
 # UTF-8 in .screenrc: screen defaults to latin1 unless told otherwise.
 printf 'defutf8 on\n' > /tmp/screenrc

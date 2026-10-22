@@ -1,5 +1,5 @@
 #!/bin/sh
-# examples/ssh lane: the tui-ssh-server built from examples/ssh serves the
+# examples/07-ssh lane: the tui-ssh-server built from examples/07-ssh serves the
 # demo TUI over a real ssh connection; tmux plays the client terminal — it
 # allocates the client-side pty, answers the engine's capability queries,
 # sizes the session, and delivers keystrokes and resizes exactly like a
@@ -28,8 +28,8 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-# examples/ssh is a nested module: build and test from inside it.
-( cd examples/ssh &&
+# examples/07-ssh is a nested module: build and test from inside it.
+( cd examples/07-ssh &&
   go build -o /tmp/tui-ssh-server . &&
   go test -count=1 -timeout 60s . ) | tee "$EVID/ssh-example-unit.txt"
 

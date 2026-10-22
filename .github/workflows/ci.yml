@@ -183,6 +183,23 @@ jobs:
           done
           exit 1
 
+  benchmarks:
+    name: Benchmarks module (unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: benchmarks
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: benchmarks/go.mod
+          cache: true
+          cache-dependency-path: benchmarks/go.sum
+      - run: go mod download
+      - run: go vet ./...
+      - run: go test -race ./...
+
   tidy:
     name: Module and formatting
     runs-on: ubuntu-latest

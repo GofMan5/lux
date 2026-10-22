@@ -22,8 +22,8 @@ Thumbs.db
 .verification/production-progress.md
 
 # Nested module build artifacts
-/examples/ssh/ssh
-/examples/ssh/tui-ssh-server
+/examples/07-ssh/ssh
+/examples/07-ssh/tui-ssh-server
 benchmarks/benchmarks
 coverage.out
 coverage

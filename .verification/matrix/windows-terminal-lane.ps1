@@ -15,7 +15,7 @@ Remove-Item .probe\win-exit.txt -ErrorAction SilentlyContinue
 # A leftover keyprobe tab would keep the Windows Terminal host alive after
 # the showcase tab closes, so the window teardown below waits forever.
 Get-Process keyprobe -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-go build -o .probe\showcase.exe ./examples/showcase
+go build -o .probe\showcase.exe ./examples/06-showcase
 if ($LASTEXITCODE -ne 0) { throw "build failed" }
 
 # Self-contained launcher batch: runs the showcase, then records the exit

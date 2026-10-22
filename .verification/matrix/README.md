@@ -31,7 +31,7 @@ needle; the evidence files are the raw captures those asserts ran on.
 | unicode | pty via tmux, wide/CJK/emoji content | PASS | `unicode-pane.txt` |
 | NO_COLOR | pty via tmux with NO_COLOR=1 | PASS | `nocolor-text.txt`, `nocolor-escape.txt` |
 | ssh | pty over real sshd/ssh pair (127.0.0.1, `-tt`) | PASS | `ssh-wire.raw`, `ssh-text.txt` |
-| ssh example | the examples/ssh Go server serving the demo TUI to a real ssh client inside tmux | PASS | `ssh-example-pane-80x24.txt`, `ssh-example-pane-100x30.txt`, `ssh-example-exit.txt`, `ssh-example-child-alive.txt`, `ssh-example-child-gone.txt`, `ssh-example-unit.txt`, `ssh-example-pane-final.txt` |
+| ssh example | the examples/07-ssh Go server serving the demo TUI to a real ssh client inside tmux | PASS | `ssh-example-pane-80x24.txt`, `ssh-example-pane-100x30.txt`, `ssh-example-exit.txt`, `ssh-example-child-alive.txt`, `ssh-example-child-gone.txt`, `ssh-example-unit.txt`, `ssh-example-pane-final.txt` |
 | netem | ssh loopback shaped: 200 ms delay, 512 kbit/s | PASS | `netem-wire.raw`, `netem-probe-trace.txt` |
 | Windows Terminal 1.24 | interactive real window, scripted F1/TAB/edit/quit | PASS | `windows-terminal-main.png`, `windows-terminal-help.png` |
 | conhost (headless) | classic conhost lifecycle, transcript capture | PASS | `conhost-transcript.bin` |
@@ -50,7 +50,7 @@ docker run --rm -v <repo>:/src -w /src -e TERM=xterm-256color \
 
 `netem-lane.sh` additionally needs `--cap-add NET_ADMIN` for `tc`.
 The ssh and netem lanes build their own sshd inside the container. The
-ssh-example lane runs the Go server from `examples/ssh` and connects
+ssh-example lane runs the Go server from `examples/07-ssh` and connects
 with a real OpenSSH client whose terminal is tmux
 (`SSH_ASKPASS_REQUIRE=force` supplies the password — no sshpass):
 
@@ -89,7 +89,7 @@ plain profile. Both kill their launchers before and after (best effort).
 - **ssh**: full-screen mode crosses a real ssh transport — alt-screen
   enter and leave, frame content, and a clean exit with the leave
   sequence intact on the wire.
-- **ssh example**: the examples/ssh server (gliderlabs/ssh + creack/pty)
+- **ssh example**: the examples/07-ssh server (gliderlabs/ssh + creack/pty)
   serves the demo TUI to a real OpenSSH client whose terminal is tmux.
   The pane captures prove the title, size readout, and client TERM at
   80x24; a `resize-window` to 100x30 repaints the readout (the resize
@@ -135,7 +135,7 @@ plain profile. Both kill their launchers before and after (best effort).
   pty in interactive mode, emits a cursor-position query (`ESC[6n`) at
   its prompt and blocks until the reply arrives. Anything that drives an
   interactive shell through a pty must answer device-status queries the
-  way a terminal does — the examples/ssh unit-test fake does, and so
+  way a terminal does — the examples/07-ssh unit-test fake does, and so
   does tmux in the lanes.
 - **tmux drops OSC 9;4 and 9;777; `pipe-pane` sees them anyway.** tmux
   does not implement the taskbar-progress or notify sequences, so no bar

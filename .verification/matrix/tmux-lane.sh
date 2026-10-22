@@ -10,7 +10,7 @@ set -e
 cd /src
 apk add --no-cache tmux >/dev/null
 echo "tmux: $(tmux -V)"
-go build -o /tmp/showcase ./examples/showcase
+go build -o /tmp/showcase ./examples/06-showcase
 
 # -f /dev/null: no user config interferes; TERM inside the pane is whatever
 # tmux picks for this system (recorded below — it is part of the evidence).

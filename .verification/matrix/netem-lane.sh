@@ -19,7 +19,7 @@
 set -e
 cd /src
 apk add --no-cache openssh openssh-client-default util-linux iproute2-tc >/dev/null
-go build -o /tmp/showcase ./examples/showcase
+go build -o /tmp/showcase ./examples/06-showcase
 
 ssh-keygen -A >/dev/null 2>&1
 mkdir -p /root/.ssh

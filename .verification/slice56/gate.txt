@@ -1,0 +1,12 @@
+## gofmt
+## vet
+vet ok
+## test -race
+test exit 0
+## lint
+0 issues.
+lint ok
+## nested (GOOS=linux vet)
+e2e ok
+examples/07-ssh ok
+benchmarks ok

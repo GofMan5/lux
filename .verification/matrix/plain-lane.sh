@@ -9,7 +9,7 @@
 #       golang:1.25-alpine sh /src/.verification/matrix/plain-lane.sh
 set -e
 cd /src
-go build -o /tmp/showcase ./examples/showcase
+go build -o /tmp/showcase ./examples/06-showcase
 
 # 1. pipe lane: stdout redirected to a file, stdin at EOF.
 TERM=xterm-256color /tmp/showcase < /dev/null \

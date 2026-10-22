@@ -1,0 +1,6 @@
+﻿OS: Microsoft Windows NT 10.0.26200.0
+conhost run exit code: 0
+transcript: 130 bytes
+conhost wire lifecycle: all enter/leave sequences present
+pipe plain-output snapshot: UTF-8 clean, footer present, exit 0
+conhost lane OK
