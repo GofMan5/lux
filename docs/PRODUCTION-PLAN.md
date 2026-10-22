@@ -400,6 +400,15 @@ Border не используется по умолчанию для каждог
 - Godoc `Command` теперь называет «не ждёт / отменяет / отбрасывает». Godoc `ui.Context` говорит «используйте там же, где модель»: виджеты мутируют state и canvas вызывающего, поэтому mutex внутри Context — не обещание concurrent-safety. README дополнен абзацем про async, отмену и lifetime.
 - `TestRunDoesNotWaitForCommands`: 100 команд, игнорирующих отмену (больше буфера результатов на 64), и одна, ждущая `ctx.Done`. `Run` возвращается сразу, у команды есть cause, поздние результаты до модели не доходят, число горутин возвращается к baseline. Мутант (голый `results <- next` без select) пойман: горутины застревают.
 
+**Этап 7, release-гейты и v0.2.0-rc.1 (slice 56):**
+
+- Release-проверки по всем четырём модулям, лог в `.verification/slice56/release-checks.txt`. Root собирается под linux, darwin, windows и freebsd. `go mod tidy -diff` чист в root, e2e, examples/07-ssh и benchmarks. Nested e2e и 07-ssh собираются под linux и darwin.
+- `benchmarks` под darwin не собирается (`TCGETS`, `Uname`). Это by design, README модуля называет его Linux-only harness. При этом CI вообще не запускал этот модуль, поэтому добавлен job `benchmarks` (ubuntu, `go-version-file`, vet + `test -race`). Локально тесты модуля не прогнать: нет Linux-хоста, Docker и WSL. Первый зелёный прогон этого job'а — условие для финального v0.2.0.
+- Скрипты матрицы ссылались на `examples/showcase` и `examples/ssh` (до перенумерации). Пути исправлены, иначе лейны не перезапускаются. `.gitignore` указывал на старые бинарники ssh-примера; исправлен, бинарник удалён. Conhost-лейн перезапущен на HEAD: transcript совпал байт в байт, pipe-профиль чист (`.verification/slice56/conhost-lane.txt`). Docker-лейны и интерактивный WT-лейн в этой среде не перезапускались.
+- В CONTRIBUTING.md добавлен раздел «Releasing»: зелёный CI на `main`, gofmt, cross-OS build, tidy по модулям, лейны матрицы, CHANGELOG + MIGRATION, annotated tag, сначала push коммита, потом тега.
+- RC: `[0.2.0-rc.1] - 2026-10-22` в CHANGELOG, migration guide и README ссылаются на rc.1, локальный annotated tag `v0.2.0-rc.1`. Push коммитов и тега — решение владельца, CI на теги не запускается.
+- До v1.0 остаётся: несколько RC-итераций без новых breaking fixes, реальные macOS-эмуляторы (Terminal.app, iTerm2, kitty) и mosh — они вне матрицы, интерактивный conhost.
+
 **Gate v1.0:** доказанная стабильность выбранного контракта + production evidence + usable recipes. «Нет никогда никаких багов» не является обещанием.
 
 ## 12. Порядок релизов и первые десять slices

@@ -15,7 +15,10 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
-Moving from v0.1.0? See [docs/MIGRATION.md](docs/MIGRATION.md).
+## [0.2.0-rc.1] - 2026-10-22
+
+Release candidate for v0.2.0. Moving from v0.1.0? See
+[docs/MIGRATION.md](docs/MIGRATION.md).
 
 ### Added
 
@@ -986,9 +989,6 @@ Moving from v0.1.0? See [docs/MIGRATION.md](docs/MIGRATION.md).
   `TreeDrawClippedHalf` 175.18→81.35 µs (−53.56%, p=0.002, allocs/op
   11→5); the unclipped baselines moved within run noise (p≥0.240), and
   the geomean over the six benchmarks improved 27.02%.
-
-_Unreleased notes: the v0.1.0 cut below is the first tagged release; per the
-v0.x policy above, the next `0.2.0` may break API — watch this file._
 
 ## [0.1.0] - 2026-10-10
 

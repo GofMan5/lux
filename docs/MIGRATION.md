@@ -5,7 +5,7 @@ How to move an application between LUX TUI releases. Per the
 break API and patches never do; every break is listed here with the edit it
 needs. [CHANGELOG.md](../CHANGELOG.md) has the full list of changes.
 
-## v0.1.0 → next minor (Unreleased)
+## v0.1.0 → v0.2.0 (candidate: v0.2.0-rc.1)
 
 **No source change is required for code written against v0.1.0 in the usual
 style.** No exported identifier was removed, renamed, or re-typed, and no
@@ -77,7 +77,7 @@ one.
 Build and test against the new tree before bumping:
 
 ```sh
-go get github.com/GofMan5/lux@latest
+go get github.com/GofMan5/lux@v0.2.0-rc.1
 go build ./... && go vet ./... && go test ./...
 ```
 
