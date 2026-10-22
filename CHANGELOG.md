@@ -15,6 +15,8 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+## [0.2.0-rc.2] - 2026-10-22
+
 ### Performance
 
 - An idle app on Unix no longer wakes up at all. The input reader used to

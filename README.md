@@ -9,7 +9,7 @@
 > motion, terminal adapter, and CPU 3D rasterizer are in. Semver rules for
 > `0.x` are stated in [CHANGELOG.md](CHANGELOG.md) — minor releases may
 > break, patch releases never do.
-> **v0.2.0-rc.1** is the candidate for the next minor: additive API, no
+> **v0.2.0-rc.2** is the candidate for the next minor: additive API, no
 > source change needed for v0.1.0 code. See the
 > [migration guide](docs/MIGRATION.md) before upgrading.
 

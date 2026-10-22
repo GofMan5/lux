@@ -431,6 +431,8 @@ Border не используется по умолчанию для каждог
 - Новый ручной workflow `benchmarks.yml` гоняет сравнение lux/tea/tview в docker на ubuntu-latest. Quick-прогон после slice 57/58 (`.verification/slice59/ci-quick-report.md`): на resize у lux минимальный CPU на кадр (67,6 мс против 76,4 у tea и 71,5 у tview), latency p50 0,9 мс против 5,8 у tea; на inputburst latency 18 мс против 73. Средние CPU/кадр в отчёте включают ожидание харнесса, поэтому сравнивать их стоит только внутри одного прогона.
 - `golangci-lint` в гейте теперь запускается и под linux/darwin: unix-only тесты на Windows не компилируются, и CI поймал errcheck, который локальный гейт пропустил.
 
+**Этап 7, v0.2.0-rc.2 (slice 60):** RC-итерация с perf-срезами 57–59. API по сравнению с rc.1 не менялся. В CHANGELOG добавлен `[0.2.0-rc.2]`, migration guide и README ссылаются на rc.2. Порядок: push main → зелёный CI → annotated tag → push тега.
+
 **Gate v1.0:** доказанная стабильность выбранного контракта + production evidence + usable recipes. «Нет никогда никаких багов» не является обещанием.
 
 ## 12. Порядок релизов и первые десять slices
