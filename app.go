@@ -340,11 +340,11 @@ func defaultBackendOptions(settings config) []terminal.Option {
 // ErrInterrupt reports the SIGINT the runtime trapped on the application's
 // behalf: the terminal restore has already run by the time Run returns it,
 // so the only decision left to the caller is the exit status — the
-// conventional mapping is 130. This is the application half of the Unix
-// termination contract; the runtime owns the cleanup half. A Ctrl+C typed
-// at the terminal is not this error: raw mode claims the byte and the
-// model sees a Key event, which keeps interactive quit in the model's
-// hands.
+// conventional mapping is 130. On Windows an external CTRL_C_EVENT or
+// CTRL_BREAK_EVENT is reported the same way. This is the application half
+// of the termination contract; the runtime owns the cleanup half. A Ctrl+C
+// typed at the terminal is not this error: raw mode claims the byte and the
+// model sees a Key event, which keeps interactive quit in the model's hands.
 var ErrInterrupt = terminal.ErrInterrupt
 
 // ErrTerminated reports a trapped SIGTERM under the same contract as
@@ -354,10 +354,10 @@ var ErrTerminated = terminal.ErrTerminated
 
 // Run owns terminal lifecycle until the model quits, the context is canceled,
 // or an error occurs. Terminal restoration is attempted on every return path.
-// Termination signals are part of that ownership on Unix: an external
-// SIGINT/SIGTERM is turned into ErrInterrupt/ErrTerminated after the restore,
-// so the application can map them to conventional exit codes (130/143) with
-// errors.Is.
+// Termination signals are part of that ownership: an external SIGINT/SIGTERM
+// on Unix, or CTRL_C_EVENT/CTRL_BREAK_EVENT on Windows, is turned into
+// ErrInterrupt/ErrTerminated after the restore, so the application can map
+// them to conventional exit codes (130/143) with errors.Is.
 func Run(ctx context.Context, model Model, options ...Option) (result error) {
 	if model == nil {
 		return errors.New("lux: nil model")

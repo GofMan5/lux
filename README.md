@@ -336,7 +336,7 @@ has no job control: a console-close event releases the console immediately
 and reports an Error event before the OS terminates the process —
 best-effort cleanup, not a resume path.
 
-External termination has an explicit contract on Unix. `SIGINT` and
+External termination has an explicit contract. On Unix `SIGINT` and
 `SIGTERM` are trapped by the runtime, which owns the cleanup half: the
 terminal is restored immediately — the same leave sequences Close writes,
 exactly once — and `Run` returns `lux.ErrInterrupt` or `lux.ErrTerminated`
@@ -345,10 +345,11 @@ them to the conventional exit statuses (130 and 143) with `errors.Is`.
 The application owns the exit code, not the terminal. A Ctrl+C typed at
 the terminal is deliberately not this path: raw mode claims the byte and
 the model sees a Key event, which keeps interactive quit in the model's
-hands. `SIGHUP` stays what it always was — terminal loss, an error exit
-with no restore attempt, because the terminal is gone. `SIGKILL` is
-promised nothing: no runtime can clean up after it, and this one does not
-claim to.
+hands. On Windows an external `CTRL_C_EVENT` or `CTRL_BREAK_EVENT` takes
+the same path and returns `lux.ErrInterrupt`. `SIGHUP` stays what it
+always was — terminal loss, an error exit with no restore attempt,
+because the terminal is gone. `SIGKILL` is promised nothing: no runtime
+can clean up after it, and this one does not claim to.
 
 The whole cycle is verified against real operating-system truth, not
 fakes: an end-to-end suite (`e2e/`, Linux and macOS) runs the runtime

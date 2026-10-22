@@ -117,9 +117,19 @@ var errReadTimeout = errors.New("terminal: read timeout")
 // still attached. x/sys does not export the entry point, so it comes
 // through the lazy loader like any other raw call.
 var (
-	modkernel32       = windows.NewLazySystemDLL("kernel32.dll")
-	procPeekNamedPipe = modkernel32.NewProc("PeekNamedPipe")
+	modkernel32                 = windows.NewLazySystemDLL("kernel32.dll")
+	procPeekNamedPipe           = modkernel32.NewProc("PeekNamedPipe")
+	procFlushConsoleInputBuffer = modkernel32.NewProc("FlushConsoleInputBuffer")
 )
+
+// discardInput drops console input the application never read. Close calls
+// it after leaving win32-input mode: anything still queued was encoded in
+// that mode — typically the release of the key that quit — and would reach
+// the shell prompt as CSI ... _ text. A pipe or a closed handle simply
+// fails, which is fine: there is nothing to discard.
+func discardInput(file *os.File) {
+	_, _, _ = procFlushConsoleInputBuffer.Call(file.Fd())
+}
 
 func peekNamedPipe(handle windows.Handle, available *uint32) error {
 	r1, _, errno := procPeekNamedPipe.Call(
@@ -296,39 +306,49 @@ func (b *Backend) Suspend(context.Context) (bool, error) {
 // button), CTRL_LOGOFF_EVENT, and CTRL_SHUTDOWN_EVENT.
 var errConsoleClose = errors.New("terminal: console close event")
 
-// watchLifecycle waits for the SIGTERM that Windows console events arrive
-// as. os/signal translates CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, and
-// CTRL_SHUTDOWN_EVENT into syscall.SIGTERM when a handler is registered, and
-// the translation is explicitly non-blocking: the process is terminated
-// unless it exits, and Notify only buys the cleanup window. The terminal
-// restore therefore happens right here on the watcher — within microseconds
-// of the event — instead of waiting for the application loop to unwind, and
-// the error event that follows still routes the exit through that loop and
-// its deferred Close whenever the OS grants the time. This is honest best
-// effort: the restore wins the race more often than an app that starts
-// unwinding only after the event, but no handler can promise it.
+// watchLifecycle waits for the console control events os/signal surfaces.
+// CTRL_C_EVENT and CTRL_BREAK_EVENT arrive as os.Interrupt: raw mode clears
+// ENABLE_PROCESSED_INPUT, so a Ctrl+C typed into this console is a Key
+// event, and only an external one gets here — GenerateConsoleCtrlEvent, or
+// a parent such as `go run` sharing the console. Unhandled, it kills the
+// process with the console still in raw and win32-input mode; trapped, it
+// follows the Unix SIGINT contract and Run returns ErrInterrupt.
+// CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, and CTRL_SHUTDOWN_EVENT arrive as
+// syscall.SIGTERM, and that translation is explicitly non-blocking: the
+// process is terminated unless it exits, and Notify only buys the cleanup
+// window.
 func (b *Backend) watchLifecycle(ctx context.Context) {
 	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-signals:
-			// suspendTerminal is reused for its terminal half — the leave
-			// sequences and the cooked restore — while the suspended latch
-			// it sets doubles as the present gate: the dying application
-			// stops painting frames onto a console that is closing. The
-			// latch is also Close's receipt that this restore already ran:
-			// the exit path's own leave write is skipped, so the unwind
-			// never double-restores. The process exits through the error
-			// path either way; this is honest best effort — the restore
-			// wins the race more often than an app that starts unwinding
-			// only after the event, but no handler can promise it.
-			b.suspendTerminal()
-			b.deliverLifecycle(event.Event{Kind: event.Error, Err: errConsoleClose})
-			return
+	b.dispatchLifecycle(ctx, signals)
+}
+
+// dispatchLifecycle is watchLifecycle's loop, split from the registration
+// so the dispatch contract is testable without a real console event. The
+// terminal restore happens right here on the watcher — within microseconds
+// of the event — instead of waiting for the application loop to unwind,
+// and the error event that follows still routes the exit through that loop
+// and its deferred Close whenever the OS grants the time. For a close event
+// this is honest best effort: the restore wins the race more often than an
+// app that starts unwinding only after the event, but no handler can
+// promise it.
+func (b *Backend) dispatchLifecycle(ctx context.Context, signals <-chan os.Signal) {
+	select {
+	case <-ctx.Done():
+	case sig := <-signals:
+		// suspendTerminal is reused for its terminal half — the leave
+		// sequences and the cooked restore — while the suspended latch it
+		// sets doubles as the present gate: the dying application stops
+		// painting frames onto a console that is closing. The latch is
+		// also Close's receipt that this restore already ran: the exit
+		// path's own leave write is skipped, so the unwind never
+		// double-restores.
+		b.suspendTerminal()
+		cause := errConsoleClose
+		if sig == os.Interrupt {
+			cause = ErrInterrupt
 		}
+		b.deliverLifecycle(event.Event{Kind: event.Error, Err: cause})
 	}
 }

@@ -27,6 +27,11 @@ func defaultColorDepth() capability.ColorDepth {
 
 func enableVT(*os.File) (func() error, error) { return nil, nil }
 
+// discardInput is a no-op on Unix. ponytail: win32-input mode latches here
+// only over SSH from Windows Terminal; add a TCIFLUSH if its leftover
+// release reports ever show up at the prompt there.
+func discardInput(*os.File) {}
+
 // makeRawTerm is the Unix raw-mode entry: the term package already produces
 // exactly the mode the parser needs, and the restore story is a single
 // term.Restore. Windows needs the extra VT-input bit and wraps this in

@@ -764,7 +764,11 @@ Scope and honest limits:
   `SIGTERM` through `os/signal`: the backend releases the console
   immediately — raw input reset, leave written — and reports an Error
   event, but the OS still terminates the process within its ~5-second
-  window. This is best-effort cleanup, not a resume path.
+  window. This is best-effort cleanup, not a resume path. An external
+  CTRL_C_EVENT or CTRL_BREAK_EVENT (a Ctrl+C typed in raw mode is a Key
+  event, so only another process sends one) follows the Unix `SIGINT`
+  contract instead: the console is restored and `Run` returns
+  `lux.ErrInterrupt`.
 - The signal watcher and the suspend/resume byte contracts are
   unit-tested on file streams, and the whole cycle is now verified
   against real operating-system truth: the `e2e` suite (Linux/macOS) runs

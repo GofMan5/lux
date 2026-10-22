@@ -24,6 +24,20 @@ semver: breaking changes land only in a new major.
   themes, a fuzzy command palette and a live event inspector. It sleeps when
   idle and ships a preparation benchmark and a bounded-memory soak.
 
+### Fixed
+
+- Windows: an external `CTRL_C_EVENT` or `CTRL_BREAK_EVENT` (for example a
+  Ctrl+C delivered to a parent `go run` sharing the console) no longer kills
+  the process with the console still in raw and win32-input mode, which left
+  the shell reading key reports as text. The runtime restores the console at
+  once and `Run` returns `lux.ErrInterrupt`, as for `SIGINT` on Unix. A Ctrl+C
+  typed into the app is still a Key event.
+
+- Windows: quitting no longer leaves unread win32-input-mode key reports in
+  the console input buffer. The release of the key that closed the app (for
+  example `ESC[67;0;3;0;8;1_` after Ctrl+C) used to reach the shell as
+  garbage; `Close` now flushes pending console input after restoring it.
+
 ## [0.2.0-rc.2] - 2026-10-22
 
 ### Performance

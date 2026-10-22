@@ -3,6 +3,7 @@ package terminal
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -378,5 +379,57 @@ func TestDeliverLifecycleNeverBlocks(t *testing.T) {
 	}
 	if got := (<-backend.events).Kind; got != event.Suspend {
 		t.Fatalf("the queued notice is %v, want Suspend", got)
+	}
+}
+
+// The lifecycle dispatch tests drive watchLifecycle's loop through a fake
+// signal channel — the loop was split from the Notify call precisely so no
+// test races a real signal against the registration that must exist first.
+// Real-signal proof (a kill against a real pty) belongs to the e2e lane.
+
+// dispatchLifecycleFor runs the dispatcher on a dedicated goroutine and
+// returns a channel that reports its return.
+func dispatchLifecycleFor(backend *Backend, signals <-chan os.Signal) (<-chan struct{}, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		backend.dispatchLifecycle(ctx, signals)
+	}()
+	return returned, cancel
+}
+
+// makeLifecycleChan gives the dispatcher the sized queue the production
+// backend uses, so the non-blocking deliver never drops on a test fast
+// enough to beat the reader.
+func makeLifecycleChan() chan event.Event {
+	return make(chan event.Event, 64)
+}
+
+// awaitReturn fails the test if the dispatcher has not returned within the
+// deadline the production code is bounded by everywhere else.
+func awaitReturn(t *testing.T, returned <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("lifecycle dispatcher did not return")
+	}
+}
+
+// assertLifecycleEvent drains the single event the dispatcher may have
+// delivered and asserts its kind and sentinel.
+func assertLifecycleEvent(t *testing.T, backend *Backend, want error) {
+	t.Helper()
+	select {
+	case next := <-backend.events:
+		if next.Kind != event.Error {
+			t.Fatalf("lifecycle event kind = %v, want Error", next.Kind)
+		}
+		if !errors.Is(next.Err, want) {
+			t.Fatalf("lifecycle error = %v, want %v", next.Err, want)
+		}
+	default:
+		t.Fatalf("expected a %v lifecycle event, none was delivered", want)
 	}
 }

@@ -483,7 +483,7 @@ func (b *Backend) Open(ctx context.Context) (capability.Set, error) {
 	// events into terminal suspension, resume, and terminal-loss errors:
 	// SIGHUP is terminal loss on Unix, console-close is the same error on
 	// Windows, and an external SIGINT/SIGTERM (Unix) or console-close
-	// signal (Windows) is the restore-then-error contract — the runtime
+	// or Ctrl+C/Break event (Windows) is the restore-then-error contract — the runtime
 	// restores the terminal, the application owns the exit code through
 	// the error it receives, and SIGKILL promises nothing. It rides the
 	// read context like the resize watcher, so Close cancels it together
@@ -842,6 +842,9 @@ func (b *Backend) Close() error {
 	}
 	if state != nil && input != nil {
 		result = errors.Join(result, term.Restore(int(input.Fd()), state))
+	}
+	if win32 && input != nil {
+		discardInput(input)
 	}
 	if restoreVT != nil {
 		result = errors.Join(result, restoreVT())
