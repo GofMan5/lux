@@ -19,8 +19,8 @@ func TestReadInputWakesOnCancelWithoutPolling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	for round := 0; round < 5; round++ {
 		ctx, cancel := context.WithCancel(context.Background())
 		waker := newReadWaker(ctx)
@@ -55,8 +55,8 @@ func TestReadInputWithWakerStillReadsAndTimesOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
-	defer writer.Close()
+	defer func() { _ = reader.Close() }()
+	defer func() { _ = writer.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	waker := newReadWaker(ctx)
