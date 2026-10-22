@@ -7,6 +7,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/internal/grapheme"
 	"github.com/GofMan5/lux/render"
 	"github.com/rivo/uniseg"
 )
@@ -910,7 +911,7 @@ func rowStarts(line string, rows []string, mode render.WrapMode) []int {
 }
 
 func firstGraphemeOf(text string) string {
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	if graphemes.Next() {
 		return graphemes.Str()
 	}
@@ -918,7 +919,7 @@ func firstGraphemeOf(text string) string {
 }
 
 func graphemeAt(text string, offset int) string {
-	graphemes := uniseg.NewGraphemes(text[offset:])
+	graphemes := grapheme.New(text[offset:])
 	if graphemes.Next() {
 		return graphemes.Str()
 	}
@@ -934,7 +935,7 @@ func isWordWrapSpace(grapheme string) bool {
 // its policy width, unprintables pay nothing.
 func rowCellWidth(row string, policy render.WidthPolicy) int {
 	col := 0
-	graphemes := uniseg.NewGraphemes(row)
+	graphemes := grapheme.New(row)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
 		if grapheme == "\t" {
@@ -953,7 +954,7 @@ func byteAtRowCell(row string, cell int, policy render.WidthPolicy) int {
 		return 0
 	}
 	x := 0
-	graphemes := uniseg.NewGraphemes(row)
+	graphemes := grapheme.New(row)
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		grapheme := graphemes.Str()
@@ -987,7 +988,7 @@ func drawAreaRow(canvas *render.Canvas, view render.Rect, y int, row string, sta
 	line, selLine, selStart, selEndLine, selEnd, caretCol int,
 	normal, selection, caretStyle render.Style) {
 	x := 0
-	graphemes := uniseg.NewGraphemes(row)
+	graphemes := grapheme.New(row)
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		absFrom, absTo := start+from, start+to

@@ -3,7 +3,7 @@ package render
 import (
 	"strings"
 
-	"github.com/rivo/uniseg"
+	"github.com/GofMan5/lux/internal/grapheme"
 )
 
 // WrapMode selects where wrapping may break a line that ran out of room.
@@ -168,7 +168,7 @@ func cellWidthOf(grapheme string, policy WidthPolicy) int {
 // starting at the current column. It is the word-mode fallback for words
 // that cannot fit on any line whole.
 func (w *wrapWriter) splitRun(run string) {
-	graphemes := uniseg.NewGraphemes(run)
+	graphemes := grapheme.New(run)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
 		w.writeCell(grapheme, cellWidthOf(grapheme, w.policy))
@@ -197,7 +197,7 @@ func wsAdvance(col int, ws string) int {
 // line breaks before it.
 func wrapChar(text string, limit int, policy WidthPolicy) ([]string, TextMetrics) {
 	w := &wrapWriter{limit: limit, policy: policy}
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
 		switch grapheme {
@@ -290,7 +290,7 @@ func wrapWord(text string, limit int, policy WidthPolicy) ([]string, TextMetrics
 		}
 	}
 
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
 		switch grapheme {

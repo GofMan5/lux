@@ -4,8 +4,8 @@ import (
 	"strings"
 
 	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/internal/grapheme"
 	"github.com/GofMan5/lux/render"
-	"github.com/rivo/uniseg"
 )
 
 // ButtonStyle defines the four visual states of a button. Zero values
@@ -308,7 +308,7 @@ func clipText(text string, width int, policy render.WidthPolicy) string {
 	}
 	var result strings.Builder
 	used := 0
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	for graphemes.Next() {
 		cluster := graphemes.Str()
 		cells := render.GraphemeWidthWith(cluster, policy)

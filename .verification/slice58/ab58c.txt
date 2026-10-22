@@ -1,0 +1,32 @@
+== before
+BenchmarkCanvasFrame-12    	    3624	    167303 ns/op	     106 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    3517	    148752 ns/op	     109 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    3656	    166513 ns/op	     105 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    3855	    157381 ns/op	      99 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    3648	    169883 ns/op	     105 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    3950	    187721 ns/op	      97 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    2978	    170954 ns/op	     129 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    4603	    159210 ns/op	      83 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    3318	    175145 ns/op	     116 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    4260	    179215 ns/op	      90 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    3196	    167603 ns/op	     120 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    3451	    165087 ns/op	     111 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    3246	    223013 ns/op	     118 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    3098	    188907 ns/op	     124 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFrame-12    	    3910	    182774 ns/op	      98 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFrame-12    	    3211	    168997 ns/op	     119 B/op	       0 allocs/op

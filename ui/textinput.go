@@ -6,6 +6,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/GofMan5/lux/event"
+	"github.com/GofMan5/lux/internal/grapheme"
 	"github.com/GofMan5/lux/render"
 	"github.com/rivo/uniseg"
 )
@@ -566,7 +567,7 @@ func (t *TextInput) ensureOffset(width int, caret bool, policy render.WidthPolic
 		return
 	}
 	used := 0
-	graphemes := uniseg.NewGraphemes(head)
+	graphemes := grapheme.New(head)
 	for graphemes.Next() {
 		_, to := graphemes.Positions()
 		used += render.GraphemeWidthWith(graphemes.Str(), policy)
@@ -581,7 +582,7 @@ func (t *TextInput) ensureOffset(width int, caret bool, policy render.WidthPolic
 func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal, selection, caret render.Style, focused bool) {
 	selectedStart, selectedEnd := input.selection()
 	x, caretPending := 0, false
-	graphemes := uniseg.NewGraphemes(input.Value[input.Offset:])
+	graphemes := grapheme.New(input.Value[input.Offset:])
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		from, to = from+input.Offset, to+input.Offset
@@ -618,7 +619,7 @@ func drawInput(canvas *render.Canvas, line render.Rect, input *TextInput, normal
 
 func drawPlaceholder(canvas *render.Canvas, line render.Rect, value string, placeholder, caret render.Style, focused bool) {
 	x, first := 0, true
-	graphemes := uniseg.NewGraphemes(sanitizeInput(value))
+	graphemes := grapheme.New(sanitizeInput(value))
 	for graphemes.Next() {
 		cluster := graphemes.Str()
 		width := canvas.GraphemeWidth(cluster)
@@ -695,7 +696,7 @@ func graphemePrefix(value string, maxBytes int) string {
 		return value
 	}
 	end := 0
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		_, next := graphemes.Positions()
 		if next > maxBytes {
@@ -722,7 +723,7 @@ func floorBoundary(value string, position int) int {
 		return position
 	}
 	boundary := 0
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		if position < to {
@@ -744,7 +745,7 @@ func floorBoundaries(value string, cursor, anchor, offset int) (int, int, int) {
 		positions[index] = min(max(positions[index], 0), len(value))
 		maximum = max(maximum, positions[index])
 	}
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		_, to := graphemes.Positions()
 		for index, position := range positions {
@@ -768,7 +769,7 @@ func (t *TextInput) selection() (start, end int) {
 
 func ceilBoundary(value string, position int) int {
 	position = min(max(position, 0), len(value))
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		if position == from {
@@ -807,7 +808,7 @@ func previousBoundary(value string, position int) int {
 	}
 	position = floorBoundary(value, position)
 	previous := 0
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		from, _ := graphemes.Positions()
 		if from >= position {
@@ -820,7 +821,7 @@ func previousBoundary(value string, position int) int {
 
 func nextBoundary(value string, position int) int {
 	position = floorBoundary(value, position)
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		_, to := graphemes.Positions()
 		if to > position {
@@ -889,7 +890,7 @@ func byteAtCell(value string, offset, cell, width int, policy render.WidthPolicy
 		return offset
 	}
 	x := 0
-	graphemes := uniseg.NewGraphemes(value[offset:])
+	graphemes := grapheme.New(value[offset:])
 	for graphemes.Next() {
 		from, to := graphemes.Positions()
 		from, to = from+offset, to+offset
@@ -916,7 +917,7 @@ func byteAtCell(value string, offset, cell, width int, policy render.WidthPolicy
 
 func textCells(value string, policy render.WidthPolicy) int {
 	width := 0
-	graphemes := uniseg.NewGraphemes(value)
+	graphemes := grapheme.New(value)
 	for graphemes.Next() {
 		width += render.GraphemeWidthWith(graphemes.Str(), policy)
 	}

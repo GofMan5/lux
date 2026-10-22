@@ -409,6 +409,21 @@ Border не используется по умолчанию для каждог
 - RC: `[0.2.0-rc.1] - 2026-10-22` в CHANGELOG, migration guide и README ссылаются на rc.1, локальный annotated tag `v0.2.0-rc.1`. Push коммитов и тега — решение владельца, CI на теги не запускается.
 - До v1.0 остаётся: несколько RC-итераций без новых breaking fixes, реальные macOS-эмуляторы (Terminal.app, iTerm2, kitty) и mosh — они вне матрицы, интерактивный conhost.
 
+**Этап 7, idle без пробуждений (slice 57):**
+
+- На Unix `readLoop` просыпался каждые 100 ms только ради проверки ctx. Теперь `poll` блокирующий, а отмену доставляет self-pipe (`readWaker`: `context.AfterFunc` пишет байт в pipe под mutex, `close` гонку с отменой разруливает тем же mutex). Negotiation-путь по-прежнему работает со своим таймаутом (waker = nil).
+- Windows не менялся: console wait и так ничего не стоит в простое. Замер `.verification/slice57/idle.ps1`: 0,0 ms CPU за 20 s idle, два прогона.
+- Тесты `platform_unix_test.go`: возврат < 30 ms после отмены в пяти раундах подряд (при старом цикле 100 ms вероятность случайного прохождения < 1%), таймаут и чтение с waker, гонка `close` против `cancel` под `-race`. Локально только компиляция под linux/darwin/freebsd, прогон — в CI.
+
+**Этап 7, CPU лёгких сцен (slice 58):**
+
+- `internal/grapheme`: итератор кластеров без аллокаций с ASCII fast-path, fallback на `uniseg.FirstGraphemeClusterInString`. Эквивалентность с `uniseg.NewGraphemes`: корпус + попарные конкатенации + fuzz (528 878 итераций). Заменил `uniseg.NewGraphemes` в render и ui. Исключение — word-навигация `TextInput`: ей нужен `IsWordBoundary`.
+- `terminalWidth`: printable ASCII → 1 без overlay и uniseg. Тест сверяет со всей таблицей 0x00–0x7F; оба граничных мутанта пойманы.
+- `fillCells` заполняет удваивающимся `copy` (fill 1,6–1,8×); `replacementFits` читает строку без копирования `Cell`. Эквивалентность — тесты против старой реализации, включая заведомо битые строки; четыре мутанта пойманы.
+- Сцены 120x40 in-process (`internal/phaseprofile/scenes_bench_test.go`), interleaved A/B против HEAD: prep-p95 list 4472 → 1008 µs, static 4009 → 628, EGC 3510 → 1527; view-p95 до 7,9×. prep-p50 упал ниже разрешения часов машины (0,5–1 ms). Данные в `.verification/slice58/`.
+- Сознательно не сделано: encoder (`EqualRow`, `hashRow`) упирается в пропускную способность памяти. `Cell` весит 80 B, два буфера 120x40 занимают 768 KB и не влезают в L2; даже побайтовое сравнение строк дало только 2×. Уменьшить `Cell` без breaking change нельзя, кандидат на v0.3.
+- Попутно: `TestProcsEndToEndKillConfirmCancelAndExecute` флакал под нагруженным `-race`. 30-мс kill успевал завершиться до коммита кадра с «terminating», и переходный beacon терялся. Kill теперь держит `killGate` до того, как тест увидит промежуточное состояние.
+
 **Gate v1.0:** доказанная стабильность выбранного контракта + production evidence + usable recipes. «Нет никогда никаких багов» не является обещанием.
 
 ## 12. Порядок релизов и первые десять slices

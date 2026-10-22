@@ -291,12 +291,16 @@ func (b *Buffer) putLink(x, y int, grapheme string, width int, style Style, link
 
 func (b *Buffer) replacementFits(clip Rect, x, y, width int) bool {
 	left, right := x, x+width-1
+	if y < 0 || y >= b.height {
+		return false
+	}
+	row := b.row(y)
 	for column := left; column <= right; column++ {
-		cell, ok := b.CellOK(column, y)
-		if !ok {
+		// right can grow past the edge while the loop runs.
+		if column < 0 || column >= len(row) {
 			return false
 		}
-		switch cell.Width {
+		switch row[column].Width {
 		case 0:
 			left = min(left, column-1)
 		case 2:
@@ -368,9 +372,15 @@ func (b *Buffer) repair() {
 	}
 }
 
+// fillCells doubles the filled prefix with copy: a few bulk moves replace one
+// 80-byte struct store (and its write barrier check) per cell.
 func fillCells(cells []Cell, cell Cell) {
-	for index := range cells {
-		cells[index] = cell
+	if len(cells) == 0 {
+		return
+	}
+	cells[0] = cell
+	for filled := 1; filled < len(cells); filled *= 2 {
+		copy(cells[filled:], cells[:filled])
 	}
 }
 

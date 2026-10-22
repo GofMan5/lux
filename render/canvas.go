@@ -4,7 +4,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/rivo/uniseg"
+	"github.com/GofMan5/lux/internal/grapheme"
 )
 
 // Border defines the eight graphemes used to draw a box.
@@ -326,7 +326,7 @@ func (c *Canvas) Text(x, y int, text string, style Style) int {
 	startX, cursorX, cursorY, widest := x, x, y, 0
 	policy := c.WidthPolicy()
 	drawRow := c.rowDrawable(cursorY)
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
 		switch grapheme {

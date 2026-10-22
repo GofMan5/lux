@@ -1,7 +1,10 @@
 // Package render provides a small, terminal-independent cell renderer.
 package render
 
-import "github.com/rivo/uniseg"
+import (
+	"github.com/GofMan5/lux/internal/grapheme"
+	"github.com/rivo/uniseg"
+)
 
 // ColorMode describes how a terminal color is encoded.
 type ColorMode uint8
@@ -210,7 +213,7 @@ func TextWidth(text string) int {
 // keeping clipping and wrapping decisions coherent with canvas drawing.
 func TextWidthWith(text string, policy WidthPolicy) int {
 	line, widest := 0, 0
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	for graphemes.Next() {
 		grapheme := graphemes.Str()
 		switch grapheme {
@@ -230,7 +233,7 @@ func TextWidthWith(text string, policy WidthPolicy) int {
 }
 
 func firstGrapheme(text string, policy WidthPolicy) (string, int) {
-	graphemes := uniseg.NewGraphemes(text)
+	graphemes := grapheme.New(text)
 	if !graphemes.Next() {
 		return "", 0
 	}
@@ -243,6 +246,11 @@ func firstGrapheme(text string, policy WidthPolicy) (string, int) {
 // as before. The clamp to 2 cells stays: the Canvas cell model can only ever
 // hold a single base rune plus combining marks.
 func terminalWidth(grapheme string) int {
+	// Printable ASCII is one cell in every table; skip the overlay scan and
+	// the uniseg property lookup for the overwhelmingly common case.
+	if len(grapheme) == 1 && grapheme[0] >= 0x20 && grapheme[0] < 0x7f {
+		return 1
+	}
 	if w, ok := overlayClusterWidth(grapheme); ok {
 		return min(max(w, 0), 2)
 	}

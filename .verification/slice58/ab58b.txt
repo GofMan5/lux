@@ -1,0 +1,50 @@
+== before
+BenchmarkCanvasFill/clear-120x40-12         	   15075	     24839 ns/op	      25 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	   67845	      5746 ns/op	       5 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2211	    157461 ns/op	     174 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2295	    151703 ns/op	     167 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFill/clear-120x40-12         	   25545	     14134 ns/op	      15 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	   99349	      3031 ns/op	       3 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    3015	    121791 ns/op	     127 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2300	    156971 ns/op	     167 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFill/clear-120x40-12         	   15792	     24919 ns/op	      24 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	   57810	      5509 ns/op	       6 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2041	    168797 ns/op	     188 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2037	    204585 ns/op	     189 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFill/clear-120x40-12         	   24573	     15129 ns/op	      15 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  101036	      3217 ns/op	       3 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2698	    145073 ns/op	     142 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2090	    174580 ns/op	     184 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFill/clear-120x40-12         	   14810	     22500 ns/op	      25 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	   72834	      4836 ns/op	       5 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2509	    153407 ns/op	     153 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2382	    191442 ns/op	     161 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFill/clear-120x40-12         	   26144	     13904 ns/op	      14 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  122990	      3058 ns/op	       3 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2622	    135376 ns/op	     146 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2060	    174046 ns/op	     186 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFill/clear-120x40-12         	   15507	     20828 ns/op	      24 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	   71920	      4793 ns/op	       5 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2452	    148625 ns/op	     157 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    1982	    158885 ns/op	     194 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFill/clear-120x40-12         	   23995	     14421 ns/op	      16 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  102692	      3240 ns/op	       3 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    3100	    160773 ns/op	     124 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2517	    172712 ns/op	     152 B/op	       0 allocs/op
+== before
+BenchmarkCanvasFill/clear-120x40-12         	   15896	     22334 ns/op	      24 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	   71972	      5369 ns/op	       5 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    2367	    174739 ns/op	     162 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2208	    163072 ns/op	     174 B/op	       0 allocs/op
+== after
+BenchmarkCanvasFill/clear-120x40-12         	   25778	     13853 ns/op	      14 B/op	       0 allocs/op
+BenchmarkCanvasFill/panel-clipped-12        	  116656	      3038 ns/op	       3 B/op	       0 allocs/op
+BenchmarkCanvasFill/wide-120x40-12          	    3216	    121638 ns/op	     119 B/op	       0 allocs/op
+BenchmarkCanvasFrame-12                     	    2643	    136619 ns/op	     145 B/op	       0 allocs/op

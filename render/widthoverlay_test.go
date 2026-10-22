@@ -1,6 +1,10 @@
 package render
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/rivo/uniseg"
+)
 
 // Golden widths for the Unicode 18.0.0 overlay (see widthoverlay.go for how
 // the range tables were derived). Every expected value is the model width
@@ -174,5 +178,19 @@ func BenchmarkCanvasTextOverlay(b *testing.B) {
 	b.ReportAllocs()
 	for range b.N {
 		canvas.Text(2, 20, line, style)
+	}
+}
+
+// The printable-ASCII shortcut in terminalWidth must agree with the full
+// overlay-then-uniseg path for every ASCII byte, including the controls it must not claim.
+func TestTerminalWidthASCIIShortcutMatchesTables(t *testing.T) {
+	for b := 0; b < 0x80; b++ {
+		s := string(rune(b))
+		if _, hit := overlayClusterWidth(s); hit {
+			t.Fatalf("overlay claims ASCII %q", s)
+		}
+		if want := min(max(uniseg.StringWidth(s), 0), 2); terminalWidth(s) != want {
+			t.Fatalf("terminalWidth(%q) = %d; uniseg says %d", s, terminalWidth(s), want)
+		}
 	}
 }

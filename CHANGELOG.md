@@ -15,6 +15,22 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+### Performance
+
+- An idle app on Unix no longer wakes up at all. The input reader used to
+  re-poll every 100 ms only to check for cancellation; it now blocks in
+  `poll` and a self-pipe wakes it the moment the run is cancelled. Windows
+  already waited for console input without a CPU cost (0.0 ms of CPU over
+  20 s idle, measured).
+- Text-heavy frames are 2–4x cheaper. Grapheme segmentation now takes an
+  allocation-free fast path for ASCII runs (fuzzed against `uniseg` for
+  identical clusters), printable ASCII skips the width tables, and
+  background fills use bulk copies. Measured on 120x40 in-process scenes:
+  frame preparation p95 drops from 4.5 ms to 1.0 ms on a scrolling list,
+  from 4.0 ms to 0.6 ms on a static screen, and from 3.5 ms to 1.5 ms on
+  emoji- and CJK-heavy text. `Canvas.Text` is 2.5–3.9x faster, word and
+  character wrapping 3.0–3.7x, `TextArea`/`Input` drawing 2.6–3.5x.
+
 ## [0.2.0-rc.1] - 2026-10-22
 
 Release candidate for v0.2.0. Moving from v0.1.0? See
