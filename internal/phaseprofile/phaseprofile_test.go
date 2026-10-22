@@ -102,3 +102,28 @@ func TestSoakSamplesEveryCycleAndSeesGrowth(t *testing.T) {
 	t.Setenv("LUX_SOAK", "1")
 	CheckBounded(t, 120, 40, &counter{}, cycle, 40, 4, 64<<10)
 }
+
+type sizes struct{ seen [][2]int }
+
+func (s *sizes) Update(next event.Event) lux.Command {
+	if next.Kind == event.Resize {
+		s.seen = append(s.seen, [2]int{next.Width, next.Height})
+	}
+	return nil
+}
+
+func (s *sizes) View(*lux.Frame) {}
+
+// TestSoakOpensAtTheLargestCycleSize keeps every runtime surface at its final
+// capacity from the start, so a late first draw at 160x50 is not growth.
+func TestSoakOpensAtTheLargestCycleSize(t *testing.T) {
+	model := &sizes{}
+	cycle := []event.Event{event.ResizeTo(160, 30), event.ResizeTo(100, 50), event.ResizeTo(120, 40)}
+	samples, err := Soak(context.Background(), model, 120, 40, cycle, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(samples) != 3 || len(model.seen) < 2 || model.seen[0] != [2]int{160, 50} || model.seen[1] != [2]int{120, 40} {
+		t.Fatalf("samples=%d resizes=%v, want 3 samples after 160x50 then 120x40", len(samples), model.seen)
+	}
+}

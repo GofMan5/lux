@@ -115,12 +115,29 @@ type Sample struct {
 // were applied and their frames presented. A cycle should leave application
 // state where it found it, so growth across samples is framework-owned
 // queues, caches and history.
+//
+// The run opens at the largest size the cycle resizes to and then resizes to
+// width x height. Every runtime surface keeps the capacity of the largest
+// frame it drew, and which surface draws a frame is up to the scheduler, so
+// one meeting the largest size only after warmup would read as growth.
 func Soak(ctx context.Context, model lux.Model, width, height int, cycle []event.Event, cycles int) ([]Sample, error) {
-	script := make([]event.Event, 0, len(cycle)*cycles)
+	openWidth, openHeight := width, height
+	for _, next := range cycle {
+		if next.Kind == event.Resize {
+			openWidth, openHeight = max(openWidth, next.Width), max(openHeight, next.Height)
+		}
+	}
+	script := make([]event.Event, 0, 1+len(cycle)*cycles)
+	opening := 0
+	// A resize to the current size presents no frame, so it would stall the
+	// backend; add one only when the size changes.
+	if openWidth != width || openHeight != height {
+		script, opening = append(script, event.ResizeTo(width, height)), 1
+	}
 	for range cycles {
 		script = append(script, cycle...)
 	}
-	backend := &soakBackend{ProfileBackend: terminal.NewProfileBackend(width, height, Features, script), cycle: len(cycle), last: len(script)}
+	backend := &soakBackend{ProfileBackend: terminal.NewProfileBackend(openWidth, openHeight, Features, script), cycle: len(cycle), opening: opening, last: len(script) - opening}
 	err := lux.Run(ctx, model, lux.WithBackend(backend), lux.WithMaxFPS(240))
 	backend.mu.Lock()
 	defer backend.mu.Unlock()
@@ -132,9 +149,9 @@ func Soak(ctx context.Context, model lux.Model, width, height int, cycle []event
 // k*cycle sees cycle k finished.
 type soakBackend struct {
 	*terminal.ProfileBackend
-	cycle, last, calls int
-	mu                 sync.Mutex
-	samples            []Sample
+	cycle, opening, last, calls int
+	mu                          sync.Mutex
+	samples                     []Sample
 }
 
 func (b *soakBackend) NextEvent(ctx context.Context) (event.Event, error) {
@@ -143,7 +160,8 @@ func (b *soakBackend) NextEvent(ctx context.Context) (event.Event, error) {
 		return next, err
 	}
 	b.calls++
-	if index := b.calls - 1; b.cycle > 0 && index > 0 && index <= b.last && index%b.cycle == 0 {
+	// An opening resize precedes the cycles and is not counted.
+	if index := b.calls - 1 - b.opening; b.cycle > 0 && index > 0 && index <= b.last && index%b.cycle == 0 {
 		runtime.GC()
 		var stats runtime.MemStats
 		runtime.ReadMemStats(&stats)
