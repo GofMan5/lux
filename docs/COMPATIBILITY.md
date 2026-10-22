@@ -1,23 +1,27 @@
 # Compatibility
 
-Snapshot: **2026-10-08**. Entries describe the code currently present, not a
+Snapshot: **2026-10-22**. Entries describe the code currently present, not a
 release certification. Automated tests cover rendering, encoder, parser, and
-negotiation logic; the real-terminal matrix below remains to be executed and
-published.
+negotiation logic. **matrix-validated** rows passed a lane of the real-terminal
+validation matrix run on 2026-10-09; the lane scripts, raw captures, and the
+environments they ran in are in
+[`.verification/matrix/`](../.verification/matrix/README.md).
 
 Legend: **implemented** = code path exists; **degraded** = conservative/basic
-behavior; **planned validation** = plausible path without current evidence.
+behavior; **matrix-validated** = a real-terminal lane passed; **planned
+validation** = plausible path without current evidence.
 
 | Environment | Current status | Expected behavior / limit |
 |---|---|---|
-| Windows Terminal + ConPTY | implemented, validation pending | VT output, raw input through `x/term`, win32-input-mode keyboard when the mode 9001 probe answers, 100 ms resize polling |
-| Windows 10+ ConHost in cmd/PowerShell | degraded, validation pending | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; answers the mode 9001 probe with full win32-input support, so the keyboard path matches Windows Terminal there; modern mouse behavior depends on console support |
+| Windows Terminal + ConPTY | implemented, matrix-validated (WT 1.24) | VT output, raw input through `x/term`, win32-input-mode keyboard when the mode 9001 probe answers, 100 ms resize polling |
+| Windows 10+ ConHost in cmd/PowerShell | degraded, matrix-validated headless (interactive window not covered) | attempts `ENABLE_VIRTUAL_TERMINAL_PROCESSING`; answers the mode 9001 probe with full win32-input support, so the keyboard path matches Windows Terminal there; modern mouse behavior depends on console support |
 | Windows 7/8 legacy console | not supported | no published fallback to classic screen-buffer rendering |
 | Unix PTYs on Linux/macOS/BSD | implemented, e2e-verified | termios raw mode, VT output, `SIGWINCH` resize, `SIGTSTP`/`SIGCONT` suspend-resume round trip |
-| tmux | planned validation | legacy VT keyboard and mouse; tmux's own DECRPM answers for the output family (DECOM, 2026) are trusted because tmux implements those for its panes; input-family verdicts (kitty, pixel mouse, win32 input) are downgraded by the multiplexer gate so a pane never runs an input encoding tmux did not re-emit — see "Multiplexer provenance" below |
-| GNU screen | planned validation | basic VT/ANSI path only; detected through `$STY` or a `screen*` `$TERM` and gated the same way as tmux; screen itself implements neither 2026 nor kitty for panes |
-| SSH/mosh | planned validation | negotiation runs before the first frame over the same transport; slow links can spend the whole 150 ms budget (raise `LUX_TUI_PROBE_TIMEOUT`), and impaired-link validation remains |
-| CI, redirected stdout, `TERM=dumb` | implemented | monochrome newline-delimited full snapshots; no cursor addressing/input |
+| tmux | implemented, matrix-validated (tmux 3.7c) | legacy VT keyboard and mouse; tmux's own DECRPM answers for the output family (DECOM, 2026) are trusted because tmux implements those for its panes; input-family verdicts (kitty, pixel mouse, win32 input) are downgraded by the multiplexer gate so a pane never runs an input encoding tmux did not re-emit — see "Multiplexer provenance" below |
+| GNU screen | degraded, matrix-validated (Screen 5.0.2) | basic VT/ANSI path only; detected through `$STY` or a `screen*` `$TERM` and gated the same way as tmux; screen itself implements neither 2026 nor kitty for panes |
+| SSH | implemented, matrix-validated (OpenSSH 10.3p1, plus 200 ms / 512 kbit netem) | negotiation runs before the first frame over the same transport; slow links can spend the whole 150 ms budget (raise `LUX_TUI_PROBE_TIMEOUT`; the netem lane measured the knob) |
+| mosh | planned validation | not exercised by the matrix |
+| CI, redirected stdout, `TERM=dumb` | implemented, matrix-validated (Linux and Windows pipe, dumb) | monochrome newline-delimited full snapshots; no cursor addressing/input |
 
 Interactive controls require an interactive terminal profile. Every pointer
 action in the built-in controls has a keyboard equivalent because mouse support

@@ -9,6 +9,8 @@
 > motion, terminal adapter, and CPU 3D rasterizer are in. Semver rules for
 > `0.x` are stated in [CHANGELOG.md](CHANGELOG.md) — minor releases may
 > break, patch releases never do.
+> `main` carries unreleased additive work for the next minor; see the
+> [migration guide](docs/MIGRATION.md) before upgrading.
 
 LUX TUI treats the terminal as a constrained rendering target, not a stream of
 decorated strings. The current core stores complete extended grapheme clusters,
@@ -506,6 +508,7 @@ GPU engine.
 - [Your own control in an evening](docs/CUSTOM-CONTROL.md)
 - [Research snapshot](docs/RESEARCH.md)
 - [Performance contract](docs/PERFORMANCE.md)
+- [Migration guide](docs/MIGRATION.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 

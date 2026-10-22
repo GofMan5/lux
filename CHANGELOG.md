@@ -15,6 +15,8 @@ semver: breaking changes land only in a new major.
 
 ## [Unreleased]
 
+Moving from v0.1.0? See [docs/MIGRATION.md](docs/MIGRATION.md).
+
 ### Added
 
 - `lux.Metrics` reports per-frame phase timings — `UpdateTime`, `ViewTime`,
@@ -206,94 +208,6 @@ semver: breaking changes land only in a new major.
   `TestTableSelectionSurvivesFilter`,
   `TestTableFilterPaintsQueryAndEmptyState`, and an extended
   end-to-end keyboard, mouse, and filter run.
-
-### Changed
-
-- Row-walking widgets now consult the canvas clip before pricing their
-  rows: when a tighter `ClipRect` hides part of a widget's bounds,
-  `ui.Table` and `ui.Tree` call `rowAt`, `ui.List` calls `DisabledAt`,
-  and `ui.RadioGroup` formats labels only for rows the clip can paint.
-  Rows stay addressable — regions still register the full logical bounds
-  (hit mapping, Tab reachability, and scroll clamps are unchanged), and
-  single-cell widgets (`Button`, `Checkbox`, `Gauge`, `Sparkline`,
-  `Tabs`, `Spinner`) skip the draw entirely when the clip hides their
-  whole rectangle. Applications that count callback invocations see
-  fewer calls under a clip; applications that rely only on drawn output
-  and hit testing see no difference.
-
-### Fixed
-
-- A nil `*ui.Context` is now inert everywhere instead of panicking in
-  routing methods: `Begin`, `End`, `Region`, `BeginModal`, `EndModal`,
-  `Handle`, `Focus`, `Focused`, `Hovered`, `Pressed`, `ModalOpen` and
-  `FocusDelta` return false or zero, and every widget drawn through it
-  paints without registering — previously `Button`, `List` and the other
-  interactive widgets panicked on a non-empty rectangle, while `Input` and
-  `TextArea` silently drew nothing. `(*lux.Frame)(nil).RequestFrame` and
-  `RequestFrameAfter` are no-ops like the other `Frame` methods. Pinned by
-  `TestNilContextPaintsWithoutRouting` and by `internal/apiaudit`, which
-  calls every exported method and function of the public packages on zero
-  values, fresh zero pointers and nil receivers and fails on any panic or
-  hang.
-- `render.Canvas.Text` reuses its own grapheme measurement instead of
-  sending each cluster through `Put` for a second segmentation/width pass.
-  Rows outside the canvas or active clip skip drawing, and exhausted
-  columns skip positive-width puts. Hidden lines still contribute to the
-  widest-input-line return; tabs, carriage returns, combining attachment,
-  wide-cell repair, hyperlinks, nil canvases and `WidthPolicy` semantics
-  are preserved. A reference-algorithm test and fuzz target compare the
-  full backing buffer and return value. No public API or shared mutable
-  instrumentation is added.
-- `examples/08-tour` no longer schedules gauge/spinner frames while those
-  decorations are scrolled out of the compact widgets page. Visibility
-  comes from their actual clipped geometry each View; scrolling them into
-  view resumes animation. Reduced motion still freezes decoration, and
-  work-progress sidebands remain independent of visibility. Pinned by a
-  geometry matrix and an end-to-end scroll/idle/resume test.
-- The benchmark harness adds a lux-only `tall` diagnostic (one precomputed
-  160-line document drawn without virtualization) and a validated `-scenes`
-  filter for repeatable targeted measurements. The 2,000-line CPU-only
-  variant remains separate from paced PTY/idle measurements.
-- `examples/05-widgets` no longer presents at the frame cap: idle pages
-  ask for no frames at all (measured 96 frames in 400ms each of a
-  parked table, form, and tree — now 0), and the motion page schedules
-  its frames at the wall-clock moment of the next visible change
-  instead of every pacer tick (384 frames in 1.6s — now 36, the exact
-  union of 12.5 spinner glyph flips and 10 sparkline points). The
-  request uses the absolute `RequestFrameAt`, not `RequestFrameAfter`:
-  the relative form anchors to the run loop's timer fire, which
-  precedes the View's post-draw clock, so every deadline fired one
-  compose early, painted the pre-change glyph, and burned a
-  pacer-clamped catch-up frame — 54 frames where 36 suffice.
-  Non-interactive and reduced-motion terminals never schedule the glyph
-  clock at all. Pinned by `TestCatalogIdlePagesGoQuiet` and
-  `TestMotionPageWaitsForGlyphDeadlines`.
-- The `examples/05-widgets` keystroke-before-first-commit canary is now
-  deterministic across the run loop's two start interleaves: Run's
-  first select may dequeue the pre-queued key before or after the
-  initial compose, so the report sequence itself is nondeterministic.
-  The test now waits on the model's own key counter (`keys == 1` while
-  the selection has not moved) instead of report ordinal, and forces
-  its settling report with an inert F5 keypress that bubbles to a
-  frame, replacing the old reliance on the example's own animation.
-  `go test -count=3 -race` no longer reshuffles it.
-- The `examples/08-tour` interaction tests' warm-up barrier gives a cold
-  `lux.Run` two seconds to present its first frame instead of 150
-  milliseconds. A slow shared CI runner under `-race` once outlived the
-  old window with nothing else changed — the lane failed at warm-up and
-  passed the rerun — because the first frame is a cold start (process
-  spin-up plus first paint). A liveness barrier must bound a dead
-  runtime, not a busy one; every content assertion is untouched and the
-  dead-runtime case still fails.
-- `ui.TableState` no longer treats a header click as a row read: when the
-  context turns a mouse press+release on an Activatable region into an
-  `Activate` action, an activation whose Y lands on the header rows is
-  dropped — the press already sorted, and the release completing the same
-  click must not also announce the selected row. Keyboard activation
-  (Enter/Space) carries no mouse position and still always activates.
-  Pinned by `TestTableStateHeaderClickDoesNotActivate`.
-
-### Added
 
 - `examples/12-async`, the async feedback example: a feeds app whose loads
   are commands, not calls — chunked streaming with partial rows on screen,
@@ -709,6 +623,18 @@ semver: breaking changes land only in a new major.
 
 ### Changed
 
+- Row-walking widgets now consult the canvas clip before pricing their
+  rows: when a tighter `ClipRect` hides part of a widget's bounds,
+  `ui.Table` and `ui.Tree` call `rowAt`, `ui.List` calls `DisabledAt`,
+  and `ui.RadioGroup` formats labels only for rows the clip can paint.
+  Rows stay addressable — regions still register the full logical bounds
+  (hit mapping, Tab reachability, and scroll clamps are unchanged), and
+  single-cell widgets (`Button`, `Checkbox`, `Gauge`, `Sparkline`,
+  `Tabs`, `Spinner`) skip the draw entirely when the clip hides their
+  whole rectangle. Applications that count callback invocations see
+  fewer calls under a clip; applications that rely only on drawn output
+  and hit testing see no difference.
+
 - Under `DefaultTheme` (and any theme that sets the new `Focus` role), a
   focused widget is now visibly distinct from a selected-but-unfocused
   one: previously a focused table row drew exactly like a bold selected
@@ -717,6 +643,76 @@ semver: breaking changes land only in a new major.
   no change.
 
 ### Fixed
+
+- A nil `*ui.Context` is now inert everywhere instead of panicking in
+  routing methods: `Begin`, `End`, `Region`, `BeginModal`, `EndModal`,
+  `Handle`, `Focus`, `Focused`, `Hovered`, `Pressed`, `ModalOpen` and
+  `FocusDelta` return false or zero, and every widget drawn through it
+  paints without registering — previously `Button`, `List` and the other
+  interactive widgets panicked on a non-empty rectangle, while `Input` and
+  `TextArea` silently drew nothing. `(*lux.Frame)(nil).RequestFrame` and
+  `RequestFrameAfter` are no-ops like the other `Frame` methods. Pinned by
+  `TestNilContextPaintsWithoutRouting` and by `internal/apiaudit`, which
+  calls every exported method and function of the public packages on zero
+  values, fresh zero pointers and nil receivers and fails on any panic or
+  hang.
+- `render.Canvas.Text` reuses its own grapheme measurement instead of
+  sending each cluster through `Put` for a second segmentation/width pass.
+  Rows outside the canvas or active clip skip drawing, and exhausted
+  columns skip positive-width puts. Hidden lines still contribute to the
+  widest-input-line return; tabs, carriage returns, combining attachment,
+  wide-cell repair, hyperlinks, nil canvases and `WidthPolicy` semantics
+  are preserved. A reference-algorithm test and fuzz target compare the
+  full backing buffer and return value. No public API or shared mutable
+  instrumentation is added.
+- `examples/08-tour` no longer schedules gauge/spinner frames while those
+  decorations are scrolled out of the compact widgets page. Visibility
+  comes from their actual clipped geometry each View; scrolling them into
+  view resumes animation. Reduced motion still freezes decoration, and
+  work-progress sidebands remain independent of visibility. Pinned by a
+  geometry matrix and an end-to-end scroll/idle/resume test.
+- The benchmark harness adds a lux-only `tall` diagnostic (one precomputed
+  160-line document drawn without virtualization) and a validated `-scenes`
+  filter for repeatable targeted measurements. The 2,000-line CPU-only
+  variant remains separate from paced PTY/idle measurements.
+- `examples/05-widgets` no longer presents at the frame cap: idle pages
+  ask for no frames at all (measured 96 frames in 400ms each of a
+  parked table, form, and tree — now 0), and the motion page schedules
+  its frames at the wall-clock moment of the next visible change
+  instead of every pacer tick (384 frames in 1.6s — now 36, the exact
+  union of 12.5 spinner glyph flips and 10 sparkline points). The
+  request uses the absolute `RequestFrameAt`, not `RequestFrameAfter`:
+  the relative form anchors to the run loop's timer fire, which
+  precedes the View's post-draw clock, so every deadline fired one
+  compose early, painted the pre-change glyph, and burned a
+  pacer-clamped catch-up frame — 54 frames where 36 suffice.
+  Non-interactive and reduced-motion terminals never schedule the glyph
+  clock at all. Pinned by `TestCatalogIdlePagesGoQuiet` and
+  `TestMotionPageWaitsForGlyphDeadlines`.
+- The `examples/05-widgets` keystroke-before-first-commit canary is now
+  deterministic across the run loop's two start interleaves: Run's
+  first select may dequeue the pre-queued key before or after the
+  initial compose, so the report sequence itself is nondeterministic.
+  The test now waits on the model's own key counter (`keys == 1` while
+  the selection has not moved) instead of report ordinal, and forces
+  its settling report with an inert F5 keypress that bubbles to a
+  frame, replacing the old reliance on the example's own animation.
+  `go test -count=3 -race` no longer reshuffles it.
+- The `examples/08-tour` interaction tests' warm-up barrier gives a cold
+  `lux.Run` two seconds to present its first frame instead of 150
+  milliseconds. A slow shared CI runner under `-race` once outlived the
+  old window with nothing else changed — the lane failed at warm-up and
+  passed the rerun — because the first frame is a cold start (process
+  spin-up plus first paint). A liveness barrier must bound a dead
+  runtime, not a busy one; every content assertion is untouched and the
+  dead-runtime case still fails.
+- `ui.TableState` no longer treats a header click as a row read: when the
+  context turns a mouse press+release on an Activatable region into an
+  `Activate` action, an activation whose Y lands on the header rows is
+  dropped — the press already sorted, and the release completing the same
+  click must not also announce the selected row. Keyboard activation
+  (Enter/Space) carries no mouse position and still always activates.
+  Pinned by `TestTableStateHeaderClickDoesNotActivate`.
 
 - Resize commit window in the process explorer's size-gate test
   (`examples/09-procs`): the test read the first frame painted at the

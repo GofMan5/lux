@@ -386,6 +386,14 @@ Border не используется по умолчанию для каждог
 - Покрытие: `TestNilContextPaintsWithoutRouting` (все виджеты на реальном canvas) и `TestSurfaceSweep` как постоянная проверка в `go test ./...`. Мутанты отловлены: без guard в `RegionWithOptions` падает widget-тест, без guard в `RequestFrameAfter` — sweep.
 - Изменение поведения для nil-случаев внесено в CHANGELOG в раздел Fixed. Сигнатуры не менялись.
 
+**Этап 7, migration guide и согласование docs (slice 54):**
+
+- `docs/MIGRATION.md` (v0.1.0 → next minor): правка исходников не нужна. Доказательство: `examples/` из v0.1.0 без изменений собраны в scratch-модуле с `replace` на текущее дерево; build и vet проходят, тесты примеров зелёные, SSH-пример проходит vet под Linux. Дифф `go doc -all` между v0.1.0 и HEAD содержит только добавления. Отдельно перечислено то, что всё-таки может задеть: позиционные литералы структур с новыми полями, новое значение `event.Kind`, пять изменений поведения и новый API.
+- В CHANGELOG `[Unreleased]` сведён к одному блоку на каждую категорию (Added/Changed/Fixed/Performance). Ни один bullet не потерян, это проверено assert'ом. Добавлена ссылка на migration guide.
+- В SECURITY.md формулировку «pre-release» заменила таблица поддержки: `main` и последний `0.x` minor получают патчи, старые minor — нет.
+- COMPATIBILITY.md: статусы «validation pending / planned validation» заменены на «matrix-validated» с версиями, и только там, где в `.verification/matrix/` (прогон 2026-10-09) есть пройденный лейн. Строка SSH/mosh разделена: mosh матрицей не покрыт и остаётся planned. ConHost отмечен как validated headless: интерактивное окно не покрыто.
+- README: в блок статуса добавлена строка про unreleased-работу на `main` и ссылки на migration guide.
+
 **Gate v1.0:** доказанная стабильность выбранного контракта + production evidence + usable recipes. «Нет никогда никаких багов» не является обещанием.
 
 ## 12. Порядок релизов и первые десять slices

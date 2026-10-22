@@ -2,8 +2,15 @@
 
 ## Supported versions
 
-LUX TUI is pre-release. Security fixes are applied to the latest `main` branch;
-there is no supported stable-version matrix yet.
+Until v1.0, only the latest `0.x` minor release and `main` receive security
+fixes, shipped as a patch release of that minor. Older minors are not
+patched; upgrade with [docs/MIGRATION.md](docs/MIGRATION.md).
+
+| Version | Supported |
+| --- | --- |
+| `main` | yes |
+| latest `0.x` minor (currently v0.1) | yes |
+| older `0.x` minors | no |
 
 ## Reporting a vulnerability
 
