@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -53,21 +54,68 @@ var errReadTimeout = errors.New("terminal: read timeout")
 // application through an event, never a panic.
 var errHangup = errors.New("terminal: hangup")
 
-func readInput(ctx context.Context, file *os.File, buffer []byte, timeout time.Duration) (int, error) {
-	fd := int(file.Fd())
-	milliseconds := 100
+// readWaker turns the read context's cancellation into a readable byte, so
+// readInput can block in poll with no timeout and still return the moment
+// Close cancels the loop. Without it the loop had to wake ten times a second
+// just to look at ctx, which was the whole idle CPU cost of a quiet app.
+type readWaker struct {
+	mu   sync.Mutex
+	r, w int
+	stop func() bool
+}
+
+// newReadWaker returns nil when no pipe is available; readInput then falls
+// back to slicing its wait so cancellation is still noticed.
+func newReadWaker(ctx context.Context) *readWaker {
+	var fds [2]int
+	if unix.Pipe(fds[:]) != nil {
+		return nil
+	}
+	unix.CloseOnExec(fds[0])
+	unix.CloseOnExec(fds[1])
+	waker := &readWaker{r: fds[0], w: fds[1]}
+	waker.stop = context.AfterFunc(ctx, func() {
+		waker.mu.Lock()
+		defer waker.mu.Unlock()
+		if waker.w >= 0 {
+			_, _ = unix.Write(waker.w, []byte{0})
+		}
+	})
+	return waker
+}
+
+func (w *readWaker) close() {
+	if w == nil {
+		return
+	}
+	w.stop()
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = unix.Close(w.r)
+	_ = unix.Close(w.w)
+	w.r, w.w = -1, -1
+}
+
+func readInput(ctx context.Context, waker *readWaker, file *os.File, buffer []byte, timeout time.Duration) (int, error) {
+	fds := []unix.PollFd{{Fd: int32(file.Fd()), Events: unix.POLLIN}}
+	milliseconds := -1
+	if waker != nil {
+		fds = append(fds, unix.PollFd{Fd: int32(waker.r), Events: unix.POLLIN})
+	} else {
+		milliseconds = 100
+	}
 	if timeout >= 0 {
 		milliseconds = max(1, int(timeout/time.Millisecond))
 	}
 	for {
-		ready, err := unix.Poll([]unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}, milliseconds)
+		ready, err := unix.Poll(fds, milliseconds)
 		if err != nil && err != syscall.EINTR {
 			return 0, err
 		}
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
-		if ready > 0 {
+		if ready > 0 && fds[0].Revents != 0 {
 			return file.Read(buffer)
 		}
 		if timeout >= 0 {

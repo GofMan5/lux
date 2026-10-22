@@ -1015,6 +1015,8 @@ func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<
 			b.restoreInput()
 		}
 	}()
+	waker := newReadWaker(ctx)
+	defer waker.close()
 	buffer := make([]byte, 4096)
 	if len(prefill) > 0 {
 		// Probe leftovers are replayed before the first read so keystrokes
@@ -1034,7 +1036,7 @@ func (b *Backend) readLoop(ctx context.Context, done chan struct{}, events chan<
 		if parser.pendingEscape() {
 			wait = escapeDelay
 		}
-		count, err := readInput(ctx, b.input, buffer, wait)
+		count, err := readInput(ctx, waker, b.input, buffer, wait)
 		if count > 0 {
 			for _, next := range parser.feed(buffer[:count], false) {
 				select {

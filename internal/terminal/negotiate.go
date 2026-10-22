@@ -159,7 +159,7 @@ func negotiate(ctx context.Context, input *os.File, writer io.Writer, timeout ti
 				remaining = wait
 			}
 		}
-		count, err := readInput(ctx, input, buffer, remaining)
+		count, err := readInput(ctx, nil, input, buffer, remaining)
 		if count > 0 {
 			stream = append(stream, buffer[:count]...)
 			if len(stream) >= maxProbeStream {

@@ -255,7 +255,7 @@ func TestReadInputReadsBytesFromPipeInput(t *testing.T) {
 		t.Fatal(err)
 	}
 	buffer := make([]byte, 8)
-	count, err := readInput(context.Background(), reader, buffer, time.Second)
+	count, err := readInput(context.Background(), nil, reader, buffer, time.Second)
 	if err != nil {
 		t.Fatalf("readInput: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestReadInputWakesForBytesThatArriveLate(t *testing.T) {
 		}
 	}()
 	buffer := make([]byte, 8)
-	count, err := readInput(context.Background(), reader, buffer, 2*time.Second)
+	count, err := readInput(context.Background(), nil, reader, buffer, 2*time.Second)
 	if err != nil {
 		t.Fatalf("readInput: %v", err)
 	}
@@ -297,7 +297,7 @@ func TestReadInputReturnsEOFWhenPipeWriterCloses(t *testing.T) {
 		t.Fatal(err)
 	}
 	buffer := make([]byte, 8)
-	count, err := readInput(context.Background(), reader, buffer, time.Second)
+	count, err := readInput(context.Background(), nil, reader, buffer, time.Second)
 	if !errors.Is(err, io.EOF) {
 		t.Fatalf("readInput error = %v, want io.EOF", err)
 	}
@@ -321,7 +321,7 @@ func TestReadInputHonorsContextCancellationOnIdlePipe(t *testing.T) {
 	}()
 	buffer := make([]byte, 8)
 	start := time.Now()
-	count, err := readInput(ctx, reader, buffer, 10*time.Second)
+	count, err := readInput(ctx, nil, reader, buffer, 10*time.Second)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("readInput error = %v, want context.Canceled", err)
 	}
@@ -342,7 +342,7 @@ func TestReadInputWaitsUntilDeadlineOnIdlePipe(t *testing.T) {
 	defer func() { _ = writer.Close() }()
 	buffer := make([]byte, 8)
 	start := time.Now()
-	count, err := readInput(context.Background(), reader, buffer, 300*time.Millisecond)
+	count, err := readInput(context.Background(), nil, reader, buffer, 300*time.Millisecond)
 	if !errors.Is(err, errReadTimeout) {
 		t.Fatalf("readInput error = %v, want errReadTimeout", err)
 	}

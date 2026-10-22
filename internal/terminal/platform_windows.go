@@ -150,7 +150,15 @@ const waitSlice = 100 * time.Millisecond
 // Read no context could cancel). Pipes therefore poll their byte count
 // through PeekNamedPipe, whose answer is contractual, and non-pipe
 // non-console files fall back to a direct read.
-func readInput(ctx context.Context, file *os.File, buffer []byte, timeout time.Duration) (int, error) {
+// readWaker is the Unix poll wake-up; the console wait below is already
+// sliced and costs nothing measurable while idle, so Windows needs none.
+type readWaker struct{}
+
+func newReadWaker(context.Context) *readWaker { return nil }
+
+func (*readWaker) close() {}
+
+func readInput(ctx context.Context, _ *readWaker, file *os.File, buffer []byte, timeout time.Duration) (int, error) {
 	handle := windows.Handle(file.Fd())
 	var consoleMode uint32
 	console := windows.GetConsoleMode(handle, &consoleMode) == nil
