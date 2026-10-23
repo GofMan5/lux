@@ -23,6 +23,9 @@ semver: breaking changes land only in a new major.
   confirm modal, a tree plus `TextArea` editor, a motion and 3D lab, three
   themes, a fuzzy command palette and a live event inspector. It sleeps when
   idle and ships a preparation benchmark and a bounded-memory soak.
+- `docs/MANUAL-CHECKLIST.md`: 75 concrete steps with expected results for
+  walking the studio and the other examples by hand in Windows Terminal,
+  conhost, VS Code, a Linux terminal and tmux before each release.
 
 ### Fixed
 

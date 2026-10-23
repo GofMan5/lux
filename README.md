@@ -518,6 +518,7 @@ GPU engine.
 - [Research snapshot](docs/RESEARCH.md)
 - [Performance contract](docs/PERFORMANCE.md)
 - [Migration guide](docs/MIGRATION.md)
+- [Manual terminal checklist](docs/MANUAL-CHECKLIST.md)
 - [Contributing](CONTRIBUTING.md)
 - [Security](SECURITY.md)
 

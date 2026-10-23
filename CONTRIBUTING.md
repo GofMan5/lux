@@ -53,7 +53,9 @@ for m in . e2e examples/07-ssh benchmarks; do (cd $m && go mod tidy -diff); done
 The nested modules are Unix-only (`benchmarks` is Linux-only); on a Windows
 host, vet them with `GOOS=linux go vet ./...`. Re-run the lanes in
 [`.verification/matrix/`](.verification/matrix/README.md) that the release
-touches, and refresh their evidence.
+touches, and refresh their evidence. Walk the
+[manual terminal checklist](docs/MANUAL-CHECKLIST.md) in every terminal it
+lists and record the run in its log.
 
 Move `[Unreleased]` in CHANGELOG.md to a dated version section, add the
 upgrade steps to [docs/MIGRATION.md](docs/MIGRATION.md), then create an
