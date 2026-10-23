@@ -38,6 +38,14 @@ semver: breaking changes land only in a new major.
   example `ESC[67;0;3;0;8;1_` after Ctrl+C) used to reach the shell as
   garbage; `Close` now flushes pending console input after restoring it.
 
+- Windows: moving the mouse no longer types keys. In win32-input mode the
+  console wraps input that reached it as text — mouse reports, pastes — in one
+  key record per character with no virtual key, so every SGR mouse report
+  decoded as `<`, digit and `;` key presses, and apps bound to digit keys
+  (the studio's page switcher) jumped under a moving pointer. These records
+  now unwrap back into the byte stream and decode as the mouse event they
+  spell, even when a record is split across reads.
+
 ## [0.2.0-rc.2] - 2026-10-22
 
 ### Performance

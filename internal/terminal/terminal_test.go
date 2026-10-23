@@ -3,6 +3,7 @@ package terminal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -565,6 +566,61 @@ func TestParserWin32Records(t *testing.T) {
 		if len(plain) != 1 || plain[0].Kind != event.Key || !plain[0].Key.Is(event.KeyUnknown, 0) {
 			t.Fatalf("ungated record %q decoded as %#v", gated, plain)
 		}
+	}
+}
+
+// TestParserWin32SerializedCharacters feeds what conhost really delivers in
+// mode 9001 for input that reached it as text: one record per character,
+// with no virtual key and no scan code. A mouse move must decode as the
+// mouse event it spells, even split across reads, never as digit presses
+// that would switch an app's pages under a moving pointer.
+func TestParserWin32SerializedCharacters(t *testing.T) {
+	serialize := func(text string, release bool) string {
+		var out strings.Builder
+		for _, r := range text {
+			fmt.Fprintf(&out, "\x1b[0;0;%d;1;0;1_", r)
+			if release {
+				fmt.Fprintf(&out, "\x1b[0;0;%d;0;0;1_", r)
+			}
+		}
+		return out.String()
+	}
+	motion := "\x1b[<35;10;5M"
+	want := newParser().feed([]byte(motion), false)
+	if len(want) != 1 || want[0].Kind != event.Mouse {
+		t.Fatalf("plain motion = %#v", want)
+	}
+	wrapped := serialize(motion, false)
+	if got := win32Parser().feed([]byte(wrapped), false); len(got) != 1 || got[0] != want[0] {
+		t.Fatalf("serialized motion = %#v, want %#v", got, want)
+	}
+	for size := 1; size < len(wrapped); size++ {
+		parser := win32Parser()
+		var got []event.Event
+		for i := 0; i < len(wrapped); i += size {
+			got = append(got, parser.feed([]byte(wrapped[i:min(i+size, len(wrapped))]), false)...)
+		}
+		if len(got) != 1 || got[0] != want[0] {
+			t.Fatalf("serialized motion in %d-byte reads = %#v, want %#v", size, got, want)
+		}
+	}
+	// A record cut short waits like any partial escape: the lone-escape
+	// timeout still reports it as Escape instead of stalling the stream.
+	parser := win32Parser()
+	if got := parser.feed([]byte("\x1b[0;0;2"), false); len(got) != 0 || !parser.pendingEscape() {
+		t.Fatalf("partial record = %#v, pending %v", got, parser.pendingEscape())
+	}
+	if got := parser.flushEscape(); len(got) != 1 || !got[0].Key.Is(event.KeyEscape, 0) {
+		t.Fatalf("flushed partial record = %#v", got)
+	}
+	// Plain text arrives as press and release pairs; the release carries
+	// nothing a byte stream has, so each character is one press.
+	if got := win32Parser().feed([]byte(serialize("xé", true)), false); len(got) != 2 || got[0] != event.RuneKey('x', 0) || got[1] != event.RuneKey('é', 0) {
+		t.Fatalf("serialized text = %#v", got)
+	}
+	// A record with a virtual key is a real key, even a lone Escape.
+	if got := win32Parser().feed([]byte("\x1b[27;1;27;1;0;1_"), false); len(got) != 1 || !got[0].Key.Is(event.KeyEscape, 0) {
+		t.Fatalf("keyed escape = %#v", got)
 	}
 }
 

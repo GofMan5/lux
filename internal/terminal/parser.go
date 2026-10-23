@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"unicode"
@@ -35,6 +36,11 @@ type parser struct {
 	// final byte is not part of any encoding this backend speaks and its
 	// sequences surface as unknown keys.
 	win32Input bool
+	// record holds, in win32-input mode, a trailing escape whose record has
+	// not fully arrived. Records unwrap before parsing, so a partial one
+	// waits here: in the buffer, an unwrapped ESC ahead of it would parse
+	// against its raw bytes.
+	record []byte
 }
 
 // decodeMode is the decode context parseEscape hands its CSI arms: whether
@@ -51,19 +57,32 @@ type decodeMode struct {
 func newParser() *parser { return &parser{} }
 
 func (p *parser) pendingEscape() bool {
-	return len(p.buffer) > 0 && p.buffer[0] == 0x1b && !p.inPaste
+	if p.inPaste {
+		return false
+	}
+	if len(p.buffer) == 0 {
+		return len(p.record) > 0
+	}
+	return p.buffer[0] == 0x1b
 }
 
 func (p *parser) flushEscape() []event.Event {
 	if !p.pendingEscape() {
 		return nil
 	}
+	if len(p.buffer) == 0 {
+		p.buffer, p.record = append(p.buffer, p.record...), p.record[:0]
+	}
 	p.buffer = p.buffer[1:]
 	return []event.Event{event.KeyPress(event.KeyEscape, 0)}
 }
 
 func (p *parser) feed(data []byte, eof bool) []event.Event {
-	p.buffer = append(p.buffer, data...)
+	if p.win32Input {
+		p.appendWin32(data, eof)
+	} else {
+		p.buffer = append(p.buffer, data...)
+	}
 	result := make([]event.Event, 0, 4)
 	for len(p.buffer) > 0 {
 		if p.inPaste {
@@ -760,39 +779,14 @@ func parseMouse(sequence string, mode decodeMode) (event.MouseEvent, bool) {
 // that malformed signals a broken encoder, so lux rejects the record and
 // lets it surface as an unknown key rather than guessing.
 func parseWin32Key(sequence string) (event.Event, bool) {
-	if len(sequence) < 3 || !strings.HasPrefix(sequence, "\x1b[") || sequence[len(sequence)-1] != '_' {
+	values, ok := win32Record(sequence)
+	if !ok {
 		return event.Event{}, false
 	}
-	fields := strings.Split(sequence[2:len(sequence)-1], ";")
-	if len(fields) > 6 {
-		return event.Event{}, false
-	}
-	// The scan code (second parameter) is diagnostic-only: identity,
+	// The scan code (second parameter) is diagnostic-only here: identity,
 	// state, and text all live in the other fields, so it is read for
 	// grammar and then ignored.
-	values := [6]int{0, 0, 0, 0, 0, 1}
-	for i, field := range fields {
-		if field == "" {
-			continue
-		}
-		for j := 0; j < len(field); j++ {
-			if field[j] < '0' || field[j] > '9' {
-				return event.Event{}, false
-			}
-		}
-		value, err := strconv.Atoi(field)
-		if err != nil {
-			return event.Event{}, false
-		}
-		values[i] = value
-	}
 	vk, _, uc, kd, cs, rc := values[0], values[1], values[2], values[3], values[4], values[5]
-	if kd != 0 && kd != 1 {
-		return event.Event{}, false
-	}
-	if rc > 0xFFFF {
-		return event.Event{}, false
-	}
 	action, repeat := event.ActionRelease, uint16(0)
 	if kd == 1 {
 		// A press coalesces the terminal-reported repeat count; a count of
@@ -833,6 +827,88 @@ func parseWin32Key(sequence string) (event.Event, bool) {
 		code, mod = event.KeyBackTab, mod&^event.ModShift
 	}
 	return event.Event{Kind: event.Key, Key: event.KeyEvent{Code: code, Rune: r, Mod: mod, Action: action, Repeat: repeat}}, true
+}
+
+// win32Record reads the six parameters of one record with the defaults and
+// the grammar parseWin32Key documents.
+func win32Record(sequence string) ([6]int, bool) {
+	values := [6]int{0, 0, 0, 0, 0, 1}
+	if len(sequence) < 3 || !strings.HasPrefix(sequence, "\x1b[") || sequence[len(sequence)-1] != '_' {
+		return values, false
+	}
+	fields := strings.Split(sequence[2:len(sequence)-1], ";")
+	if len(fields) > 6 {
+		return values, false
+	}
+	for i, field := range fields {
+		if field == "" {
+			continue
+		}
+		for j := 0; j < len(field); j++ {
+			if field[j] < '0' || field[j] > '9' {
+				return values, false
+			}
+		}
+		value, err := strconv.Atoi(field)
+		if err != nil {
+			return values, false
+		}
+		values[i] = value
+	}
+	if kd := values[3]; kd != 0 && kd != 1 || values[5] > 0xFFFF {
+		return values, false
+	}
+	return values, true
+}
+
+// appendWin32 joins data to the held partial record and appends the
+// unwrapped bytes to the buffer, holding back a trailing escape that may
+// still grow into a record: a lone ESC, or a CSI with no final byte yet
+// within the sequence limit. At end of input nothing is held.
+func (p *parser) appendWin32(data []byte, eof bool) {
+	raw := append(p.record, data...)
+	cut := len(raw)
+	if start := bytes.LastIndexByte(raw, 0x1b); !eof && start >= 0 && len(raw)-start <= maxSequence {
+		if tail := raw[start:]; len(tail) == 1 || tail[1] == '[' && sequenceEnd(tail) < 0 {
+			cut = start
+		}
+	}
+	// The head unwraps in place and lands in the buffer before the tail
+	// moves down over it.
+	p.buffer = append(p.buffer, unwrapWin32Bytes(raw[:cut])...)
+	p.record = append(p.record[:0], raw[cut:]...)
+}
+
+// unwrapWin32Bytes replaces every complete serialized-character record in
+// buffer with the character it carries, compacting in place. In mode 9001
+// the console has no key for input that reached it as text — the mouse
+// reports, pastes, and replies a terminal writes — so it wraps each
+// character in a record of its own with no virtual key and no scan code.
+// Decoded as keys, one mouse move would read as '<', '3', '5', ';' and
+// digit presses; unwrapped, the bytes rejoin the stream and parse as the
+// sequence they spell. The matching releases carry nothing a byte stream
+// has, so they drop.
+// ponytail: a character past the BMP arrives as two surrogate records that
+// stay records and decode as unknown keys; pair them if one ever shows up.
+func unwrapWin32Bytes(buffer []byte) []byte {
+	out := buffer[:0]
+	for i := 0; i < len(buffer); {
+		if buffer[i] == 0x1b && i+1 < len(buffer) && buffer[i+1] == '[' {
+			if end := sequenceEnd(buffer[i:]); end > 0 && buffer[i+end] == '_' {
+				values, ok := win32Record(string(buffer[i : i+end+1]))
+				if uc := rune(values[2]); ok && values[0] == 0 && values[1] == 0 && uc > 0 && utf8.ValidRune(uc) {
+					if values[3] == 1 {
+						out = utf8.AppendRune(out, uc)
+					}
+					i += end + 1
+					continue
+				}
+			}
+		}
+		out = append(out, buffer[i])
+		i++
+	}
+	return out
 }
 
 // win32Mods maps the control-key state half of a record onto event
